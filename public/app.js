@@ -400,88 +400,70 @@ document.addEventListener('DOMContentLoaded', () => {
 function initNavigation() {
     const navBtns = document.querySelectorAll('.sidebar nav .nav-btn');
 
-    if (!navBtns || navBtns.length === 0) {
-        console.error('[Jomish] initNavigation: no nav buttons found!');
-        return;
+    // Only wire sidebar nav if buttons exist (not in POS-only mode)
+    if (navBtns && navBtns.length > 0) {
+        navBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                try {
+                    console.log('[Jomish] Tab clicked:', btn.getAttribute('data-target'));
+                    const targetId = btn.getAttribute('data-target');
+                    if (!targetId) return;
+
+                    navBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+
+                    const sections = document.querySelectorAll('.main-content .view-section');
+                    sections.forEach(sec => sec.classList.remove('active'));
+                    const targetSection = document.getElementById(targetId);
+                    if (!targetSection) {
+                        console.error('[Jomish] Nav target section not found:', targetId);
+                        return;
+                    }
+                    targetSection.classList.remove('hidden');
+                    targetSection.classList.add('active');
+
+                    document.querySelectorAll('webview').forEach(wv => wv.blur());
+                    if (window.electronAPI && window.electronAPI.forceFocus) {
+                        window.electronAPI.forceFocus();
+                    } else {
+                        window.focus();
+                        document.body.focus();
+                    }
+
+                    if (targetId === 'dashboard') { loadDashboard(); }
+                    if (targetId === 'attendance') { loadAttendance(); }
+                    if (targetId === 'schedules') { if (typeof window.loadShiftTimetable === 'function') window.loadShiftTimetable(); }
+                    if (targetId === 'sme-business') { loadTransactions(); }
+                    if (targetId === 'pos-terminal') { switchPOSView('register'); }
+                    if (targetId === 'hr-mgmt') {
+                        loadEmployees();
+                        loadRoles();
+                        loadInventory();
+                        loadUserAccounts();
+                    }
+                    if (targetId === 'secretary-hub') { loadSecretaryHub(); }
+                    if (targetId === 'tech-hub') { checkAutoStart(); loadBrandLogo(); loadRoles(); }
+                    if (targetId === 'system-users') { loadSystemUsers(); }
+
+                } catch (e) {
+                    console.error('[Jomish] Nav click error:', e);
+                }
+            });
+        });
+    } else {
+        console.warn('[Jomish] initNavigation: no sidebar nav buttons — POS-only mode.');
     }
 
-    navBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            try {
-                console.log('[Jomish] Tab clicked:', btn.getAttribute('data-target'));
-                const targetId = btn.getAttribute('data-target');
-                if (!targetId) return; // skip buttons without data-target
-
-                // Update active button
-                navBtns.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-
-                // Dynamically fetch sections in case DOM changed
-                const sections = document.querySelectorAll('.main-content .view-section');
-
-                // Hide all sections, show target
-                sections.forEach(sec => sec.classList.remove('active'));
-                const targetSection = document.getElementById(targetId);
-                if (!targetSection) {
-                    console.error('[Jomish] Nav target section not found:', targetId);
-                    alert("ERROR: Section not found: " + targetId);
-                    return;
-                }
-                targetSection.classList.remove('hidden');
-                targetSection.classList.add('active');
-
-                // FIX for Electron <webview> swallowing keyboard input
-                document.querySelectorAll('webview').forEach(wv => wv.blur());
-                if (window.electronAPI && window.electronAPI.forceFocus) {
-                    window.electronAPI.forceFocus();
-                } else {
-                    window.focus();
-                    document.body.focus();
-                }
-
-                // Load specifics based on tab
-                if (targetId === 'dashboard') { loadDashboard(); }
-                if (targetId === 'attendance') { loadAttendance(); }
-                if (targetId === 'schedules') { if (typeof window.loadShiftTimetable === 'function') window.loadShiftTimetable(); }
-                if (targetId === 'sme-business') { loadTransactions(); }
-                if (targetId === 'pos-terminal') { switchPOSView('register'); }
-                if (targetId === 'hr-mgmt') {
-                    loadEmployees();
-                    loadRoles();
-                    loadInventory();
-                    loadUserAccounts();
-                }
-                if (targetId === 'secretary-hub') { loadSecretaryHub(); }
-                if (targetId === 'tech-hub') { checkAutoStart(); loadBrandLogo(); loadRoles(); }
-                if (targetId === 'system-users') { loadSystemUsers(); }
-
-            } catch (e) {
-                console.error('[Jomish] Nav click error:', e);
-            }
-        });
-    });
-
-    // POS Sub-view Navigation Listener
+    // POS Sub-view Navigation Listeners (always wire these)
     const btnPosReg = document.getElementById('pos-nav-register');
     const btnPosStock = document.getElementById('pos-nav-stock');
     const btnPosExp = document.getElementById('pos-nav-expenses');
-    if (btnPosReg) btnPosReg.addEventListener('click', (e) => {
-        e.preventDefault();
-        switchPOSView('register');
-    });
-    if (btnPosStock) btnPosStock.addEventListener('click', (e) => {
-        e.preventDefault();
-        switchPOSView('stock');
-    });
-    if (btnPosExp) btnPosExp.addEventListener('click', (e) => {
-        e.preventDefault();
-        switchPOSView('expenses');
-    });
     const btnPosCredits = document.getElementById('pos-nav-credits');
-    if (btnPosCredits) btnPosCredits.addEventListener('click', (e) => {
-        e.preventDefault();
-        switchPOSView('credits');
-    });
+
+    if (btnPosReg) btnPosReg.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('register'); });
+    if (btnPosStock) btnPosStock.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('stock'); });
+    if (btnPosExp) btnPosExp.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('expenses'); });
+    if (btnPosCredits) btnPosCredits.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('credits'); });
 
     // POS Expense Form
     const formPosExp = document.getElementById('form-pos-expense');
