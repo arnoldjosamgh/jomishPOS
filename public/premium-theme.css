@@ -1,0 +1,581 @@
+
+/* ============================================================
+   JOMISHPOS — PREMIUM MODERN UI REDESIGN
+   Ultra-sleek, vibrant, and highly interactive
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* Premium Light Theme */
+  --bg-color: #f8fafc;
+  --surface-color: #ffffff;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --border-color: #e2e8f0;
+  
+  /* Vibrant Accents */
+  --accent-primary: #3b82f6;
+  --accent-secondary: #8b5cf6;
+  --accent-gradient: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  --success-gradient: linear-gradient(135deg, #10b981, #059669);
+  --warning-gradient: linear-gradient(135deg, #f59e0b, #d97706);
+  --danger-gradient: linear-gradient(135deg, #ef4444, #dc2626);
+
+  /* Shadows */
+  --shadow-sm: 0 2px 4px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 24px rgba(15, 23, 42, 0.08);
+  --shadow-glow: 0 8px 16px rgba(59, 130, 246, 0.25);
+  
+  /* Radii */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-bounce: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── GLOBAL RESETS ── */
+body, html {
+  font-family: 'Outfit', sans-serif !important;
+  background-color: var(--bg-color) !important;
+  color: var(--text-main) !important;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-container, .main-content, .view-section {
+  background-color: var(--bg-color) !important;
+  color: var(--text-main) !important;
+}
+
+/* ── TOP NAVBAR ── */
+#pos-header-bar {
+  background: var(--surface-color) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+#pos-toolbar {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 12px 24px !important;
+  gap: 20px !important;
+}
+
+#pos-toolbar-title {
+  font-size: 1.1rem !important;
+  font-weight: 800 !important;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.5px !important;
+}
+
+/* ── TABS (Nav Buttons) ── */
+#pos-tab-bar {
+  gap: 10px !important;
+}
+
+.pos-tab {
+  background: transparent !important;
+  color: var(--text-muted) !important;
+  box-shadow: none !important;
+  border-radius: var(--radius-full) !important;
+  padding: 8px 16px !important;
+  font-weight: 600 !important;
+  transition: var(--transition-bounce) !important;
+}
+
+.pos-tab:hover {
+  background: #f1f5f9 !important;
+  color: var(--text-main) !important;
+  transform: translateY(-2px);
+}
+
+.pos-tab.active {
+  background: var(--accent-gradient) !important;
+  color: white !important;
+  box-shadow: var(--shadow-glow) !important;
+  transform: scale(1.05);
+}
+
+.pos-tab-finance {
+  color: #d97706 !important;
+  background: #fef3c7 !important;
+}
+.pos-tab-finance:hover {
+  background: #fde68a !important;
+}
+.pos-tab-finance.active {
+  background: var(--warning-gradient) !important;
+  color: white !important;
+  box-shadow: 0 8px 16px rgba(245, 158, 11, 0.25) !important;
+}
+
+/* ── SEARCH BAR ── */
+#pos-search-wrap input {
+  background: #f1f5f9 !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--radius-full) !important;
+  padding: 10px 16px 10px 36px !important;
+  box-shadow: none !important;
+  transition: var(--transition-smooth) !important;
+}
+
+#pos-search-wrap input:focus {
+  background: var(--surface-color) !important;
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1) !important;
+  outline: none !important;
+}
+
+/* ── PRODUCT GRID & CARDS ── */
+.products-grid {
+  gap: 20px !important;
+  padding: 10px !important;
+}
+
+.product-card {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-md) !important;
+  transition: var(--transition-bounce) !important;
+  overflow: hidden !important;
+}
+
+.product-card:hover {
+  transform: translateY(-5px) scale(1.02);
+  box-shadow: var(--shadow-lg) !important;
+  border-color: rgba(59, 130, 246, 0.3) !important;
+}
+
+.product-card button {
+  background: var(--accent-gradient) !important;
+  color: white !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-sm) !important;
+  font-weight: 700 !important;
+  transition: var(--transition-smooth) !important;
+}
+
+.product-card button:hover {
+  box-shadow: var(--shadow-glow) !important;
+  transform: translateY(-2px);
+}
+
+/* ── CART PANEL ── */
+.pos-cart {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.cart-item {
+  background: #f8fafc !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-md) !important;
+  transition: var(--transition-smooth) !important;
+}
+.cart-item:hover {
+  background: var(--surface-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+/* Cart qty buttons */
+.qty-btn {
+  background: white !important;
+  border: 1px solid var(--border-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-radius: var(--radius-full) !important;
+  transition: var(--transition-bounce) !important;
+}
+.qty-btn:hover {
+  transform: scale(1.1);
+  color: var(--accent-primary) !important;
+}
+
+/* Total Section */
+.cart-summary {
+  background: #f8fafc !important;
+  border-top: 1px solid var(--border-color) !important;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg) !important;
+}
+
+.cart-row.total {
+  color: var(--accent-primary) !important;
+  font-size: 1.5rem !important;
+  font-weight: 800 !important;
+}
+
+/* Checkout Button */
+.checkout-btn, #btn-checkout {
+  background: var(--success-gradient) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: 0 8px 16px rgba(16, 185, 129, 0.25) !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 1px !important;
+  transition: var(--transition-bounce) !important;
+}
+.checkout-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 20px rgba(16, 185, 129, 0.35) !important;
+}
+
+/* ── MODALS & PANELS ── */
+.modal-box, .modal-content, .payment-panel, .card {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+/* ── NUMPAD ── */
+.num-key {
+  background: var(--surface-color) !important;
+  border: 1px solid var(--border-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-radius: var(--radius-md) !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 1.2rem !important;
+  font-weight: 600 !important;
+  transition: var(--transition-bounce) !important;
+}
+.num-key:hover {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: var(--shadow-md) !important;
+  color: var(--accent-primary) !important;
+}
+.num-key:active {
+  transform: scale(0.95);
+}
+
+.num-key.clear-key {
+  background: var(--danger-gradient) !important;
+  color: white !important;
+  border: none !important;
+}
+.num-key.del-key {
+  background: var(--warning-gradient) !important;
+  color: white !important;
+  border: none !important;
+}
+.num-key.exact-key {
+  background: var(--accent-gradient) !important;
+  color: white !important;
+  border: none !important;
+}
+
+/* ── INPUTS ── */
+input[type="text"], input[type="password"], input[type="number"], select, textarea {
+  background: #f8fafc !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: none !important;
+  transition: var(--transition-smooth) !important;
+  font-family: 'Outfit', sans-serif !important;
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, select:focus {
+  background: var(--surface-color) !important;
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1) !important;
+}
+
+/* ── TABLES ── */
+table {
+  border-collapse: separate !important;
+  border-spacing: 0 8px !important;
+}
+thead tr th {
+  background: transparent !important;
+  color: var(--text-muted) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.5px !important;
+  text-transform: uppercase !important;
+  font-size: 0.75rem !important;
+  box-shadow: none !important;
+  border-bottom: 2px solid var(--border-color) !important;
+}
+tbody tr {
+  background: var(--surface-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-radius: var(--radius-md) !important;
+  transition: var(--transition-smooth) !important;
+}
+tbody tr:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md) !important;
+}
+tbody tr td {
+  border: none !important;
+  padding: 12px 16px !important;
+}
+tbody tr td:first-child { border-radius: var(--radius-md) 0 0 var(--radius-md) !important; }
+tbody tr td:last-child { border-radius: 0 var(--radius-md) var(--radius-md) 0 !important; }
+
+/* ── BUTTONS ── */
+.primary-btn {
+  background: var(--accent-gradient) !important;
+  color: white !important;
+  border: none !important;
+  box-shadow: var(--shadow-glow) !important;
+  border-radius: var(--radius-md) !important;
+}
+.primary-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(59, 130, 246, 0.35) !important;
+}
+
+/* ── DARK THEME ── */
+body.dark-theme, html.dark-theme {
+  --bg-color: #0f172a;
+  --surface-color: #1e293b;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --border-color: #334155;
+}
+
+body.dark-theme #pos-tab-bar .pos-tab:not(.active):hover {
+  background: #334155 !important;
+}
+body.dark-theme .cart-item {
+  background: #0f172a !important;
+}
+body.dark-theme .cart-summary {
+  background: #0f172a !important;
+}
+body.dark-theme input[type="text"], body.dark-theme input[type="number"] {
+  background: #0f172a !important;
+}
+
+/* ── LAYOUT FIXES: Full-page sub-views ── */
+
+/* POS terminal: flex column filling available space */
+#pos-terminal {
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* The register view: takes all remaining space after toolbar */
+#pos-register-view {
+  flex: 1 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  /* Do NOT set display here — JS controls show/hide */
+}
+
+/* Register layout (products + cart) */
+.pos-layout {
+  display: flex !important;
+  flex: 1 !important;
+  min-height: 0 !important;
+  height: calc(100vh - 115px) !important;
+  overflow: hidden !important;
+  gap: 16px !important;
+  padding: 12px 16px !important;
+}
+
+/* Products grid — scrollable */
+.products-grid {
+  overflow-y: auto !important;
+  max-height: 100% !important;
+  padding-right: 8px !important;
+}
+
+/* Cart — fixed width, internal scroll */
+.pos-cart {
+  width: 320px !important;
+  flex-shrink: 0 !important;
+  overflow-y: auto !important;
+  max-height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.cart-items {
+  flex: 1 !important;
+  overflow-y: auto !important;
+  min-height: 0 !important;
+}
+
+/* ── FULL-PAGE SUB-VIEWS (Inventory, Expenses, Credits) ── */
+/* These MUST NOT force display — JS handles that with .hidden / inline style */
+/* Only control scroll & sizing when they ARE visible */
+
+#pos-stock-view:not(.hidden),
+#pos-expenses-view:not(.hidden),
+#pos-credits-view:not(.hidden) {
+  overflow-y: auto !important;
+  width: 100% !important;
+  height: calc(100vh - 115px) !important;
+  padding: 16px !important;
+  box-sizing: border-box !important;
+}
+
+/* Hidden state — stronger than inline style */
+.pos-sub-view.hidden {
+  display: none !important;
+}
+
+/* POS header — keep toolbar sticky */
+#pos-terminal > header, #pos-header-bar {
+  flex-shrink: 0 !important;
+  padding: 0 !important;
+}
+
+/* Ensure the body top padding accounts for fixed topbar */
+.app-container { padding-top: 50px !important; }
+
+.app-container { padding-top: 50px !important; }
+
+/* ── POS SINGLE-ROW TOOLBAR ── */
+#pos-header-bar {
+  flex-shrink: 0 !important;
+  padding: 0 !important;
+  background: var(--background) !important;
+  border-bottom: none !important;
+}
+
+#pos-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 8px 16px !important;
+  background: var(--surface) !important;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.1), 0 -1px 0 rgba(255,255,255,0.8) inset !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+}
+
+#pos-toolbar-title {
+  font-size: 0.9rem !important;
+  font-weight: 800 !important;
+  color: var(--primary) !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+  letter-spacing: -0.3px !important;
+}
+
+#pos-tab-bar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+  flex-wrap: nowrap !important;
+}
+
+/* Tab buttons */
+.pos-tab {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 7px 14px !important;
+  font-size: 0.82rem !important;
+  font-weight: 600 !important;
+  white-space: nowrap !important;
+  border-radius: 8px !important;
+  background: linear-gradient(145deg, #f0f4fb, #d8dde8) !important;
+  color: var(--text-muted) !important;
+  box-shadow: var(--nm-out-sm) !important;
+  border: none !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+.pos-tab:hover {
+  background: linear-gradient(145deg, #f5f8ff, #dde2ed) !important;
+  color: var(--text) !important;
+}
+
+.pos-tab:active {
+  box-shadow: var(--nm-in-sm) !important;
+  transform: translateY(1px) !important;
+}
+
+/* Active tab */
+.pos-tab.active {
+  background: linear-gradient(145deg, #3498db, #1a6fa3) !important;
+  color: #fff !important;
+  box-shadow: 3px 3px 8px rgba(0,0,0,0.22), -1px -1px 4px rgba(255,255,255,0.3) !important;
+  text-shadow: 0 1px 1px rgba(0,0,0,0.2) !important;
+}
+
+/* Finance Hub tab — gold */
+.pos-tab-finance {
+  background: linear-gradient(145deg, #f5b942, #c07b0a) !important;
+  color: #fff !important;
+  box-shadow: 3px 3px 8px rgba(0,0,0,0.2), -1px -1px 4px rgba(255,255,255,0.3) !important;
+}
+
+.pos-tab-finance:hover {
+  background: linear-gradient(145deg, #fdd068, #d4890a) !important;
+}
+
+/* Search wrap */
+#pos-search-wrap {
+  position: relative !important;
+  flex: 1 !important;
+  min-width: 140px !important;
+  max-width: 280px !important;
+  margin-left: auto !important;
+}
+
+#pos-search-wrap i {
+  position: absolute !important;
+  left: 11px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  color: var(--text-muted) !important;
+  pointer-events: none !important;
+  font-size: 0.8rem !important;
+}
+
+#pos-search-wrap input {
+  width: 100% !important;
+  padding: 7px 12px 7px 32px !important;
+  font-size: 0.85rem !important;
+  border-radius: 20px !important;
+  background: var(--background) !important;
+  box-shadow: var(--nm-in-sm) !important;
+  border: none !important;
+  color: var(--text) !important;
+}
+
+/* Override old active styles from skeu patch for pos-tabs */
+#pos-nav-register.active,
+#pos-nav-stock.active,
+#pos-nav-expenses.active,
+#pos-nav-credits.active {
+  background: linear-gradient(145deg, #3498db, #1a6fa3) !important;
+  color: #fff !important;
+  box-shadow: 3px 3px 8px rgba(0,0,0,0.22) !important;
+}
+
+/* Dark mode tab adjustments */
+body.dark-theme .pos-tab:not(.active):not(.pos-tab-finance) {
+  background: linear-gradient(145deg, #2e3749, #1e2433) !important;
+  color: var(--text-muted) !important;
+}
+
+body.dark-theme #pos-toolbar {
+  background: var(--surface) !important;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.4) !important;
+}
+
+body.dark-theme #pos-search-wrap input {
+  background: var(--background) !important;
+}
+
+/* Sub-view spacing below toolbar */
+#pos-register-view, #pos-stock-view, #pos-expenses-view, #pos-credits-view {
+  padding: 14px 16px !important;
+}
