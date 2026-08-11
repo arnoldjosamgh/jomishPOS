@@ -309,19 +309,20 @@
             </section>
             <!-- POS Terminal View -->
             <section id="pos-terminal" class="view-section">
-                <header>
-                    <h1>Retail Management</h1>
-                    <div class="pos-top-actions" style="margin-bottom: 20px; display: flex; gap: 15px; align-items: center; justify-content: space-between;">
-                        <div style="position:relative; width:100%; max-width:500px;">
-                            <i class="fa-solid fa-magnifying-glass" style="position:absolute; left:14px; top:50%; transform:translateY(-50%); color:var(--text-muted, #888); pointer-events:none; z-index:1;"></i>
-                            <input type="text" id="pos-search" placeholder="Search products by name or category..." style="padding: 12px 20px 12px 40px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); width: 100%; font-size: 1rem;">
+                <header id="pos-header-bar">
+                    <!-- Single-row toolbar: title | tabs | search -->
+                    <div id="pos-toolbar">
+                        <span id="pos-toolbar-title"><i class="fa-solid fa-cash-register"></i> JomishPOS</span>
+                        <div id="pos-tab-bar">
+                            <button id="pos-nav-register" class="pos-tab active"><i class="fa-solid fa-cash-register"></i> Register</button>
+                            <button id="pos-nav-stock" class="pos-tab"><i class="fa-solid fa-box"></i> Inventory</button>
+                            <button id="pos-nav-expenses" class="pos-tab"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
+                            <button id="pos-nav-credits" class="pos-tab"><i class="fa-solid fa-handshake"></i> Credits</button>
+                            <button id="pos-nav-finance" class="pos-tab pos-tab-finance" onclick="toggleSmeFinanceMode()"><i class="fa-solid fa-sack-dollar"></i> Finance Hub</button>
                         </div>
-                        <div class="pos-nav-links">
-                            <button id="pos-nav-register" class="secondary-btn sm-btn">Register</button>
-                            <button id="pos-nav-stock" class="secondary-btn sm-btn">Inventory</button>
-                            <button id="pos-nav-expenses" class="secondary-btn sm-btn"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
-                            <button id="pos-nav-credits" class="secondary-btn sm-btn"><i class="fa-solid fa-handshake"></i> Credit Accounts</button>
-                            <button id="pos-nav-finance" class="primary-btn sm-btn" onclick="toggleSmeFinanceMode()"><i class="fa-solid fa-sack-dollar"></i> Finance Hub</button>
+                        <div id="pos-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="pos-search" placeholder="Search products...">
                         </div>
                     </div>
                 </header>

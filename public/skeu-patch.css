@@ -419,3 +419,146 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
 
 /* Ensure the body top padding accounts for our fixed topbar */
 .app-container { padding-top: 50px !important; }
+
+/* ── POS SINGLE-ROW TOOLBAR ── */
+#pos-header-bar {
+  flex-shrink: 0 !important;
+  padding: 0 !important;
+  background: var(--background) !important;
+  border-bottom: none !important;
+}
+
+#pos-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 8px 16px !important;
+  background: var(--surface) !important;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.1), 0 -1px 0 rgba(255,255,255,0.8) inset !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+}
+
+#pos-toolbar-title {
+  font-size: 0.9rem !important;
+  font-weight: 800 !important;
+  color: var(--primary) !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+  letter-spacing: -0.3px !important;
+}
+
+#pos-tab-bar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+  flex-wrap: nowrap !important;
+}
+
+/* Tab buttons */
+.pos-tab {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 7px 14px !important;
+  font-size: 0.82rem !important;
+  font-weight: 600 !important;
+  white-space: nowrap !important;
+  border-radius: 8px !important;
+  background: linear-gradient(145deg, #f0f4fb, #d8dde8) !important;
+  color: var(--text-muted) !important;
+  box-shadow: var(--nm-out-sm) !important;
+  border: none !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+.pos-tab:hover {
+  background: linear-gradient(145deg, #f5f8ff, #dde2ed) !important;
+  color: var(--text) !important;
+}
+
+.pos-tab:active {
+  box-shadow: var(--nm-in-sm) !important;
+  transform: translateY(1px) !important;
+}
+
+/* Active tab */
+.pos-tab.active {
+  background: linear-gradient(145deg, #3498db, #1a6fa3) !important;
+  color: #fff !important;
+  box-shadow: 3px 3px 8px rgba(0,0,0,0.22), -1px -1px 4px rgba(255,255,255,0.3) !important;
+  text-shadow: 0 1px 1px rgba(0,0,0,0.2) !important;
+}
+
+/* Finance Hub tab — gold */
+.pos-tab-finance {
+  background: linear-gradient(145deg, #f5b942, #c07b0a) !important;
+  color: #fff !important;
+  box-shadow: 3px 3px 8px rgba(0,0,0,0.2), -1px -1px 4px rgba(255,255,255,0.3) !important;
+}
+
+.pos-tab-finance:hover {
+  background: linear-gradient(145deg, #fdd068, #d4890a) !important;
+}
+
+/* Search wrap */
+#pos-search-wrap {
+  position: relative !important;
+  flex: 1 !important;
+  min-width: 140px !important;
+  max-width: 280px !important;
+  margin-left: auto !important;
+}
+
+#pos-search-wrap i {
+  position: absolute !important;
+  left: 11px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  color: var(--text-muted) !important;
+  pointer-events: none !important;
+  font-size: 0.8rem !important;
+}
+
+#pos-search-wrap input {
+  width: 100% !important;
+  padding: 7px 12px 7px 32px !important;
+  font-size: 0.85rem !important;
+  border-radius: 20px !important;
+  background: var(--background) !important;
+  box-shadow: var(--nm-in-sm) !important;
+  border: none !important;
+  color: var(--text) !important;
+}
+
+/* Override old active styles from skeu patch for pos-tabs */
+#pos-nav-register.active,
+#pos-nav-stock.active,
+#pos-nav-expenses.active,
+#pos-nav-credits.active {
+  background: linear-gradient(145deg, #3498db, #1a6fa3) !important;
+  color: #fff !important;
+  box-shadow: 3px 3px 8px rgba(0,0,0,0.22) !important;
+}
+
+/* Dark mode tab adjustments */
+body.dark-theme .pos-tab:not(.active):not(.pos-tab-finance) {
+  background: linear-gradient(145deg, #2e3749, #1e2433) !important;
+  color: var(--text-muted) !important;
+}
+
+body.dark-theme #pos-toolbar {
+  background: var(--surface) !important;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.4) !important;
+}
+
+body.dark-theme #pos-search-wrap input {
+  background: var(--background) !important;
+}
+
+/* Sub-view spacing below toolbar */
+#pos-register-view, #pos-stock-view, #pos-expenses-view, #pos-credits-view {
+  padding: 14px 16px !important;
+}
