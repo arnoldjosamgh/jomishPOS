@@ -1246,12 +1246,13 @@ app.get('/api/tech/tenants', authenticateToken, requireTech, async (req, res) =>
 
 // POST /api/tech/tenant — provision a new company portal
 app.post('/api/tech/tenant', authenticateToken, requireTech, async (req, res) => {
-    const { company_name, prefix } = req.body;
+    const { company_name, prefix, num_cashiers } = req.body;
     if (!company_name || !prefix) return res.status(400).json({ error: 'company_name and prefix are required.' });
     if (!/^[A-Z]{3,5}$/.test(prefix.toUpperCase())) return res.status(400).json({ error: 'Prefix must be 3-5 capital letters.' });
 
     const normalPrefix = prefix.toUpperCase();
     const schemaName = 't_' + normalPrefix.toLowerCase();
+    const num = parseInt(num_cashiers) || 1;
 
     try {
         // 1. Create Postgres schema + all tables via existing helper
@@ -1273,16 +1274,22 @@ app.post('/api/tech/tenant', authenticateToken, requireTech, async (req, res) =>
                 ['company_prefix', normalPrefix]
             );
 
-            // 3. Create the default CEO account: PREFIX001 / password
-            const ceoUsername = `${normalPrefix}001`;
-            const ceoHash = await bcrypt.hash('password', 10);
+            // 3. Create the accounts: PREFIX001, PREFIX002, etc.
+            const defaultHash = await bcrypt.hash('password', 10);
             const allPerms = JSON.stringify({ can_see_dashboard:1, can_see_hr:1, can_see_attendance:1, can_see_sme:1, can_see_pos:1, can_see_secretary:1, can_see_schedules:1, can_see_transport:1 });
-            await client.query(
-                `INSERT INTO employees (first_name, last_name, email, password, role, permissions, prefix, status)
-                 VALUES ($1, $2, $3, $4, 'CEO', $5, $6, 'ACTIVE')
-                 ON CONFLICT (email) DO NOTHING`,
-                ['Company', 'CEO', ceoUsername, ceoHash, allPerms, normalPrefix]
-            );
+            
+            for (let i = 1; i <= num; i++) {
+                const numStr = String(i).padStart(3, '0');
+                const username = `${normalPrefix}${numStr}`;
+                // First account is CEO, rest are Cashier (or all CEO if they all need full access, but user requested 'cashier')
+                const role = i === 1 ? 'CEO' : 'Cashier';
+                await client.query(
+                    `INSERT INTO employees (first_name, last_name, email, password, role, permissions, prefix, status)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE')
+                     ON CONFLICT (email) DO NOTHING`,
+                    ['Cashier', numStr, username, defaultHash, role, allPerms, normalPrefix]
+                );
+            }
         } finally { client.release(); }
 
         res.json({ success: true, prefix: normalPrefix, ceo_login: `${normalPrefix}001`, schema: schemaName });

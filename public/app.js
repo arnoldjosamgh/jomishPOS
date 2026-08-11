@@ -8399,11 +8399,13 @@ async function handleCreateTenant(event) {
     event.preventDefault();
     const nameInput = document.getElementById('tech-new-company-name');
     const prefixInput = document.getElementById('tech-new-company-prefix');
+    const numInput = document.getElementById('tech-num-cashiers');
     const statusEl = document.getElementById('tech-create-status');
     const btn = event.target.querySelector('button[type="submit"]');
 
     const companyName = nameInput.value.trim();
     const prefix = prefixInput.value.trim().toUpperCase();
+    const numCashiers = parseInt(numInput ? numInput.value : '1') || 1;
 
     if (!companyName || !prefix) return;
     if (!/^[A-Z]{3,5}$/.test(prefix)) {
@@ -8418,7 +8420,7 @@ async function handleCreateTenant(event) {
         const res = await fetchAuth(`${API_URL}/tech/tenant`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ company_name: companyName, prefix })
+            body: JSON.stringify({ company_name: companyName, prefix, num_cashiers: numCashiers })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to create portal');
@@ -8427,11 +8429,13 @@ async function handleCreateTenant(event) {
             <i class="fa-solid fa-check-circle"></i> <strong>Portal created successfully!</strong><br>
             <div style="margin-top:10px; font-size:0.9rem;">
                 Company: <strong>${companyName}</strong><br>
-                CEO Login: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">${prefix}001</code><br>
+                Accounts created: <strong>${numCashiers}</strong><br>
+                First Login: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">${prefix}001</code><br>
                 Password: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">password</code><br>
                 <small style="opacity:0.8;">Ask the company to change their password immediately after first login.</small>
             </div>
         `);
+
         nameInput.value = '';
         prefixInput.value = '';
         loadTechTenants(); // Refresh the list
