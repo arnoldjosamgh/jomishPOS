@@ -1,0 +1,333 @@
+
+/* ============================================================
+   JOMISHPOS — SKEUOMORPHIC REDESIGN PATCH
+   Neumorphic light theme with tactile 3D buttons & inputs
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --background:   #dfe3ea;
+  --surface:      #e4e8f0;
+  --surface-2:    #ecf0f7;
+  --text:         #2c3e50;
+  --text-muted:   #7f8c8d;
+  --border:       #c8cdd8;
+  --primary:      #2980b9;
+  --primary-hover:#1a6fa3;
+  --success:      #27ae60;
+  --danger:       #e74c3c;
+  --warning:      #f39c12;
+
+  /* Neumorphic shadows */
+  --nm-out:  6px 6px 14px #b8bec9, -6px -6px 14px #ffffff;
+  --nm-out-sm: 3px 3px 8px #b8bec9, -3px -3px 8px #ffffff;
+  --nm-in:   inset 5px 5px 10px #b8bec9, inset -5px -5px 10px #ffffff;
+  --nm-in-sm:inset 3px 3px 6px #b8bec9, inset -3px -3px 6px #ffffff;
+}
+
+/* ── BASE ── */
+body, html {
+  font-family: 'Inter', sans-serif !important;
+  background: var(--background) !important;
+  color: var(--text) !important;
+}
+
+.app-container, .main-content, .view-section {
+  background: var(--background) !important;
+  color: var(--text) !important;
+}
+
+/* ── TOP BAR ── */
+#jomish-pos-topbar {
+  background: var(--surface) !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12), 0 -1px 0 rgba(255,255,255,0.9) inset !important;
+  border-bottom: none !important;
+}
+
+/* ── ALL BUTTONS — 3D TACTILE ── */
+button, .primary-btn, .secondary-btn, .sm-btn, .nav-btn, .num-key, .checkout-btn, .qty-btn {
+  font-family: 'Inter', sans-serif !important;
+  border-radius: 10px !important;
+  border: none !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+  outline: none !important;
+}
+
+/* Primary / blue action buttons */
+.primary-btn, #btn-confirm-pay, #btn-checkout {
+  background: linear-gradient(145deg, #3498db, #1a6fa3) !important;
+  color: #fff !important;
+  box-shadow: 4px 4px 10px rgba(0,0,0,0.25), -2px -2px 6px rgba(255,255,255,0.5), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35) !important;
+  font-weight: 700 !important;
+}
+.primary-btn:hover, #btn-confirm-pay:hover, #btn-checkout:hover {
+  background: linear-gradient(145deg, #5dade2, #2980b9) !important;
+  box-shadow: 5px 5px 14px rgba(0,0,0,0.28), -3px -3px 8px rgba(255,255,255,0.55) !important;
+  transform: translateY(-1px);
+}
+.primary-btn:active, #btn-confirm-pay:active, #btn-checkout:active {
+  box-shadow: var(--nm-in) !important;
+  background: linear-gradient(145deg, #1a6fa3, #3498db) !important;
+  transform: translateY(1px);
+}
+
+/* Secondary / neutral buttons */
+.secondary-btn, #btn-get-invoice, .pos-nav-links button:not(#pos-nav-finance) {
+  background: linear-gradient(145deg, #f0f4fb, #d8dde8) !important;
+  color: var(--text) !important;
+  box-shadow: var(--nm-out-sm) !important;
+  font-weight: 600 !important;
+}
+.secondary-btn:hover {
+  background: linear-gradient(145deg, #f5f8ff, #dde2ed) !important;
+}
+.secondary-btn:active {
+  box-shadow: var(--nm-in-sm) !important;
+  transform: translateY(1px);
+}
+
+/* Green checkout button */
+.checkout-btn, #btn-checkout {
+  background: linear-gradient(145deg, #2ecc71, #1a8844) !important;
+  color: #fff !important;
+  box-shadow: 4px 4px 10px rgba(0,0,0,0.22), -2px -2px 6px rgba(255,255,255,0.5), inset 0 1px 0 rgba(255,255,255,0.15) !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3) !important;
+  font-size: 1.1rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.5px !important;
+}
+.checkout-btn:hover {
+  background: linear-gradient(145deg, #52d98a, #27ae60) !important;
+}
+
+/* Finance Hub button */
+#pos-nav-finance {
+  background: linear-gradient(145deg, #f39c12, #c07b0a) !important;
+  color: #fff !important;
+  box-shadow: 4px 4px 10px rgba(0,0,0,0.22), -2px -2px 6px rgba(255,255,255,0.5) !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3) !important;
+  font-weight: 700 !important;
+}
+
+/* Qty buttons in cart */
+.qty-btn {
+  background: linear-gradient(145deg, #f0f4fb, #d8dde8) !important;
+  box-shadow: var(--nm-out-sm) !important;
+  color: var(--text) !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 50% !important;
+}
+.qty-btn:active {
+  box-shadow: var(--nm-in-sm) !important;
+}
+
+/* Small table buttons */
+.sm-btn {
+  padding: 6px 12px !important;
+  font-size: 0.8rem !important;
+  box-shadow: var(--nm-out-sm) !important;
+}
+.sm-btn:active {
+  box-shadow: var(--nm-in-sm) !important;
+  transform: translateY(1px);
+}
+
+/* ── NUMPAD ── */
+.num-key {
+  background: linear-gradient(145deg, #f0f4fb, #d4d9e4) !important;
+  box-shadow: var(--nm-out-sm) !important;
+  border-radius: 12px !important;
+  color: var(--text) !important;
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  padding: 14px !important;
+}
+.num-key:active {
+  box-shadow: var(--nm-in-sm) !important;
+  background: var(--surface) !important;
+  transform: scale(0.96);
+}
+.num-key.clear-key {
+  background: linear-gradient(145deg, #ffa07a, #e74c3c) !important;
+  color: #fff !important;
+}
+.num-key.del-key {
+  background: linear-gradient(145deg, #ffd700, #f39c12) !important;
+  color: #fff !important;
+}
+.num-key.exact-key {
+  background: linear-gradient(145deg, #a29bfe, #6c5ce7) !important;
+  color: #fff !important;
+}
+
+/* ── CARDS & PANELS ── */
+.card, .pos-cart, .payment-panel {
+  background: var(--surface) !important;
+  box-shadow: var(--nm-out) !important;
+  border: 1px solid rgba(255,255,255,0.85) !important;
+  border-radius: 18px !important;
+}
+
+/* ── PRODUCT TILES ── */
+.product-card {
+  background: var(--surface) !important;
+  box-shadow: var(--nm-out) !important;
+  border: 1px solid rgba(255,255,255,0.85) !important;
+  border-radius: 18px !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+}
+.product-card:hover {
+  box-shadow: 8px 8px 18px #b0b7c4, -8px -8px 18px #ffffff !important;
+  transform: translateY(-2px);
+}
+.product-card:active {
+  box-shadow: var(--nm-in) !important;
+  transform: translateY(1px);
+}
+
+/* Product card add button */
+.product-card button {
+  background: linear-gradient(145deg, #3498db, #1a6fa3) !important;
+  color: #fff !important;
+  box-shadow: 3px 3px 6px rgba(0,0,0,0.2), -1px -1px 4px rgba(255,255,255,0.4) !important;
+  border-radius: 8px !important;
+  font-weight: 700 !important;
+  text-shadow: 0 1px 1px rgba(0,0,0,0.3) !important;
+}
+
+/* ── INPUTS ── */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="email"],
+select,
+textarea {
+  background: var(--surface) !important;
+  box-shadow: var(--nm-in-sm) !important;
+  border: none !important;
+  border-radius: 10px !important;
+  color: var(--text) !important;
+  padding: 10px 14px !important;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+select:focus {
+  box-shadow: var(--nm-in), 0 0 0 2px rgba(41,128,185,0.3) !important;
+  outline: none !important;
+}
+
+/* ── CART ── */
+.pos-cart {
+  border-radius: 18px !important;
+  overflow: hidden !important;
+}
+
+.cart-summary {
+  background: linear-gradient(160deg, #e8edf5, #dde2eb) !important;
+  box-shadow: var(--nm-in-sm) !important;
+  border-radius: 0 0 16px 16px !important;
+}
+
+.cart-row.total {
+  font-size: 1.4rem !important;
+  font-weight: 800 !important;
+  color: var(--primary) !important;
+  padding-top: 14px !important;
+  border-top: 1px solid rgba(255,255,255,0.8) !important;
+}
+
+/* Cart items */
+.cart-item {
+  background: rgba(255,255,255,0.5) !important;
+  border-radius: 10px !important;
+  margin-bottom: 6px !important;
+  border-bottom: none !important;
+  box-shadow: 2px 2px 6px rgba(0,0,0,0.06) !important;
+}
+
+/* ── NAV BUTTONS (Register / Inventory / etc.) ── */
+.pos-nav-links {
+  display: flex !important;
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+}
+
+#pos-nav-register.active,
+#pos-nav-stock.active,
+#pos-nav-expenses.active,
+#pos-nav-credits.active {
+  background: linear-gradient(145deg, #3498db, #1a6fa3) !important;
+  color: #fff !important;
+  box-shadow: var(--nm-in-sm) !important;
+}
+
+/* ── DARK MODE SKEUOMORPHISM ── */
+body.dark-theme, html.dark-theme {
+  --background:   #1e2433;
+  --surface:      #252b3b;
+  --surface-2:    #2a3145;
+  --text:         #e2e8f0;
+  --text-muted:   #8899aa;
+  --border:       #374060;
+  --nm-out:  6px 6px 14px #161b27, -6px -6px 14px #2e3749;
+  --nm-out-sm: 3px 3px 7px #161b27, -3px -3px 7px #2e3749;
+  --nm-in:   inset 5px 5px 10px #161b27, inset -5px -5px 10px #2e3749;
+  --nm-in-sm:inset 3px 3px 6px #161b27, inset -3px -3px 6px #2e3749;
+}
+
+body.dark-theme .secondary-btn,
+body.dark-theme .pos-nav-links button:not(#pos-nav-finance):not([class*="primary"]) {
+  background: linear-gradient(145deg, #2e3749, #1e2433) !important;
+  color: var(--text) !important;
+}
+
+body.dark-theme .num-key:not(.clear-key):not(.del-key):not(.exact-key) {
+  background: linear-gradient(145deg, #2e3749, #1e2433) !important;
+  color: var(--text) !important;
+}
+
+body.dark-theme .cart-summary {
+  background: linear-gradient(160deg, #1e2433, #252b3b) !important;
+}
+
+/* ── MODALS ── */
+.modal-overlay {
+  backdrop-filter: blur(4px) !important;
+}
+.modal-box, .modal-content {
+  background: var(--surface) !important;
+  box-shadow: var(--nm-out), 0 20px 60px rgba(0,0,0,0.3) !important;
+  border: 1px solid rgba(255,255,255,0.7) !important;
+  border-radius: 20px !important;
+}
+
+/* ── TABLES ── */
+table { border-collapse: separate !important; border-spacing: 0 6px !important; }
+thead tr th {
+  background: linear-gradient(145deg, #e8edf5, #d8dde8) !important;
+  box-shadow: var(--nm-out-sm) !important;
+  color: var(--text-muted) !important;
+  font-size: 0.75rem !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.8px !important;
+}
+tbody tr {
+  background: var(--surface) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--nm-out-sm) !important;
+  transition: box-shadow 0.2s !important;
+}
+tbody tr:hover {
+  box-shadow: 5px 5px 12px #b8bec9, -5px -5px 12px #ffffff !important;
+}
+tbody tr td { border: none !important; }
+
+/* ── MISC CLEAN-UPS ── */
+.pos-layout { gap: 20px !important; }
+header h1 { font-weight: 800 !important; color: var(--text) !important; }

@@ -213,13 +213,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     initSockets();
-    loadDashboard();
+    // JomishPOS: boot straight into the POS terminal
+    const allSections = document.querySelectorAll('.main-content .view-section');
+    allSections.forEach(s => s.classList.remove('active'));
+    const posSection = document.getElementById('pos-terminal');
+    if (posSection) { posSection.classList.add('active'); }
+    setTimeout(() => { switchPOSView('register'); loadPOSProducts(); }, 300);
+
     registerDevice();
     loadBrandLogo();
     loadBusinessConfig();
     loadSystemStatus();
     checkDataLossWarning();
-    // Clock is handled by startLiveClock() called from loadDashboard()
+    
+    // Start clock manually since loadDashboard is removed
+    startLiveClock();
+    
     validateSession();
     initBarcodeAutoCalc();
     loadSoldBarcodes();
