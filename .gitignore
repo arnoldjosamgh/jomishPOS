@@ -1,0 +1,30 @@
+# Environment Variables
+.env
+.env.local
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+data/*.db
+data/*.db-wal
+data/*.db-shm
+backend/*.db
+
+# Log files
+*.log
+data/*.log
+
+# Node modules
+node_modules/
+
+# WhatsApp session data
+whatsapp-session/
+
+# Build output
+dist/
+updates/staging/
+
+# OS files
+.DS_Store
+Thumbs.db

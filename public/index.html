@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Global error logging for diagnostics -->
+    <script>
+        // ── AUTH GUARD: runs before ANY HTML paints ──────────────────────────
+        // Hide the whole body immediately so nothing flashes before auth check.
+        document.documentElement.style.visibility = 'hidden';
+        (function() {
+            const token = localStorage.getItem('jomish_token');
+            if (!token) {
+                // No token — redirect NOW, before a single pixel renders.
+                window.location.replace('login.html');
+            }
+            // Token exists — the skeleton will be shown while app.js loads.
+        })();
+
+        // ── FAILSAFE: always reveal the page within 3s even if app.js crashes ──
+        setTimeout(function() {
+            document.documentElement.style.visibility = '';
+            var sk = document.getElementById('app-skeleton');
+            if (sk) { sk.style.opacity = '0'; sk.style.pointerEvents = 'none'; setTimeout(function(){ if(sk && sk.parentNode) sk.parentNode.removeChild(sk); }, 400); }
+        }, 3000);
+
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error('GLOBAL ERROR:', message, '\nLine:', lineno, '\nFile:', source);
+            // Force-reveal the page on any JS crash so user is never stuck on skeleton
+            document.documentElement.style.visibility = '';
+            var sk = document.getElementById('app-skeleton');
+            if (sk) { sk.style.opacity = '0'; sk.style.pointerEvents = 'none'; }
+            return false;
+        };
+        window.addEventListener('unhandledrejection', function(event) {
+            console.error('UNHANDLED PROMISE ERROR:', event.reason);
+        });
+    </script>
+    <style>
+        /* Skeleton loader overlay */
+        #app-skeleton {
+            position: fixed; inset: 0; z-index: 99999;
+            background: var(--bg, #0f0f1a);
+            display: flex; flex-direction: column;
+            align-items: stretch;
+            font-family: 'Inter', sans-serif;
+            transition: opacity 0.4s ease;
+        }
+        #app-skeleton.fade-out { opacity: 0; pointer-events: none; }
+        .sk-sidebar {
+            position: fixed; left: 0; top: 0; bottom: 0; width: 220px;
+            background: rgba(255,255,255,0.04);
+            padding: 28px 20px;
+            display: flex; flex-direction: column; gap: 14px;
+            border-right: 1px solid rgba(255,255,255,0.06);
+        }
+        .sk-main {
+            margin-left: 220px;
+            padding: 28px;
+            display: flex; flex-direction: column; gap: 20px;
+        }
+        .sk-bar {
+            border-radius: 8px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.06) 75%);
+            background-size: 200% 100%;
+            animation: sk-shimmer 1.6s infinite;
+        }
+        @keyframes sk-shimmer {
+            0%   { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        .sk-brand  { height: 36px; width: 70%; border-radius: 8px; }
+        .sk-nav    { height: 20px; width: 80%; border-radius: 6px; }
+        .sk-header { height: 48px; border-radius: 10px; }
+        .sk-card   { height: 120px; border-radius: 12px; }
+        .sk-row    { height: 24px; border-radius: 6px; width: 60%; }
+        .sk-grid   { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        @media (max-width: 768px) {
+            .sk-sidebar { display: none; }
+            .sk-main { margin-left: 0; padding: 16px; }
+        }
+    </style>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JomishPOS — Point of Sale</title>
+    <link rel="icon" type="image/png" href="favicon.png?v=2">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#6366f1">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Jomish">
+    <link rel="apple-touch-icon" href="/favicon.png">
+
+    <link rel="icon" type="image/png" href="favicon.png?v=2">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=16">
+    <script src="kiosk-lock.js"></script>
+    <script defer src="lib/socket.io.js"></script>
+    <script defer src="lib/jspdf.umd.min.js"></script>
+    <script defer src="lib/jspdf.plugin.autotable.min.js"></script>
+    <script defer src="lib/qrious.min.js"></script>
+    <script src="lib/JsBarcode.all.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Skeleton Auth Guard Loader -->
+    <div id="app-skeleton">
+        <div class="sk-sidebar">
+            <div class="sk-bar sk-brand"></div>
+            <div style="height:20px"></div>
+            <div class="sk-bar sk-nav"></div>
+            <div class="sk-bar sk-nav" style="width:60%"></div>
+            <div class="sk-bar sk-nav" style="width:75%"></div>
+            <div class="sk-bar sk-nav" style="width:55%"></div>
+            <div class="sk-bar sk-nav" style="width:80%"></div>
+            <div class="sk-bar sk-nav" style="width:65%"></div>
+            <div class="sk-bar sk-nav" style="width:70%"></div>
+            <div class="sk-bar sk-nav" style="width:50%"></div>
+        </div>
+        <div class="sk-main">
+            <div class="sk-bar sk-header"></div>
+            <div class="sk-grid">
+                <div class="sk-bar sk-card"></div>
+                <div class="sk-bar sk-card"></div>
+                <div class="sk-bar sk-card"></div>
+            </div>
+            <div class="sk-bar sk-row"></div>
+            <div class="sk-bar sk-card" style="height:80px"></div>
+            <div class="sk-bar sk-row" style="width:40%"></div>
+        </div>
+    </div>
+
+    <!-- JomishPOS Top Bar -->
+    <div id="jomish-pos-topbar" style="
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 20px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        height: 50px;
+        flex-shrink: 0;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 999;
+    ">
+        <div style="display:flex; align-items:center; gap:12px;">
+            <img id="pos-topbar-logo" src="" alt="" style="max-height:34px; display:none; border-radius:4px;">
+            <span style="font-weight:800; font-size:1.1rem; color:var(--primary); letter-spacing:-0.5px;">JomishPOS</span>
+            <span id="pos-topbar-company" style="font-size:0.8rem; color:var(--text-muted); border-left:1px solid var(--border); padding-left:12px;"></span>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+            <span id="pos-topbar-user" style="font-size:0.8rem; color:var(--text-muted);"><i class="fa-solid fa-user"></i> <span id="pos-topbar-username"></span></span>
+            <span id="live-clock" style="font-size:0.85rem; color:var(--primary); font-weight:bold; font-family:'Courier New',monospace;">00:00:00</span>
+            <button onclick="toggleTheme()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;"><i class="fa-solid fa-circle-half-stroke"></i></button>
+            <button id="btn-logout" class="sm-btn danger">Logout</button>
+        </div>
+    </div>
+    <div class="mobile-topbar" id="mobile-topbar">
+        <button class="hamburger-btn" id="hamburger-btn" aria-label="Open Menu" onclick="toggleMobileNav()">
+            <span></span><span></span><span></span>
+        </button>
+        <span class="mobile-app-title">Jomish Suite</span>
+        <button class="mobile-theme-btn" onclick="toggleTheme()" aria-label="Toggle Theme">
+            <i class="fa-solid fa-circle-half-stroke"></i>
+        </button>
+    </div>
+
+    <!-- Sidebar Overlay Backdrop -->
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeMobileNav()"></div>
+
+    <div class="app-container">
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Dashboard View -->
+            <!-- SME Business View -->
+            <section id="sme-business" class="view-section">
+                <header>
+                    <h1>SME Financial Portal</h1>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button onclick="toggleSmeFinanceMode()" class="secondary-btn"><i class="fa-solid fa-arrow-left"></i> Back to POS</button>
+                        <input type="text" id="sme-search" placeholder="Search Receipt No or Item..." style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); width: 250px;">
+                        <button id="btn-sme-transactions" class="secondary-btn" onclick="toggleSmeView('transactions')">Transactions</button>
+                        <button id="btn-sme-reports" class="secondary-btn" onclick="toggleSmeView('reports')">Cashier Reports</button>
+                        <button id="btn-add-tx" class="primary-btn">+ New Transaction</button>
+                    </div>
+                </header>
+                
+                <div id="sme-view-transactions" class="table-container">
+                    <table id="transactions-table">
+                        <thead>
+                            <tr>
+                                <th>Tx ID</th>
+                                <th>Date</th>
+                                <th>Amount</th>
+                                <th>Type</th>
+                                <th>Description</th>
+                                <th>Cashier</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="sme-view-reports" class="table-container" style="display:none;">
+                    <div style="display:flex; gap:10px; margin-bottom: 15px; align-items: center;">
+                        <label>Start:</label>
+                        <input type="date" id="report-start-date" style="padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
+                        <label>End:</label>
+                        <input type="date" id="report-end-date" style="padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
+                        <label>Cashier:</label>
+                        <select id="report-cashier-select" style="padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
+                            <option value="">All Cashiers</option>
+                            <!-- Populated dynamically -->
+                        </select>
+                        <button class="primary-btn" onclick="loadCashierReport()">Generate Report</button>
+                    </div>
+                    <table id="cashier-report-table">
+                        <thead>
+                            <tr>
+                                <th>Cashier</th>
+                                <th>Income Records</th>
+                                <th>Expense Records</th>
+                                <th>Total Income (UGX)</th>
+                                <th>Total Expense (UGX)</th>
+                                <th>Net Amount (UGX)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="6" style="text-align:center; padding:20px; color:var(--text-muted);">Select dates and click Generate Report</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Add Tx Modal (Simplified) -->
+                <div id="add-tx-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <h3>Record Transaction</h3>
+                        <form id="form-add-tx">
+                            <input type="number" step="0.01" id="tx-amount" placeholder="Amount" required>
+                            <select id="tx-type">
+                                <option value="INCOME">Income</option>
+                                <option value="EXPENSE">Expense</option>
+                                <option value="GOODS_ON_CREDIT">Goods Taken on Credit</option>
+                            </select>
+                            <input type="text" id="tx-desc" placeholder="Description" required>
+                            
+                            <label style="display: flex; align-items: center; gap: 8px; margin: 12px 0 6px 0; font-size: 0.85rem; cursor: pointer; color: var(--text);">
+                                <input type="checkbox" id="tx-backdate-toggle" onchange="toggleBackdateField()" style="width:16px; height:16px; accent-color: var(--primary);">
+                                Backdate Transaction (e.g. power outage)
+                            </label>
+                            <div id="tx-datetime-container" class="hidden" style="margin-bottom: 12px; text-align: left;">
+                                <label style="display: block; font-size: 0.75rem; color: #94A3B8; margin-bottom: 4px;">Transaction Date & Time</label>
+                                <input type="datetime-local" id="tx-datetime" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--background); color: var(--text);">
+                            </div>
+
+                            <div class="modal-actions">
+                                <button type="button" id="btn-close-tx-modal" class="secondary-btn">Cancel</button>
+                                <button type="submit" class="primary-btn">Save</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Receipt Details Drill-down Modal -->
+                <div id="receipt-details-modal" class="modal hidden">
+                    <div class="modal-content" style="max-width: 600px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                            <h3 style="margin:0;">Receipt Details <span id="rd-tx-id" style="color:var(--primary);"></span></h3>
+                            <button onclick="document.getElementById('receipt-details-modal').classList.add('hidden')" style="background:none;border:none;font-size:1.2rem;cursor:pointer;color:var(--text);"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 20px; font-size: 0.9rem; color: var(--text-muted);">
+                            <div><strong>Cashier:</strong> <span id="rd-cashier"></span></div>
+                            <div><strong>Date:</strong> <span id="rd-date"></span></div>
+                        </div>
+                        
+                        <div class="table-container" style="max-height: 300px; overflow-y: auto;">
+                            <table style="width:100%; border-collapse:collapse;">
+                                <thead>
+                                    <tr style="border-bottom: 2px solid var(--border);">
+                                        <th style="text-align:left; padding:8px;">Item</th>
+                                        <th style="text-align:center; padding:8px;">Qty</th>
+                                        <th style="text-align:right; padding:8px;">Price</th>
+                                        <th style="text-align:right; padding:8px;">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="rd-items-body">
+                                </tbody>
+                                <tfoot>
+                                    <tr style="border-top: 2px solid var(--border); font-weight:bold;">
+                                        <td colspan="3" style="text-align:right; padding:8px;">Grand Total:</td>
+                                        <td id="rd-grand-total" style="text-align:right; padding:8px; color:var(--primary);"></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+            <!-- POS Terminal View -->
+            <section id="pos-terminal" class="view-section">
+                <header>
+                    <h1>Retail Management</h1>
+                    <div class="pos-top-actions" style="margin-bottom: 20px; display: flex; gap: 15px; align-items: center; justify-content: space-between;">
+                        <div style="position:relative; width:100%; max-width:500px;">
+                            <i class="fa-solid fa-magnifying-glass" style="position:absolute; left:14px; top:50%; transform:translateY(-50%); color:var(--text-muted, #888); pointer-events:none; z-index:1;"></i>
+                            <input type="text" id="pos-search" placeholder="Search products by name or category..." style="padding: 12px 20px 12px 40px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); width: 100%; font-size: 1rem;">
+                        </div>
+                        <div class="pos-nav-links">
+                            <button id="pos-nav-register" class="secondary-btn sm-btn">Register</button>
+                            <button id="pos-nav-stock" class="secondary-btn sm-btn">Inventory</button>
+                            <button id="pos-nav-expenses" class="secondary-btn sm-btn"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
+                            <button id="pos-nav-credits" class="secondary-btn sm-btn"><i class="fa-solid fa-handshake"></i> Credit Accounts</button>
+                            <button id="pos-nav-finance" class="primary-btn sm-btn" onclick="toggleSmeFinanceMode()"><i class="fa-solid fa-sack-dollar"></i> Finance Hub</button>
+                        </div>
+                    </div>
+                </header>
+
+                <!-- Sales Register View -->
+                <div id="pos-register-view" class="pos-sub-view">
+                    <div class="pos-layout">
+                        <!-- Products Grid -->
+                        <div class="products-grid" id="pos-products">
+                            <!-- Populated by JS -->
+                        </div>
+                        
+                        <!-- Shopping Cart Sidebar -->
+                        <div class="pos-cart">
+                            <h3>Current Order</h3>
+                            <div class="cart-items" id="cart-items">
+                                <!-- Populated by JS -->
+                            </div>
+                            <div class="cart-summary">
+                                <div class="cart-row"><span>Subtotal:</span><span id="cart-subtotal">UGX 0</span></div>
+                                <div class="cart-row" style="display: none;"><span>Tax (0):</span><span id="cart-tax">UGX 0</span></div>
+                                <div class="cart-row total"><span>Total:</span><span id="cart-total">UGX 0</span></div>
+                                <button id="btn-checkout" class="primary-btn checkout-btn"><i class="fa-solid fa-credit-card"></i> PAY NOW</button>
+
+                            </div>
+
+                            <!-- Payment Panel -->
+                            <div id="payment-panel" class="payment-panel hidden">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                                    <h4 style="margin:0;font-size:1rem;"><i class="fa-solid fa-credit-card"></i> Checkout Payment</h4>
+                                    <button onclick="closePaymentPanel()" style="background:none;border:none;color:var(--text-muted);font-size:1.2rem;cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
+                                </div>
+                                <div class="pay-row"><span>Total Due:</span><span id="pay-total" style="font-weight:700;color:var(--primary);font-size:1.1rem;">UGX 0</span></div>
+                                
+                                <div style="margin:10px 0;">
+                                    <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Payment Method</label>
+                                    <select id="payment-method-select" style="width:100%;padding:10px;background:var(--background);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:10px;" onchange="handlePaymentMethodChange()">
+                                        <option value="CASH"><i class="fa-solid fa-money-bill-wave"></i> Cash</option>
+                                        <option value="MOBILE MONEY"><i class="fa-solid fa-mobile-screen"></i> Mobile Money</option>
+                                        <option value="CREDIT"><i class="fa-solid fa-handshake"></i> Credit</option>
+                                        <option value="COD"><i class="fa-solid fa-truck"></i> Cash on Delivery</option>
+                                    </select>
+                                </div>
+
+                                <div style="margin:10px 0; display:flex; align-items:center; gap:8px;">
+                                    <input type="checkbox" id="send-to-transport-chk" onchange="handleDeliveryCheckboxChange()" style="width:18px;height:18px;accent-color:var(--primary);">
+                                    <label for="send-to-transport-chk" style="font-size:0.9rem; font-weight:600; cursor:pointer;">Send to Transport (Delivery)</label>
+                                </div>
+
+                                <div id="delivery-info-container" style="display:none; margin-bottom:10px; padding:10px; background:rgba(99,102,241,0.05); border:1px solid rgba(99,102,241,0.2); border-radius:6px;">
+                                    <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Delivery Location / Address</label>
+                                    <input type="text" id="delivery-address-input" placeholder="e.g. Kampala, Nakawa" onkeydown="event.stopPropagation()" onkeypress="event.stopPropagation()" style="width:100%;padding:10px;background:var(--background);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:6px;">
+                                </div>
+
+                                <div id="buyer-name-container" style="display:none;margin-bottom:10px;">
+                                    <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Customer Name</label>
+                                    <input type="text" id="buyer-name-input" list="buyer-names-list" placeholder="Enter or select Name" onkeydown="event.stopPropagation()" onkeypress="event.stopPropagation()" style="width:100%;padding:10px;background:var(--background);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:6px;">
+                                    <datalist id="buyer-names-list"></datalist>
+                                    <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Phone Number</label>
+                                    <input type="text" id="buyer-phone-input" placeholder="e.g. 07XXXXXXXX" onkeydown="event.stopPropagation()" onkeypress="event.stopPropagation()" style="width:100%;padding:10px;background:var(--background);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:6px;">
+                                </div>
+
+                                <div style="margin:10px 0;">
+                                    <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Amount Paid</label>
+                                    <input type="text" id="pay-amount" readonly style="width:100%;padding:14px;font-size:1.4rem;font-weight:700;text-align:right;background:var(--background);border:2px solid var(--primary);border-radius:8px;color:var(--text);letter-spacing:1px;" value="0">
+                                </div>
+                                <div class="pay-row" style="font-size:1.1rem;">
+                                    <span>Change:</span>
+                                    <span id="pay-change" style="font-weight:700;font-size:1.2rem;">UGX 0</span>
+                                </div>
+
+                                <!-- Numpad -->
+                                <div class="numpad">
+                                    <button class="num-key" onclick="numpadPress('1')">1</button>
+                                    <button class="num-key" onclick="numpadPress('2')">2</button>
+                                    <button class="num-key" onclick="numpadPress('3')">3</button>
+                                    <button class="num-key" onclick="numpadPress('4')">4</button>
+                                    <button class="num-key" onclick="numpadPress('5')">5</button>
+                                    <button class="num-key" onclick="numpadPress('6')">6</button>
+                                    <button class="num-key" onclick="numpadPress('7')">7</button>
+                                    <button class="num-key" onclick="numpadPress('8')">8</button>
+                                    <button class="num-key" onclick="numpadPress('9')">9</button>
+                                    <button class="num-key clear-key" onclick="numpadPress('C')">C</button>
+                                    <button class="num-key" onclick="numpadPress('0')">0</button>
+                                    <button class="num-key del-key" onclick="numpadPress('⌫')">⌫</button>
+                                    <button class="num-key exact-key" onclick="numpadExact()" style="grid-column: span 3;">EXACT</button>
+                                </div>
+                                <button id="btn-get-invoice" class="secondary-btn checkout-btn" style="margin-top:10px; background:var(--surface); border:1px solid var(--border); color:var(--text); width:100%; padding:14px; font-weight:700; border-radius:8px; display:flex; justify-content:center; align-items:center; gap:8px;" onclick="getInvoice()"><i class="fa-solid fa-file-invoice"></i> SAVE UNPAID INVOICE</button>
+                                <button id="btn-confirm-pay" class="primary-btn checkout-btn" style="margin-top:10px;" onclick="confirmPayment()"><i class="fa-solid fa-check"></i> CONFIRM PAYMENT</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Product Inventory Management View -->
+                <div id="pos-stock-view" class="pos-sub-view hidden">
+                    <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
+                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                            <h2><i class="fa-solid fa-box"></i> Inventory Control</h2>
+                            <div style="display:flex; gap:10px;">
+                                <button id="btn-add-product" class="primary-btn">+ New Product</button>
+                            </div>
+                        </header>
+                        <div id="inventory-grid" class="products-grid" style="margin-top: 10px;">
+                            <!-- Populated by JS as cards -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== EXPENSES SUB-VIEW ===== -->
+                <div id="pos-expenses-view" class="pos-sub-view hidden">
+                    <div style="display:grid; grid-template-columns: 360px 1fr; gap:24px; align-items:start;">
+
+                        <!-- LEFT: Quick Entry Form -->
+                        <div class="card" style="background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px; position:sticky; top:20px;">
+                            <h3 style="margin-bottom:18px; display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-money-bill-transfer"></i> Record Expense</h3>
+
+                            <!-- Daily Summary Pills -->
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px;">
+                                <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); border-radius:10px; padding:12px; text-align:center;">
+                                    <div style="font-size:0.65rem; color:#94A3B8; text-transform:uppercase; letter-spacing:1px;">Today's Expenses</div>
+                                    <div id="pos-exp-today" style="font-size:1.2rem; font-weight:800; color:#EF4444; margin-top:4px;">UGX 0</div>
+                                </div>
+                                <div style="background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.2); border-radius:10px; padding:12px; text-align:center;">
+                                    <div style="font-size:0.65rem; color:#94A3B8; text-transform:uppercase; letter-spacing:1px;">All-Time</div>
+                                    <div id="pos-exp-total" style="font-size:1.2rem; font-weight:800; color:#6366F1; margin-top:4px;">UGX 0</div>
+                                </div>
+                            </div>
+
+                            <form id="form-pos-expense" style="display:flex; flex-direction:column; gap:12px;">
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">Amount (UGX)</label>
+                                    <input type="number" id="pos-exp-amount" placeholder="e.g. 25000" min="1" required
+                                        style="width:100%; padding:11px 14px; background:var(--background); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:1rem; outline:none;">
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">Category</label>
+                                    <select id="pos-exp-category"
+                                        style="width:100%; padding:11px 14px; background:var(--background); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:0.95rem; outline:none;">
+                                        <option value="General">General</option>
+                                        <option value="Supplies">Supplies</option>
+                                        <option value="Utilities">Utilities</option>
+                                        <option value="Transport">Transport</option>
+                                        <option value="Maintenance">Maintenance</option>
+                                        <option value="Staff Welfare">Staff Welfare</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="display:block; font-size:0.75rem; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px;">Description</label>
+                                    <input type="text" id="pos-exp-desc" placeholder="e.g. Bought cleaning supplies" required
+                                        style="width:100%; padding:11px 14px; background:var(--background); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:0.95rem; outline:none;">
+                                </div>
+                                <button type="submit" style="width:100%; padding:13px; background:linear-gradient(135deg,#EF4444,#DC2626); color:#fff; border:none; border-radius:10px; font-size:1rem; font-weight:700; cursor:pointer; margin-top:4px; letter-spacing:0.3px; box-shadow:0 4px 18px rgba(239,68,68,0.35); transition:opacity 0.2s;" onmouseover="this.style.opacity=0.88" onmouseout="this.style.opacity=1">
+                                    Record Expense
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- RIGHT: Expense Log -->
+                        <div class="card" style="background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+                                <h3 style="display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-clipboard-list"></i> Expense History</h3>
+                                <button onclick="loadPOSExpenses()" style="background:rgba(99,102,241,0.1); border:1px solid rgba(99,102,241,0.25); color:var(--primary); padding:6px 14px; border-radius:8px; font-size:0.8rem; font-weight:600; cursor:pointer;">↻ Refresh</button>
+                            </div>
+                            <div class="table-container" style="max-height:520px; overflow-y:auto;">
+                                <table id="pos-expenses-table" style="width:100%;">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left; padding:10px 12px; font-size:0.72rem; color:#94A3B8; font-weight:600; text-transform:uppercase; border-bottom:1px solid var(--border);">Date &amp; Time</th>
+                                            <th style="text-align:left; padding:10px 12px; font-size:0.72rem; color:#94A3B8; font-weight:600; text-transform:uppercase; border-bottom:1px solid var(--border);">Category</th>
+                                            <th style="text-align:left; padding:10px 12px; font-size:0.72rem; color:#94A3B8; font-weight:600; text-transform:uppercase; border-bottom:1px solid var(--border);">Description</th>
+                                            <th style="text-align:right; padding:10px 12px; font-size:0.72rem; color:#94A3B8; font-weight:600; text-transform:uppercase; border-bottom:1px solid var(--border);">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pos-expenses-tbody">
+                                        <tr><td colspan="4" style="text-align:center; padding:30px; color:#94A3B8;">Loading expenses...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+                <!-- ===== END EXPENSES SUB-VIEW ===== -->
+
+                <!-- Credit Records Sub-View -->
+                <div id="pos-credits-view" class="pos-sub-view hidden">
+                    <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
+                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                            <h2><i class="fa-solid fa-handshake"></i> Credit Accounts & Debtors</h2>
+                            <button class="secondary-btn" onclick="loadCredits()">↻ Refresh</button>
+                        </header>
+                        <div class="credits-list" id="credits-list-container">
+                            <div style="text-align:center; padding:30px; color:#94A3B8;">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+        </main>
+    </div>
+
+    <!-- ID Card Print Template — CR80: 86mm × 54mm -->
+    <div id="print-overlay" class="print-overlay" onclick="if(event.target===this)closeIDCard()">
+        <div class="id-print-container">
+            <div class="id-card-wrapper" style="font-family: 'Inter', sans-serif;">
+
+                <!-- ═══ FRONT SIDE: 86mm × 54mm ═══ -->
+                <div class="id-card landscape front" id="id-card-front"
+                     style="display:flex; flex-direction:column; justify-content:space-between;
+                            padding: 5mm 5mm 4mm; overflow:hidden; position:relative;">
+
+                    <!-- Top: Photo + Name/Role -->
+                    <div style="display:flex; gap:3mm; align-items:center;">
+                        <img id="id-profile-img-front" src="lib/placeholder.png"
+                             style="width:18mm; height:18mm; border-radius:50%; object-fit:cover;
+                                    border:0.6mm solid rgba(255,255,255,0.9);
+                                    box-shadow:0 1mm 3mm rgba(0,0,0,0.3); flex-shrink:0;"
+                             alt="Profile">
+                        <div style="color:white; display:flex; flex-direction:column; gap:1mm; min-width:0;">
+                            <div id="print-emp-name-front"
+                                 style="margin:0; font-size:11pt; font-weight:800;
+                                        line-height:1.15; letter-spacing:-0.3px;
+                                        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                John Doe
+                            </div>
+                            <div id="print-emp-role-front"
+                                 style="margin:0; font-size:7pt; font-weight:600;
+                                        opacity:0.85; text-transform:uppercase; letter-spacing:0.8px;">
+                                Operations Manager
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bottom: Phone + Location | Business name -->
+                    <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+                        <div style="color:white; display:flex; flex-direction:column; gap:1mm;
+                                    font-size:6.5pt; opacity:0.9; font-weight:500;">
+                            <div id="id-contact-info" style="display:flex; align-items:center; gap:1.5mm;">
+                                <i class="fa-solid fa-phone" style="font-size:6pt;"></i> +256 700 000000
+                            </div>
+                            <div id="id-location-info" style="display:flex; align-items:center; gap:1.5mm;">
+                                <i class="fa-solid fa-location-dot" style="font-size:6pt;"></i> Kampala
+                            </div>
+                        </div>
+                        <div id="id-biz-name-front"
+                             style="color:white; font-size:8pt; font-weight:800;
+                                    display:flex; align-items:center; gap:1.5mm;
+                                    letter-spacing:-0.3px; text-align:right;">
+                            <i class="fa-solid fa-circle-nodes"></i> JOMISH SUITE
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ BACK SIDE: 86mm × 54mm ═══ -->
+                <div class="id-card landscape back" id="id-card-back"
+                     style="display:flex; flex-direction:column; justify-content:space-between;
+                            padding:4mm 5mm 3mm; background:#ffffff; color:#1e293b;
+                            border:0.3mm solid #e2e8f0;">
+
+                    <!-- Top: Business name + disclaimer -->
+                    <div style="text-align:center;">
+                        <div id="id-biz-name-back"
+                             style="font-size:9pt; font-weight:800; color:#0f172a;
+                                    display:flex; align-items:center; justify-content:center; gap:1.5mm;">
+                            <i class="fa-solid fa-circle-nodes"></i> JOMISH SUITE
+                        </div>
+                        <p style="margin:1mm 0 0; font-size:5.5pt; color:#64748b; line-height:1.4;">
+                            This card is the property of the company.<br>
+                            If found, please return it to the address below.
+                        </p>
+                    </div>
+
+                    <!-- Middle: Signature line + contact -->
+                    <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+                        <div>
+                            <div style="border-bottom:0.3mm solid #94a3b8; width:28mm; height:5mm;"></div>
+                            <p style="margin:1mm 0 0; font-size:5pt; color:#64748b; font-weight:600;
+                                      text-transform:uppercase; letter-spacing:0.5px;">Authorized Signature</p>
+                        </div>
+                        <div style="text-align:right; font-size:5.5pt; color:#475569;">
+                            <p id="id-contact-back" style="margin:0 0 0.5mm; font-weight:700; color:#1e293b;"></p>
+                            <p id="id-location-back" style="margin:0;"></p>
+                        </div>
+                    </div>
+
+                    <!-- BARCODE: full width at very bottom -->
+                    <div style="background:#fff; border:0.3mm solid #e2e8f0; border-radius:1.5mm;
+                                padding:1.5mm 2mm 1mm; display:flex; align-items:center; justify-content:center;">
+                        <svg id="id-barcode-front" style="width:100%; height:auto; display:block; max-height:14mm;"></svg>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Edit Product Modal -->
+    <!-- Add Product Modal -->
+    <div id="add-product-modal" class="modal hidden">
+        <div class="modal-content">
+            <header><h2><i class="fa-solid fa-box"></i> Add New Product</h2></header>
+            <form id="form-add-product" style="display:flex; flex-direction:column; gap:16px; margin-top:16px;">
+                <div class="form-group">
+                    <label>Product Name</label>
+                    <input type="text" id="add-prod-name" placeholder="Product Name" required>
+                </div>
+                <div class="form-group">
+                    <label>Category</label>
+                    <select id="add-prod-cat">
+                        <option value="Product">Product</option>
+                        <option value="Service">Service</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Price (UGX)</label>
+                    <input type="number" id="add-prod-price" placeholder="5000" required>
+                </div>
+                <div class="form-group">
+                    <label>Buying Price (UGX, Optional)</label>
+                    <input type="number" id="add-prod-buying-price" placeholder="4000">
+                </div>
+                <div class="form-group">
+                    <label>Product Image</label>
+                    <input type="file" id="add-prod-photo" accept="image/*" onchange="quickUploadPhoto(this, 'prod-photo-preview')">
+                    <img id="prod-photo-preview" style="display:none; width:80px; height:80px; border-radius:8px; margin-top:10px; object-fit:cover;">
+                </div>
+                <div class="form-group">
+                    <label>Initial Quantity</label>
+                    <input type="number" id="add-prod-qty" placeholder="e.g. 10" min="1" value="1" required>
+                </div>
+                <div class="modal-actions" style="margin-top:20px; display:flex; gap:10px;">
+                    <button type="button" id="btn-close-prod-modal" class="secondary-btn">Cancel</button>
+                    <button type="submit" class="primary-btn"><i class="fa-solid fa-save"></i> Save & Continue to Scan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Scan Session Modal -->
+    <div id="scan-session-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:550px; text-align:center;">
+            <header><h2 style="color:var(--primary);"><i class="fa-solid fa-barcode"></i> Scan Session Active</h2></header>
+            <div style="margin:20px 0;">
+                <p style="font-size:1.1rem;">Scanning barcodes for: <strong id="scan-prod-name" style="font-size:1.2rem;">---</strong></p>
+                
+                <div style="margin:24px auto; width:100px; height:100px; border-radius:50%; background:rgba(99,102,241,0.1); display:flex; align-items:center; justify-content:center; animation: pulse 1.5s infinite;">
+                    <i class="fa-solid fa-barcode" style="font-size:3rem; color:var(--primary);"></i>
+                </div>
+                
+                <p style="color:var(--text-muted); font-size:0.95rem;">Focus the input below and use your scanner.</p>
+                <form id="form-scan-input" onsubmit="event.preventDefault(); submitScanInput();">
+                    <input type="text" id="scan-input" placeholder="Scan Barcode Here" style="font-size:1.5rem; text-align:center; letter-spacing:2px; padding:12px; margin-top:10px; border:2px solid var(--primary); border-radius:8px; background:var(--background); color:var(--text);" autocomplete="off" autofocus>
+                </form>
+                
+                <div style="margin-top:20px; padding:15px; background:var(--surface); border:1px solid var(--border); border-radius:8px;">
+                    <div style="font-size:0.9rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:5px;">Scanned Progress</div>
+                    <div style="font-size:2rem; font-weight:800; color:var(--success);"><span id="scan-count">0</span> / <span id="scan-target">0</span></div>
+                    <div id="scan-last-status" style="margin-top:8px; font-size:0.9rem; color:var(--text-muted); min-height:20px;">Ready to scan...</div>
+                </div>
+            </div>
+            
+            <div class="modal-actions" style="display:flex; flex-direction:column; gap:10px; margin-top:24px;">
+                <button type="button" class="primary-btn" id="btn-generate-bulk" style="background:#F59E0B; border-color:#F59E0B; width:100%;">
+                    <i class="fa-solid fa-tags"></i> No barcode? Generate & Assign to Remaining
+                </button>
+                <button type="button" class="secondary-btn" id="btn-ignore-barcodes" style="background:var(--border); color:var(--text); width:100%;">
+                    <i class="fa-solid fa-forward"></i> Ignore Barcodes & Just Add Stock
+                </button>
+                <button type="button" class="secondary-btn" id="btn-close-scan-session" style="width:100%; display:none;">
+                    <i class="fa-solid fa-check"></i> Done Scanning
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="edit-product-modal" class="modal hidden">
+        <div class="modal-content">
+            <header><h2><i class="fa-solid fa-pencil"></i> Edit Product</h2></header>
+            <form id="form-edit-product" style="display:flex; flex-direction:column; gap:16px; margin-top:16px;">
+                <input type="hidden" id="edit-prod-id">
+                <div class="form-group">
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                        <div>
+                            <label>Barcode Start</label>
+                            <input type="text" id="edit-prod-barcode" required>
+                        </div>
+                        <div>
+                            <label>Barcode End (Optional)</label>
+                            <input type="text" id="edit-prod-barcode-end">
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Product Name</label>
+                    <input type="text" id="edit-prod-name" placeholder="Product Name" required>
+                </div>
+                <div class="form-group">
+                    <label>Category</label>
+                    <select id="edit-prod-cat">
+                        <option value="Product">Product</option>
+                        <option value="Service">Service</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Price (UGX)</label>
+                    <input type="number" id="edit-prod-price" placeholder="5000" required>
+                </div>
+                <div class="form-group">
+                    <label>CEO Buying Price (UGX) <span style="font-size:0.75rem; color:#94A3B8;">(Admin Only)</span></label>
+                    <input type="number" id="edit-prod-buying-price" placeholder="e.g. 3500" value="0">
+                </div>
+                <div class="form-group">
+                    <label>Replace Photo <span style="color:var(--text-muted); font-size:0.8rem;">(optional — leave empty to keep current)</span></label>
+                    <input type="file" id="edit-prod-photo" accept="image/*" onchange="previewEditPhoto(this)" style="padding:10px; background:var(--background); border:1px solid var(--border); width:100%; border-radius:6px;">
+                    <div id="edit-prod-preview" style="margin-top:10px; display:none; text-align:center;">
+                        <img src="" style="max-width:100%; max-height:140px; border-radius:8px; border:1px solid var(--border);">
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" id="btn-close-edit-prod" class="secondary-btn">Cancel</button>
+                    <button type="submit" class="primary-btn">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <!-- Calendar Event Modal -->
+    <div id="cal-event-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:480px;">
+            <h3>New Calendar Event</h3>
+            <form id="form-cal-event">
+                <input type="text" id="cal-evt-title" placeholder="Event Title (e.g. Board Meeting)" required>
+                <select id="cal-evt-type">
+                    <option value="Meeting">Meeting</option>
+                    <option value="Appointment">Appointment</option>
+                    <option value="Deadline">Deadline</option>
+                    <option value="Reminder">Reminder</option>
+                    <option value="Holiday">Holiday</option>
+                    <option value="Other">Other</option>
+                </select>
+                <input type="date" id="cal-evt-date" required>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <input type="time" id="cal-evt-start" placeholder="Start Time">
+                    <input type="time" id="cal-evt-end" placeholder="End Time">
+                </div>
+                <textarea id="cal-evt-desc" placeholder="Description / Notes (optional)" style="min-height:80px; padding:12px; background:var(--background); border:1px solid var(--border); border-radius:6px; color:var(--text); resize:vertical;"></textarea>
+                <select id="cal-evt-color">
+                    <option value="#4F46E5">Indigo</option>
+                    <option value="#10B981">Green</option>
+                    <option value="#EF4444">Red</option>
+                    <option value="#F59E0B">Amber</option>
+                    <option value="#EC4899">Pink</option>
+                    <option value="#8B5CF6">Purple</option>
+                    <option value="#06B6D4">Cyan</option>
+                </select>
+                <div class="modal-actions">
+                    <button type="button" id="btn-close-cal-event" class="secondary-btn">Cancel</button>
+                    <button type="submit" class="primary-btn">Save Event</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Meeting Minutes Modal -->
+    <div id="minutes-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:700px; width:90vw;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h3 id="minutes-modal-title" style="margin:0;">Meeting Minutes</h3>
+                <button type="button" class="sm-btn secondary" id="btn-download-minutes" style="background:#EF4444; color:white; border:none;"><i class="fa-solid fa-inbox"></i> Download PDF</button>
+            </div>
+            <p id="minutes-modal-subtitle" style="font-size:0.85rem; color:var(--text-muted); margin-bottom:15px;"></p>
+            <input type="hidden" id="minutes-evt-id">
+            <textarea id="minutes-content" placeholder="Start typing the minutes for this meeting..." style="width:100%; min-height:400px; padding:16px; background:var(--background); border:1px solid var(--border); border-radius:8px; color:var(--text); font-family:inherit; resize:vertical; line-height:1.6;"></textarea>
+            <div class="modal-actions" style="margin-top:20px;">
+                <button type="button" onclick="document.getElementById('minutes-modal').classList.add('hidden')" class="secondary-btn">Close</button>
+                <button type="button" id="btn-save-minutes" class="primary-btn">Save Minutes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Email Config Modal -->
+    <div id="email-config-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:460px; padding: 25px;">
+            <header style="margin-bottom: 20px;">
+                <h3 style="display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-envelope"></i> Gmail Setup</h3>
+                <p style="font-size: 0.85rem; color: #94A3B8;">Connect your business Gmail to pull inbox messages.</p>
+            </header>
+            
+            <form id="form-email-config" style="display:flex; flex-direction:column; gap:16px;">
+                <!-- 2FA Warning -->
+                <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.2); border-radius:8px; padding:12px; font-size:0.75rem; color:#D97706; line-height:1.4;">
+                    <strong><i class="fa-solid fa-triangle-exclamation"></i> Required:</strong> Google requires <strong>2-Step Verification</strong> to be <b>ON</b> before you can create an App Password. If the setting is "not available," please enable 2FA first.
+                </div>
+
+                <div class="form-group">
+                    <label style="display:block; margin-bottom:6px; font-weight:700; font-size:0.85rem;">Official Business Email</label>
+                    <input type="email" id="email-cfg-address" placeholder="your.business@gmail.com" required style="width:100%; padding:12px; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text);">
+                </div>
+
+                <div class="form-group" id="app-password-container">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <label style="font-weight:700; font-size:0.85rem;">Gmail App Password</label>
+                        <a href="https://myaccount.google.com/apppasswords" target="_blank" style="font-size:0.75rem; color:var(--primary); text-decoration:none; font-weight:600;">Get Key →</a>
+                    </div>
+                    <input type="password" id="email-cfg-password" placeholder="16-character security key" style="width:100%; padding:12px; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text);">
+                    <p style="font-size:0.7rem; color:#94A3B8; margin-top:6px; line-height:1.4;">Note: Standard Gmail passwords do not work. You must generate a 16-character "App Password" from your Google account security settings.</p>
+                </div>
+
+                <div class="form-group">
+                    <label style="display:block; margin-bottom:6px; font-weight:700; font-size:0.85rem;">Resend API Key (Optional)</label>
+                    <input type="password" id="email-cfg-resend-key" placeholder="re_..." style="width:100%; padding:12px; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text);">
+                    <p style="font-size:0.7rem; color:#94A3B8; margin-top:6px; line-height:1.4;">Required for sending emails if hosted on Render. Get your key from <a href="https://resend.com" target="_blank" style="color:var(--primary);">resend.com</a>.</p>
+                </div>
+
+                <div class="modal-actions" style="margin-top:10px;">
+                    <button type="button" onclick="document.getElementById('email-config-modal').classList.add('hidden')" class="secondary-btn" style="flex:1;">Cancel</button>
+                    <button type="submit" class="primary-btn" style="flex:2;">Connect Gmail</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Reply to Front Desk Modal (for non-secretary staff) -->
+    <div id="reply-msg-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:460px;">
+            <h3>Reply to Front Desk</h3>
+            <form id="form-reply-msg">
+                <input type="text" id="reply-msg-subject" placeholder="Subject (optional)">
+                <textarea id="reply-msg-content" placeholder="Type your reply..." required style="min-height:100px; padding:12px; background:var(--background); border:1px solid var(--border); border-radius:6px; color:var(--text); resize:vertical;"></textarea>
+                <div class="modal-actions">
+                    <button type="button" onclick="document.getElementById('reply-msg-modal').classList.add('hidden')" class="secondary-btn">Cancel</button>
+                    <button type="submit" class="primary-btn"><i class="fa-solid fa-paper-plane"></i> Send Reply</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- Credit Payment Modal -->
+    <!-- New Delivery Modal -->
+    <div id="delivery-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:520px;">
+            <h3><i class="fa-solid fa-truck"></i> New Delivery</h3>
+            <form id="form-new-delivery">
+                <input type="text" id="del-client-name" placeholder="Client Name" required>
+                <input type="tel" id="del-client-phone" placeholder="Client Phone" required>
+                <input type="text" id="del-client-location" placeholder="Delivery Location / Address" required>
+                <input type="text" id="del-driver" placeholder="Driver Name (optional)">
+                <input type="text" id="del-items" placeholder="Items Description (e.g. 2x Milk, 1x Bread)">
+                <input type="number" id="del-fee" placeholder="Delivery Fee (UGX)" min="0" value="0">
+                <select id="del-status">
+                    <option value="Pending">Pending</option>
+                    <option value="In Transit">In Transit</option>
+                    <option value="Delivered">Delivered</option>
+                    <option value="Failed">Failed</option>
+                </select>
+                <textarea id="del-notes" placeholder="Notes (optional)" style="min-height:70px; padding:12px; background:var(--background); border:1px solid var(--border); border-radius:6px; color:var(--text); resize:vertical;"></textarea>
+                <div class="modal-actions">
+                    <button type="button" id="btn-close-delivery-modal" class="secondary-btn">Cancel</button>
+                    <button type="submit" class="primary-btn"><i class="fa-solid fa-save"></i> Save Delivery</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="credit-payment-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:440px;">
+            <h3 style="margin-bottom:4px;"><i class="fa-solid fa-credit-card"></i> Record a Payment</h3>
+            <p id="credit-payment-subtitle" style="color:var(--text-muted); font-size:0.88rem; margin-bottom:18px;"></p>
+            <form id="form-credit-payment" onsubmit="submitCreditPayment(event)">
+                <input type="hidden" id="credit-payment-buyer">
+                <div class="form-group">
+                    <label>Amount Paid (UGX)</label>
+                    <input type="number" id="credit-payment-amount" placeholder="Enter amount received" min="1" required style="font-size:1.1rem; font-weight:700;">
+                </div>
+                <div class="form-group">
+                    <label>Note (optional)</label>
+                    <input type="text" id="credit-payment-note" placeholder="e.g. Cash payment, Bank transfer...">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" onclick="document.getElementById('credit-payment-modal').classList.add('hidden')" class="secondary-btn" style="flex:1;">Cancel</button>
+                    <button type="submit" class="primary-btn" style="flex:2;"><i class="fa-solid fa-check"></i> Confirm Payment</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+
+
+    <!-- ============================================================ -->
+    <!-- POS RECEIPT / INVOICE MODAL — rebuilt clean                  -->
+    <!-- ============================================================ -->
+    <div id="receipt-overlay" class="receipt-overlay">
+        <div class="receipt-modal">
+
+            <!-- Paper receipt preview -->
+            <div id="receipt-content" class="receipt-paper">
+
+                <!-- Logo -->
+                <div style="text-align:center; margin-bottom:6px;">
+                    <img id="receipt-brand-logo" src="assets/default-logo.png"
+                         style="max-height:52px; max-width:150px;" alt=""
+                         onerror="this.style.display='none'">
+                </div>
+
+                <!-- Business info -->
+                <div style="text-align:center; margin-bottom:8px;">
+                    <div id="receipt-biz-name" style="font-size:1.05rem; font-weight:800; text-transform:uppercase; letter-spacing:1px;">Business Name</div>
+                    <div id="receipt-addr"     style="font-size:0.72rem; color:#555; margin-top:2px;">Address</div>
+                    <div id="receipt-contact"  style="font-size:0.72rem; color:#555;">Contact</div>
+                </div>
+
+                <!-- Receipt / Invoice header -->
+                <div style="border-top:1px dashed #999; border-bottom:1px dashed #999; padding:5px 0; margin-bottom:8px; font-size:0.75rem;">
+                    <div style="display:flex; justify-content:space-between;">
+                        <span id="receipt-date">Date: --</span>
+                        <strong id="receipt-no">RECEIPT #0000</strong>
+                    </div>
+                    <div style="margin-top:2px;">
+                        <span id="receipt-cashier">Cashier: --</span>
+                    </div>
+                </div>
+
+                <!-- Items table -->
+                <table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-bottom:8px;">
+                    <thead>
+                        <tr style="border-bottom:1px dashed #999;">
+                            <th style="text-align:left; padding:3px 0;">Item</th>
+                            <th style="text-align:center; padding:3px 0;">Qty</th>
+                            <th style="text-align:right; padding:3px 0;">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody id="receipt-items"></tbody>
+                </table>
+
+                <!-- Totals -->
+                <div style="border-top:1px dashed #999; padding-top:7px; font-size:0.8rem;">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Subtotal:</span><span id="r-subtotal">UGX 0</span></div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Tax:</span><span id="r-tax">UGX 0</span></div>
+                    <div style="display:flex; justify-content:space-between; font-weight:800; font-size:0.95rem; margin-top:5px; border-top:1px solid #333; padding-top:5px;">
+                        <span>TOTAL:</span><span id="r-total">UGX 0</span>
+                    </div>
+                </div>
+
+                <!-- Payment info -->
+                <div style="margin-top:9px; padding-top:7px; border-top:1px dashed #999; font-size:0.8rem;">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Payment:</span><strong id="r-method">CASH</strong></div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:3px;"><span>Paid:</span><span id="r-paid">UGX 0</span></div>
+                    <div id="r-change-row"  style="display:none; justify-content:space-between; margin-bottom:3px; color:#10B981; font-weight:bold;"><span>Change:</span><span id="r-change">UGX 0</span></div>
+                    <div id="r-balance-row" style="display:none; justify-content:space-between; margin-bottom:3px; color:#EF4444; font-weight:bold;"><span>Balance Due:</span><span id="r-balance">UGX 0</span></div>
+                    <div id="r-buyer-row"   style="display:none; justify-content:space-between; margin-bottom:3px;"><span>Buyer:</span><strong id="r-buyer-name"></strong></div>
+                    <div id="r-delivery-row" style="display:none; margin-top:7px; padding-top:6px; border-top:1px dashed #999; font-size:0.77rem;">
+                        <div style="font-weight:bold; margin-bottom:3px;">🚚 DELIVERY</div>
+                        <div style="display:flex; justify-content:space-between;"><span>Client:</span><span id="r-delivery-client"></span></div>
+                        <div style="display:flex; justify-content:space-between;"><span>Location:</span><span id="r-delivery-loc"></span></div>
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <div style="text-align:center; margin-top:14px; font-size:0.72rem; color:#555; border-top:1px dashed #999; padding-top:8px;">
+                    <p style="margin:0; font-weight:600;">Thank you for your business!</p>
+                    <p style="margin:3px 0 0; font-size:0.65rem; font-style:italic;">Powered by Jomish Business Suite</p>
+                </div>
+
+            </div><!-- /receipt-paper -->
+
+            <!-- Action buttons -->
+            <div class="receipt-actions no-print" style="display:flex; gap:10px; margin-top:14px; width:320px; max-width:100%;">
+                <button id="btn-close-receipt" class="secondary-btn" style="flex:1;" onclick="closeReceipt()">
+                    <i class="fa-solid fa-xmark"></i> Close
+                </button>
+                <button id="btn-do-print" class="primary-btn" style="flex:2;" onclick="doPrint()">
+                    <i class="fa-solid fa-print"></i> Print
+                </button>
+            </div>
+
+        </div><!-- /receipt-modal -->
+    </div><!-- /receipt-overlay -->
+
+
+    <!-- Statement Print Template -->
+    <div id="statement-print-area" class="statement-print-area" style="display: none;">
+        <!-- Injected via JS -->
+    </div>
+
+
+    <!-- COD Floating Bubble -->
+    <div id="cod-floating-bubble" style="display:none; position:fixed; bottom:30px; right:30px; background:var(--primary); color:white; padding:15px 25px; border-radius:50px; cursor:pointer; box-shadow:0 10px 25px rgba(99,102,241,0.4); z-index:9999; font-weight:600; display:flex; align-items:center; gap:10px; transition:transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'" onclick="openCodModal()">
+        <i class="fa-solid fa-truck"></i>
+        <span>Pending COD</span>
+        <span id="cod-badge-count" style="background:white; color:var(--primary); border-radius:50%; padding:2px 8px; font-size:0.85rem; margin-left:5px;">0</span>
+    </div>
+
+    <!-- COD Modal -->
+    <div id="cod-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:600px;">
+            <div class="modal-header">
+                <h2>Pending Cash on Delivery</h2>
+                <button class="btn-close" onclick="closeCodModal()"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <div id="cod-list-container" style="max-height:60vh; overflow-y:auto; padding:10px 0;">
+                <!-- Injected via JS -->
+            </div>
+        </div>
+    </div>
+    <!-- Confirm Admin Password Modal (for Role Permission Matrix changes) -->
+    <div id="confirm-password-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:420px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-shield-halved"></i> Confirm Change</h3>
+                <button class="btn-close" onclick="document.getElementById('confirm-password-modal').classList.add('hidden')"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <div style="padding:20px 24px 24px;">
+                <p id="confirm-pwd-desc" style="color:var(--text-muted); font-size:0.9rem; margin-bottom:18px;"></p>
+                <div class="form-group">
+                    <label>Your Password</label>
+                    <div style="display:flex; gap:8px;">
+                        <input type="password" id="confirm-pwd-input" placeholder="Enter your password to confirm" style="flex:1;" onkeydown="if(event.key==='Enter'){submitConfirmPassword();}">
+                        <button type="button" class="secondary-btn" onclick="const i=document.getElementById('confirm-pwd-input'); i.type=i.type==='password'?'text':'password';"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                </div>
+                <div style="display:flex; gap:10px; margin-top:20px;">
+                    <button class="secondary-btn" style="flex:1;" onclick="document.getElementById('confirm-password-modal').classList.add('hidden')">Cancel</button>
+                    <button class="primary-btn" style="flex:2;" onclick="submitConfirmPassword()"><i class="fa-solid fa-check"></i> Confirm</button>
+                </div>
+                <p id="confirm-pwd-error" style="color:var(--danger); font-size:0.8rem; margin-top:10px; display:none;"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Set Password / System User Modal -->
+    <div id="set-password-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:500px;">
+            <div class="modal-header">
+                <h3 id="pass-modal-title"><i class="fa-solid fa-key"></i> System User</h3>
+                <button class="btn-close" onclick="document.getElementById('set-password-modal').classList.add('hidden')"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <form id="form-set-password">
+                <input type="hidden" id="pass-emp-id">
+                
+                <div id="pass-name-display" style="text-align:center; padding:15px; background:var(--background); border-radius:8px; margin-bottom:20px; display:none;">
+                    <div style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:5px;">Employee Name</div>
+                    <div id="pass-emp-name-label" style="font-size:1.2rem; font-weight:700; color:var(--text);"></div>
+                </div>
+
+                <div id="pass-name-fields" style="display:flex; gap:10px; margin-bottom:15px;">
+                    <div class="form-group" style="flex:1;">
+                        <label>Select Worker</label>
+                        <select id="pass-worker-select" onchange="
+                            var sel = this;
+                            var empId = sel.value;
+                            document.getElementById('pass-emp-id').value = empId;
+                            document.getElementById('pass-emp-user').value = empId;
+                            var txt = sel.options[sel.selectedIndex].text;
+                            document.getElementById('pass-emp-nickname').value = txt.split(' ')[0];
+                        ">
+                            <option value="">-- Choose Worker --</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:10px; margin-bottom:15px;">
+                    <div class="form-group" style="flex:1;">
+                        <label>Username (Login ID)</label>
+                        <input type="text" id="pass-emp-user" placeholder="Auto-filled with worker ID" required readonly style="background:#e2e8f0; cursor:not-allowed;">
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label>Nickname (POS Initials)</label>
+                        <input type="text" id="pass-emp-nickname" placeholder="e.g. JD" maxlength="5">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>System Role</label>
+                    <select id="pass-emp-role" required>
+                        <option value="">-- Loading roles... --</option>
+                        <!-- Populated dynamically from /api/roles -->
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Password</label>
+                    <div style="display:flex; gap:10px;">
+                        <input type="text" id="pass-new-pwd" placeholder="Type or generate a secure password" style="flex:1;">
+                        <button type="button" class="secondary-btn" onclick="generateAutoPassword()"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto</button>
+                    </div>
+                    <p id="pass-pwd-hint" style="font-size:0.8rem; color:var(--text-muted); margin-top:5px; display:none;">
+                        Leave blank to keep existing password.
+                    </p>
+                </div>
+
+                <div class="modal-actions" style="margin-top:20px; display:flex; justify-content:space-between; align-items:center;">
+                    <div style="display:flex; gap:10px;">
+                        <button type="button" id="btn-suspend-account" class="danger-btn" style="background:none; border:1px solid var(--danger); color:var(--danger);" onclick="handleSuspendAccount()"><i class="fa-solid fa-ban"></i> Suspend</button>
+                        <button type="button" id="btn-restore-account" class="primary-btn" style="display:none; background:none; border:1px solid var(--success); color:var(--success);" onclick="handleRestoreAccount()"><i class="fa-solid fa-check"></i> Restore</button>
+                        <button type="button" id="btn-delete-account" class="danger-btn" onclick="handleDeleteAccount()"><i class="fa-solid fa-trash"></i> Terminate</button>
+                    </div>
+                    <div style="display:flex; gap:10px;">
+                        <button type="button" class="secondary-btn" onclick="document.getElementById('set-password-modal').classList.add('hidden')">Cancel</button>
+                        <button type="submit" id="btn-pass-submit" class="primary-btn">Save Changes</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="offline-db.js"></script>
+    <script src="app.js?v=19"></script>
+</body>
+</html>

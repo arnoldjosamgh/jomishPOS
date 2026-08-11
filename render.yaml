@@ -1,0 +1,23 @@
+# render.yaml — JomishPOS Deployment Configuration
+# Deploy to Render.com by linking your GitHub repo (arnoldjosamgh/jomishPOS)
+# See: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: jomish-pos
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install --omit=optional
+    startCommand: node backend/server.js
+    healthCheckPath: /api/system/status
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3005
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false  # Paste your Neon Postgres connection string here in the Render dashboard
