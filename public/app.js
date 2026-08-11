@@ -8366,7 +8366,7 @@ async function loadTechTenants() {
     if (!container) return;
     container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading companies...</div>';
     try {
-        const res = await authFetch(`${API_URL}/tech/tenants`);
+        const res = await fetchAuth(`${API_URL}/tech/tenants`);
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         const tenants = data.tenants || [];
@@ -8415,7 +8415,7 @@ async function handleCreateTenant(event) {
     btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Provisioning...';
 
     try {
-        const res = await authFetch(`${API_URL}/tech/tenant`, {
+        const res = await fetchAuth(`${API_URL}/tech/tenant`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company_name: companyName, prefix })
@@ -8446,7 +8446,7 @@ async function handleCreateTenant(event) {
 async function techResetCEO(prefix) {
     if (!confirm(`Reset the CEO password for company "${prefix}"?\nNew password will be "password".`)) return;
     try {
-        const res = await authFetch(`${API_URL}/tech/tenant/${prefix}/reset-ceo`, { method: 'POST' });
+        const res = await fetchAuth(`${API_URL}/tech/tenant/${prefix}/reset-ceo`, { method: 'POST' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Reset failed');
         showToast(`CEO password for ${prefix} reset to "password"`, 'success');
