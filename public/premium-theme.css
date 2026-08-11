@@ -116,6 +116,20 @@ body, html {
   box-shadow: 0 8px 16px rgba(245, 158, 11, 0.25) !important;
 }
 
+/* Tech Hub tab - distinctive purple/dark style */
+.pos-tab-tech {
+  color: #7c3aed !important;
+  background: #ede9fe !important;
+}
+.pos-tab-tech:hover {
+  background: #ddd6fe !important;
+}
+.pos-tab-tech.active {
+  background: linear-gradient(135deg, #7c3aed, #4f46e5) !important;
+  color: white !important;
+  box-shadow: 0 8px 16px rgba(124, 58, 237, 0.3) !important;
+}
+
 /* ── SEARCH BAR ── */
 #pos-search-wrap input {
   background: #f1f5f9 !important;

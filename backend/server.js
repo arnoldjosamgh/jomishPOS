@@ -495,12 +495,12 @@ app.post('/api/login', (req, res) => {
                 if (isTech) {
                     const permissions = { can_see_dashboard: 1, can_see_hr: 1, can_see_attendance: 1, can_see_sme: 1, can_see_pos: 1, can_see_secretary: 1, can_see_hardware: 1, can_see_system_users: 1, can_see_schedules: 1, can_see_transport: 1 };
                     const token = jwt.sign(
-                        { id: 9999, role: 'CEO', name: techName, prefix: prefix.toLowerCase(), permissions },
+                        { id: 9999, role: 'TECH', name: techName, prefix: prefix.toLowerCase(), permissions },
                         JWT_SECRET,
                         { expiresIn: '8h' }
                     );
                     res.cookie('jomish_auth', token, { httpOnly: true, secure: false, sameSite: 'lax', maxAge: 8 * 60 * 60 * 1000 });
-                    return res.json({ token, role: 'CEO', name: techName, permissions, user_id: 9999, prefix: prefix.toLowerCase() });
+                    return res.json({ token, role: 'TECH', name: techName, permissions, user_id: 9999, prefix: prefix.toLowerCase() });
                 }
 
                 // If not tech, call standard tenant login logic
@@ -1196,6 +1196,123 @@ app.delete('/api/system/tech_users/:id', authenticateToken, (req, res) => {
             });
         });
     });
+});
+
+// ============================================================
+// TECH HUB — Multi-Tenant Company Management API
+// All endpoints require TECH role (id = 9999)
+// ============================================================
+
+function requireTech(req, res, next) {
+    if (req.user && (req.user.id === 9999 || req.user.role === 'TECH')) return next();
+    return res.status(403).json({ error: 'Tech access only.' });
+}
+
+// GET /api/tech/tenants — list all provisioned company schemas
+app.get('/api/tech/tenants', authenticateToken, requireTech, async (req, res) => {
+    try {
+        const client = await db.pool.connect();
+        let schemas = [];
+        try {
+            const result = await client.query(
+                `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\' ORDER BY schema_name`
+            );
+            schemas = result.rows.map(r => r.schema_name);
+        } finally { client.release(); }
+
+        // For each schema, pull the company name from their app_settings
+        const tenants = await Promise.all(schemas.map(async (schema) => {
+            const prefix = schema.replace(/^t_/, '').toUpperCase();
+            try {
+                const client2 = await db.pool.connect();
+                try {
+                    const r = await client2.query(
+                        `SET search_path TO "${schema}", public; SELECT setting_value FROM app_settings WHERE setting_key = 'business_name' LIMIT 1`
+                    );
+                    // pg returns results for the last query in a multi-statement only if using simple query protocol
+                    const nameRow = r.rows && r.rows[0];
+                    return { prefix, schema, company_name: nameRow ? nameRow.setting_value : prefix };
+                } finally { client2.release(); }
+            } catch(e) {
+                return { prefix, schema, company_name: prefix };
+            }
+        }));
+
+        res.json({ tenants });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/tech/tenant — provision a new company portal
+app.post('/api/tech/tenant', authenticateToken, requireTech, async (req, res) => {
+    const { company_name, prefix } = req.body;
+    if (!company_name || !prefix) return res.status(400).json({ error: 'company_name and prefix are required.' });
+    if (!/^[A-Z]{3,5}$/.test(prefix.toUpperCase())) return res.status(400).json({ error: 'Prefix must be 3-5 capital letters.' });
+
+    const normalPrefix = prefix.toUpperCase();
+    const schemaName = 't_' + normalPrefix.toLowerCase();
+
+    try {
+        // 1. Create Postgres schema + all tables via existing helper
+        await db.createCompanySchema(normalPrefix.toLowerCase());
+
+        // Wait a short moment for initDb() to run
+        await new Promise(r => setTimeout(r, 1500));
+
+        // 2. Save company settings in the new schema
+        const client = await db.pool.connect();
+        try {
+            await client.query(`SET search_path TO "${schemaName}", public`);
+            await client.query(
+                `INSERT INTO app_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2`,
+                ['business_name', company_name]
+            );
+            await client.query(
+                `INSERT INTO app_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2`,
+                ['company_prefix', normalPrefix]
+            );
+
+            // 3. Create the default CEO account: PREFIX001 / password
+            const ceoUsername = `${normalPrefix}001`;
+            const ceoHash = await bcrypt.hash('password', 10);
+            const allPerms = JSON.stringify({ can_see_dashboard:1, can_see_hr:1, can_see_attendance:1, can_see_sme:1, can_see_pos:1, can_see_secretary:1, can_see_schedules:1, can_see_transport:1 });
+            await client.query(
+                `INSERT INTO employees (first_name, last_name, email, password, role, permissions, prefix, status)
+                 VALUES ($1, $2, $3, $4, 'CEO', $5, $6, 'ACTIVE')
+                 ON CONFLICT (email) DO NOTHING`,
+                ['Company', 'CEO', ceoUsername, ceoHash, allPerms, normalPrefix]
+            );
+        } finally { client.release(); }
+
+        res.json({ success: true, prefix: normalPrefix, ceo_login: `${normalPrefix}001`, schema: schemaName });
+    } catch(e) {
+        console.error('[TECH] Tenant creation error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/tech/tenant/:prefix/reset-ceo — reset a company's CEO password to "password"
+app.post('/api/tech/tenant/:prefix/reset-ceo', authenticateToken, requireTech, async (req, res) => {
+    const prefix = (req.params.prefix || '').toUpperCase();
+    if (!/^[A-Z]{3,5}$/.test(prefix)) return res.status(400).json({ error: 'Invalid prefix.' });
+    const schemaName = 't_' + prefix.toLowerCase();
+    const ceoUsername = `${prefix}001`;
+    try {
+        const newHash = await bcrypt.hash('password', 10);
+        const client = await db.pool.connect();
+        try {
+            await client.query(`SET search_path TO "${schemaName}", public`);
+            const result = await client.query(
+                `UPDATE employees SET password = $1 WHERE email = $2 AND role = 'CEO'`,
+                [newHash, ceoUsername]
+            );
+            if (result.rowCount === 0) return res.status(404).json({ error: `CEO account ${ceoUsername} not found in schema ${schemaName}.` });
+        } finally { client.release(); }
+        res.json({ success: true, message: `CEO password for ${ceoUsername} reset to "password".` });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.post('/api/system/autostart', authenticateToken, (req, res) => {

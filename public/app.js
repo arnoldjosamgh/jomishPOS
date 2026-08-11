@@ -218,7 +218,22 @@ document.addEventListener('DOMContentLoaded', () => {
     allSections.forEach(s => s.classList.remove('active'));
     const posSection = document.getElementById('pos-terminal');
     if (posSection) { posSection.classList.add('active'); }
-    setTimeout(() => { switchPOSView('register'); loadPOSProducts(); }, 300);
+
+    // If this is the global TECH user — show Tech Hub tab, redirect there, hide normal tabs
+    const _techUser = localStorage.getItem('jomish_prefix');
+    const _isTechUser = (!_techUser || _techUser === 'public') && USER_ROLE === 'TECH';
+    if (_isTechUser) {
+        const techBtn = document.getElementById('pos-nav-tech');
+        if (techBtn) techBtn.style.display = 'flex';
+        // Hide company-specific tabs
+        ['pos-nav-register','pos-nav-stock','pos-nav-expenses','pos-nav-credits','pos-nav-finance','pos-search-wrap'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+        setTimeout(() => { switchPOSView('tech'); }, 300);
+    } else {
+        setTimeout(() => { switchPOSView('register'); loadPOSProducts(); }, 300);
+    }
 
     registerDevice();
     loadBrandLogo();
@@ -459,11 +474,13 @@ function initNavigation() {
     const btnPosStock = document.getElementById('pos-nav-stock');
     const btnPosExp = document.getElementById('pos-nav-expenses');
     const btnPosCredits = document.getElementById('pos-nav-credits');
+    const btnPosTech = document.getElementById('pos-nav-tech');
 
     if (btnPosReg) btnPosReg.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('register'); });
     if (btnPosStock) btnPosStock.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('stock'); });
     if (btnPosExp) btnPosExp.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('expenses'); });
     if (btnPosCredits) btnPosCredits.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('credits'); });
+    if (btnPosTech) btnPosTech.addEventListener('click', (e) => { e.preventDefault(); switchPOSView('tech'); });
 
     // POS Expense Form
     const formPosExp = document.getElementById('form-pos-expense');
@@ -477,7 +494,7 @@ function switchPOSView(viewName) {
         v.style.display = 'none';
     });
     // Reset nav button active style
-    ['pos-nav-register','pos-nav-stock','pos-nav-expenses','pos-nav-credits'].forEach(id => {
+    ['pos-nav-register','pos-nav-stock','pos-nav-expenses','pos-nav-credits','pos-nav-tech'].forEach(id => {
         const b = document.getElementById(id);
         if (b) b.classList.remove('active');
     });
@@ -506,6 +523,12 @@ function switchPOSView(viewName) {
         const b = document.getElementById('pos-nav-credits');
         if (b) b.classList.add('active');
         loadCredits();
+    } else if (viewName === 'tech') {
+        const el = document.getElementById('pos-tech-view');
+        if (el) { el.classList.remove('hidden'); el.style.display = 'block'; }
+        const b = document.getElementById('pos-nav-tech');
+        if (b) b.classList.add('active');
+        loadTechTenants();
     }
 }
 
@@ -8331,4 +8354,113 @@ function toggleSmeFinanceMode() {
         sme.classList.add('active');
         loadTransactions();
     }
+}
+
+// ============================================================
+// TECH HUB — Multi-Tenant Company Management
+// Only visible when logged in as the global 'tech' account
+// ============================================================
+
+async function loadTechTenants() {
+    const container = document.getElementById('tech-tenants-list');
+    if (!container) return;
+    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading companies...</div>';
+    try {
+        const res = await authFetch(`${API_URL}/tech/tenants`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const tenants = data.tenants || [];
+        if (tenants.length === 0) {
+            container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><i class="fa-solid fa-building-circle-xmark" style="font-size:2rem;margin-bottom:10px;display:block;"></i> No companies provisioned yet.<br>Create one using the form on the right.</div>';
+            return;
+        }
+        container.innerHTML = tenants.map(t => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border:1px solid var(--border);border-radius:10px;margin-bottom:10px;background:var(--surface);">
+            <div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#8b5cf6);display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:0.85rem;">${(t.prefix || '?').substring(0,3).toUpperCase()}</div>
+                    <div>
+                        <div style="font-weight:700;">${t.company_name || t.prefix || 'Unknown'}</div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);">Login prefix: <code style="background:var(--bg-color);padding:1px 6px;border-radius:4px;">${(t.prefix||'').toUpperCase()}001</code></div>
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <span style="padding:3px 10px;border-radius:99px;font-size:0.75rem;font-weight:700;background:#d1fae5;color:#065f46;">ACTIVE</span>
+                <button class="secondary-btn" onclick="techResetCEO('${(t.prefix||'').toUpperCase()}')" style="padding:6px 12px;font-size:0.8rem;"><i class="fa-solid fa-key"></i> Reset CEO</button>
+            </div>
+        </div>`).join('');
+    } catch(e) {
+        container.innerHTML = `<div style="color:var(--danger);padding:15px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;"><i class="fa-solid fa-triangle-exclamation"></i> ${e.message}</div>`;
+    }
+}
+
+async function handleCreateTenant(event) {
+    event.preventDefault();
+    const nameInput = document.getElementById('tech-new-company-name');
+    const prefixInput = document.getElementById('tech-new-company-prefix');
+    const statusEl = document.getElementById('tech-create-status');
+    const btn = event.target.querySelector('button[type="submit"]');
+
+    const companyName = nameInput.value.trim();
+    const prefix = prefixInput.value.trim().toUpperCase();
+
+    if (!companyName || !prefix) return;
+    if (!/^[A-Z]{3,5}$/.test(prefix)) {
+        showTechStatus('error', 'Prefix must be 3-5 capital letters only (e.g. ACM, SAL, PRE).');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Provisioning...';
+
+    try {
+        const res = await authFetch(`${API_URL}/tech/tenant`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_name: companyName, prefix })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to create portal');
+
+        showTechStatus('success', `
+            <i class="fa-solid fa-check-circle"></i> <strong>Portal created successfully!</strong><br>
+            <div style="margin-top:10px; font-size:0.9rem;">
+                Company: <strong>${companyName}</strong><br>
+                CEO Login: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">${prefix}001</code><br>
+                Password: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">password</code><br>
+                <small style="opacity:0.8;">Ask the company to change their password immediately after first login.</small>
+            </div>
+        `);
+        nameInput.value = '';
+        prefixInput.value = '';
+        loadTechTenants(); // Refresh the list
+    } catch(e) {
+        showTechStatus('error', `<i class="fa-solid fa-triangle-exclamation"></i> ${e.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Provision Portal';
+    }
+}
+
+async function techResetCEO(prefix) {
+    if (!confirm(`Reset the CEO password for company "${prefix}"?\nNew password will be "password".`)) return;
+    try {
+        const res = await authFetch(`${API_URL}/tech/tenant/${prefix}/reset-ceo`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Reset failed');
+        showToast(`CEO password for ${prefix} reset to "password"`, 'success');
+    } catch(e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function showTechStatus(type, html) {
+    const el = document.getElementById('tech-create-status');
+    if (!el) return;
+    el.style.display = 'block';
+    el.style.background = type === 'success' ? 'linear-gradient(135deg,#10b981,#059669)' : '#fef2f2';
+    el.style.color = type === 'success' ? 'white' : '#991b1b';
+    el.style.border = type === 'success' ? 'none' : '1px solid #fecaca';
+    el.innerHTML = html;
 }

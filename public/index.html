@@ -319,6 +319,7 @@
                             <button id="pos-nav-expenses" class="pos-tab"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
                             <button id="pos-nav-credits" class="pos-tab"><i class="fa-solid fa-handshake"></i> Credits</button>
                             <button id="pos-nav-finance" class="pos-tab pos-tab-finance" onclick="toggleSmeFinanceMode()"><i class="fa-solid fa-sack-dollar"></i> Finance Hub</button>
+                            <button id="pos-nav-tech" class="pos-tab pos-tab-tech" style="display:none;"><i class="fa-solid fa-server"></i> Tech Hub</button>
                         </div>
                         <div id="pos-search-wrap">
                             <i class="fa-solid fa-magnifying-glass"></i>
@@ -518,6 +519,41 @@
                         </header>
                         <div class="credits-list" id="credits-list-container">
                             <div style="text-align:center; padding:30px; color:#94A3B8;">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tech Hub View -->
+                <div id="pos-tech-view" class="pos-sub-view hidden">
+                    <div style="display:flex; gap:20px; height: 100%;">
+                        <!-- Left Panel: Existing Companies -->
+                        <div class="card" style="flex:1; background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border); overflow-y: auto;">
+                            <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                                <h2><i class="fa-solid fa-building"></i> Company Portals</h2>
+                                <button class="secondary-btn" onclick="loadTechTenants()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                            </header>
+                            <div id="tech-tenants-list">
+                                <div style="text-align:center; padding:30px; color:var(--text-muted);">Loading companies...</div>
+                            </div>
+                        </div>
+
+                        <!-- Right Panel: Create Company -->
+                        <div class="card" style="flex:1; background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
+                            <h2><i class="fa-solid fa-plus-circle"></i> Create New Portal</h2>
+                            <p style="color:var(--text-muted); margin-bottom:20px; font-size:0.9rem;">Provision a new database schema and CEO account for a new company.</p>
+                            <form id="tech-create-tenant-form" onsubmit="handleCreateTenant(event)">
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label style="display:block; margin-bottom:5px; font-weight:600;">Company Name</label>
+                                    <input type="text" id="tech-new-company-name" placeholder="e.g. Acme Corporation" required style="width:100%; padding:10px; border-radius:6px; border:1px solid var(--border);">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 25px;">
+                                    <label style="display:block; margin-bottom:5px; font-weight:600;">Login Prefix (3-5 Letters)</label>
+                                    <input type="text" id="tech-new-company-prefix" placeholder="e.g. ACM" required pattern="[A-Za-z]{3,5}" title="3 to 5 alphabetic characters" style="width:100%; padding:10px; border-radius:6px; border:1px solid var(--border); text-transform:uppercase;">
+                                    <small style="color:var(--text-muted); display:block; margin-top:5px;">CEO login will be generated as: <strong>[PREFIX]001</strong></small>
+                                </div>
+                                <button type="submit" class="primary-btn" style="width:100%; padding:12px; font-size:1.1rem;"><i class="fa-solid fa-rocket"></i> Provision Portal</button>
+                            </form>
+                            <div id="tech-create-status" style="margin-top:20px; padding:15px; border-radius:6px; display:none;"></div>
                         </div>
                     </div>
                 </div>
