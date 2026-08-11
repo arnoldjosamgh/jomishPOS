@@ -20,4 +20,4 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: DATABASE_URL
-        sync: false  # Paste your Neon Postgres connection string here in the Render dashboard
+        value: postgresql://neondb_owner:npg_wfOXbnA3i0JY@ep-raspy-thunder-ayuhx4hs-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
