@@ -328,6 +328,94 @@ tbody tr:hover {
 }
 tbody tr td { border: none !important; }
 
+
 /* ── MISC CLEAN-UPS ── */
 .pos-layout { gap: 20px !important; }
 header h1 { font-weight: 800 !important; color: var(--text) !important; }
+
+/* ── LAYOUT FIXES: Sub-views must be scrollable, not clipped ── */
+
+/* The POS terminal section: allow inner content to scroll */
+#pos-terminal {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* The inner POS register layout: products grid + cart */
+#pos-register-view {
+  flex: 1 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  display: block !important;
+}
+
+.pos-layout {
+  flex: 1 !important;
+  min-height: 0 !important;
+  height: calc(100vh - 170px) !important;
+  overflow: hidden !important;
+  gap: 20px !important;
+}
+
+/* Products grid — scrollable */
+.products-grid {
+  overflow-y: auto !important;
+  max-height: 100% !important;
+  padding-right: 8px !important;
+}
+
+/* Cart — fixed height with internal scroll */
+.pos-cart {
+  overflow-y: auto !important;
+  max-height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.cart-items {
+  flex: 1 !important;
+  overflow-y: auto !important;
+  min-height: 0 !important;
+}
+
+/* Stock / Inventory view — full scrollable page */
+#pos-stock-view {
+  display: block !important;
+  overflow-y: auto !important;
+  max-height: calc(100vh - 170px) !important;
+  padding: 10px 0 !important;
+}
+
+#pos-stock-view.hidden { display: none !important; }
+
+/* Expenses view — full scrollable page */
+#pos-expenses-view {
+  display: block !important;
+  overflow-y: auto !important;
+  max-height: calc(100vh - 170px) !important;
+  padding: 10px 0 !important;
+}
+
+#pos-expenses-view.hidden { display: none !important; }
+
+/* Credits view */
+#pos-credits-view {
+  display: block !important;
+  overflow-y: auto !important;
+  max-height: calc(100vh - 170px) !important;
+  padding: 10px 0 !important;
+}
+
+#pos-credits-view.hidden { display: none !important; }
+
+/* POS header — keeps nav buttons visible at all times */
+#pos-terminal > header {
+  flex-shrink: 0 !important;
+  padding: 10px 20px 5px !important;
+  background: var(--background) !important;
+}
+
+/* Ensure the body top padding accounts for our fixed topbar */
+.app-container { padding-top: 50px !important; }
