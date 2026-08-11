@@ -2,15 +2,12 @@
   "port": 3005,
   "appName": "Jomish Business Suite 2026 1.0",
   "mDNS_name": "business-system",
-  "dbType": "sqlite",
+  "dbType": "postgres",
   "sqlite": {
     "dbName": "jomish.db"
   },
   "postgres": {
-    "host": "db",
-    "port": 5432,
-    "user": "jomish_admin",
-    "password": "jomish_secure_pass_2026",
-    "database": "jomish_suite"
+    "connectionString": "postgresql://neondb_owner:npg_wfOXbnA3i0JY@ep-raspy-thunder-ayuhx4hs-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+    "ssl": { "rejectUnauthorized": false }
   }
 }
