@@ -1280,10 +1280,10 @@ app.post('/api/tech/tenant', authenticateToken, requireTech, async (req, res) =>
             for (let i = 1; i <= num; i++) {
                 const numStr = String(i).padStart(3, '0');
                 const username = `${normalPrefix}${numStr}`;
-                // First account is CEO (can only see SME), rest are Cashier (can only see POS)
+                // First account is CEO (can see SME and POS/Inventory), rest are Cashier (can only see POS)
                 const role = i === 1 ? 'CEO' : 'Cashier';
                 const perms = i === 1 
-                    ? JSON.stringify({ can_see_sme: 1, can_see_dashboard: 1 })
+                    ? JSON.stringify({ can_see_sme: 1, can_see_dashboard: 1, can_see_pos: 1 })
                     : JSON.stringify({ can_see_pos: 1 });
 
                 await client.query(
