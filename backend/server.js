@@ -1302,25 +1302,42 @@ app.post('/api/tech/tenant', authenticateToken, requireTech, async (req, res) =>
     }
 });
 
-// POST /api/tech/tenant/:prefix/reset-ceo — reset a company's CEO password to "password"
+// POST /api/tech/tenant/:prefix/reset-ceo — reset (or create) a company's CEO password to "password"
 app.post('/api/tech/tenant/:prefix/reset-ceo', authenticateToken, requireTech, async (req, res) => {
     const prefix = (req.params.prefix || '').toUpperCase();
     if (!/^[A-Z]{3,5}$/.test(prefix)) return res.status(400).json({ error: 'Invalid prefix.' });
     const schemaName = 't_' + prefix.toLowerCase();
-    const ceoUsername = `${prefix}001`;
+    const normalPrefix = prefix; // e.g. "BAO"
+    const ceoUsername = `${normalPrefix}001`;
     try {
         const newHash = await bcrypt.hash('password', 10);
         const client = await db.pool.connect();
         try {
             await client.query(`SET search_path TO "${schemaName}", public`);
-            const result = await client.query(
+
+            // Try to update first
+            const upd = await client.query(
                 `UPDATE employees SET password = $1 WHERE username = $2 AND role = 'CEO'`,
                 [newHash, ceoUsername]
             );
-            if (result.rowCount === 0) return res.status(404).json({ error: `CEO account ${ceoUsername} not found in schema ${schemaName}.` });
+
+            if (upd.rowCount === 0) {
+                // CEO row was never created (company was provisioned before the schema fix).
+                // Insert it now with the correct column names.
+                await client.query(
+                    `INSERT INTO employees
+                        (first_name, last_name, username, email, password, role, is_active,
+                         can_see_sme, can_see_dashboard, can_see_pos)
+                     VALUES ($1, $2, $3, $4, $5, 'CEO', 1, 1, 1, 1)
+                     ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password`,
+                    ['CEO', '001', ceoUsername, `${ceoUsername}@jomish.local`, newHash]
+                );
+                console.log(`[TECH] CEO account ${ceoUsername} was missing — created in ${schemaName}.`);
+            }
         } finally { client.release(); }
         res.json({ success: true, message: `CEO password for ${ceoUsername} reset to "password".` });
     } catch(e) {
+        console.error('[TECH] reset-ceo error:', e);
         res.status(500).json({ error: e.message });
     }
 });
