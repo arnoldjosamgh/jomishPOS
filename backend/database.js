@@ -128,11 +128,18 @@ if (config.dbType === 'postgres') {
         const client = await pool.connect();
         try {
             await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
-            // Run initialization in this new schema
+            await client.query(`SET search_path TO "${schemaName}", public`);
+            
+            // Await schema creation sequentially to guarantee tables exist before returning
+            for (const sql of schema) {
+                await client.query(translateSql(sql));
+            }
+
+            // Run seed data / migrations in this new schema
             await new Promise((resolve) => {
                 asyncLocalStorage.run(schemaName, () => {
-                    initDb();
-                    resolve();
+                    initDb(); // the CREATE TABLEs will be no-ops
+                    setTimeout(resolve, 1500); // Give migrations time to finish
                 });
             });
         } finally {
