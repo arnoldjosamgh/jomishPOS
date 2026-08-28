@@ -1282,15 +1282,15 @@ app.post('/api/tech/tenant', authenticateToken, requireTech, async (req, res) =>
                 const username = `${normalPrefix}${numStr}`;
                 // First account is CEO (can see SME and POS/Inventory), rest are Cashier (can only see POS)
                 const role = i === 1 ? 'CEO' : 'Cashier';
-                const perms = i === 1 
-                    ? JSON.stringify({ can_see_sme: 1, can_see_dashboard: 1, can_see_pos: 1 })
-                    : JSON.stringify({ can_see_pos: 1 });
+                const canSeeSme = i === 1 ? 1 : 0;
+                const canSeeDashboard = i === 1 ? 1 : 0;
+                const canSeePos = 1; // Both need POS
 
                 await client.query(
-                    `INSERT INTO employees (first_name, last_name, email, password, role, permissions, prefix, status)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE')
-                     ON CONFLICT (email) DO NOTHING`,
-                    [role, numStr, username, defaultHash, role, perms, normalPrefix]
+                    `INSERT INTO employees (first_name, last_name, username, email, password, role, is_active, can_see_sme, can_see_dashboard, can_see_pos)
+                     VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9)
+                     ON CONFLICT (username) DO NOTHING`,
+                    [role, numStr, username, `${username}@jomish.local`, defaultHash, role, canSeeSme, canSeeDashboard, canSeePos]
                 );
             }
         } finally { client.release(); }
@@ -1314,7 +1314,7 @@ app.post('/api/tech/tenant/:prefix/reset-ceo', authenticateToken, requireTech, a
         try {
             await client.query(`SET search_path TO "${schemaName}", public`);
             const result = await client.query(
-                `UPDATE employees SET password = $1 WHERE email = $2 AND role = 'CEO'`,
+                `UPDATE employees SET password = $1 WHERE username = $2 AND role = 'CEO'`,
                 [newHash, ceoUsername]
             );
             if (result.rowCount === 0) return res.status(404).json({ error: `CEO account ${ceoUsername} not found in schema ${schemaName}.` });

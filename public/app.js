@@ -410,6 +410,35 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 100);
         });
     }
+
+    // Offline mode support
+    function updateAppOnlineStatus() {
+        let banner = document.getElementById('app-offline-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'app-offline-banner';
+            banner.style.cssText = 'display:none; background:#f59e0b; color:#fff; text-align:center; padding:8px; font-size:0.85rem; font-weight:bold; position:fixed; top:0; left:0; width:100%; z-index:99999;';
+            document.body.prepend(banner);
+        }
+        if (!navigator.onLine) {
+            banner.style.display = 'block';
+            if (window.OfflineDB) {
+                window.OfflineDB.getPendingSyncCount().then(count => {
+                    banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode — ${count} actions pending sync`;
+                });
+            } else {
+                banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode`;
+            }
+        } else {
+            banner.style.display = 'none';
+        }
+    }
+    window.addEventListener('online', () => {
+        updateAppOnlineStatus();
+        if (typeof syncQueuedMutations === 'function') syncQueuedMutations();
+    });
+    window.addEventListener('offline', updateAppOnlineStatus);
+    updateAppOnlineStatus();
 });
 
 function initNavigation() {
@@ -1553,6 +1582,66 @@ async function fetchAuth(url, options = {}) {
 }
 window.fetchAuth = fetchAuth;
 
+// --- OFFLINE SYNC ENGINE ---
+async function syncQueuedMutations() {
+    if (!window.OfflineDB) return;
+    try {
+        const mutations = await window.OfflineDB.getQueuedMutations();
+        if (mutations.length === 0) return;
+        
+        console.log(`[Sync] Starting sync of ${mutations.length} queued mutations...`);
+        showToast(`Syncing ${mutations.length} pending actions to server...`, 'info');
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const mut of mutations) {
+            try {
+                const res = await fetch(mut.url, {
+                    method: mut.method,
+                    headers: mut.headers,
+                    body: mut.body
+                });
+                
+                if (res.ok || res.status === 400 || res.status === 409) {
+                    // Success or non-retriable error -> remove from queue
+                    await window.OfflineDB.removeQueuedMutation(mut.id);
+                    successCount++;
+                } else {
+                    failCount++;
+                }
+            } catch (err) {
+                console.warn(`[Sync] Mutation ${mut.id} failed to sync (will retry later):`, err);
+                failCount++;
+            }
+        }
+        
+        if (successCount > 0 && failCount === 0) {
+            showToast(`All ${successCount} offline actions synced successfully!`, 'success');
+        } else if (failCount > 0) {
+            showToast(`${successCount} synced, ${failCount} failed (will retry).`, 'warning');
+        }
+        
+        // Refresh data if needed
+        if (successCount > 0) {
+            if (typeof loadTransactions === 'function' && USER_PERMISSIONS.can_see_sme) loadTransactions();
+            if (typeof loadDashboard === 'function') loadDashboard();
+        }
+        
+        // Update banner if still offline or queue not empty
+        if (!navigator.onLine) {
+            const banner = document.getElementById('app-offline-banner');
+            if (banner) {
+                const remaining = await window.OfflineDB.getPendingSyncCount();
+                banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode — ${remaining} actions pending sync`;
+            }
+        }
+    } catch (e) {
+        console.error('[Sync] Engine error:', e);
+    }
+}
+window.syncQueuedMutations = syncQueuedMutations;
+
 
 async function loadEmployees() {
     if (USER_ROLE === 'Security') return;
@@ -2674,6 +2763,10 @@ async function confirmPayment() {
         if (res.ok) {
             const result = await res.json();
             closePaymentPanel();
+
+            // Scroll main-content back to top so tab bar (Register/Inventory/etc.) is not hidden
+            const mainContent = document.querySelector('.main-content');
+            if (mainContent) mainContent.scrollTop = 0;
 
             if (change > 0) {
                 showToast(`Give change: UGX ${change.toLocaleString()}`, 'success');

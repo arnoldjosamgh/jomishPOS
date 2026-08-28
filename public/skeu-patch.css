@@ -412,14 +412,15 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
 /* Ensure the body top padding accounts for fixed topbar */
 .app-container { padding-top: 50px !important; }
 
-.app-container { padding-top: 50px !important; }
-
 /* ── POS SINGLE-ROW TOOLBAR ── */
 #pos-header-bar {
   flex-shrink: 0 !important;
   padding: 0 !important;
   background: var(--background) !important;
   border-bottom: none !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 100 !important;
 }
 
 #pos-toolbar {

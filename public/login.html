@@ -21,6 +21,8 @@ window.onunhandledrejection = function(e) {
     <meta name="apple-mobile-web-app-title" content="Jomish">
     <link rel="apple-touch-icon" href="/favicon.png">
     <script src="kiosk-lock.js"></script>
+    <script src="offline-db.js"></script>
+    <script src="lib/bcryptjs.min.js"></script>
     <style>
         *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
         :root{--cyan:#00e5ff;--magenta:#e040fb;--dark:#0c0c1a;--card:#161628;--input-bg:#1e1e35;--border:rgba(255,255,255,0.06);--text:#eee;--muted:#7a7a9a;--radius:14px}
@@ -73,6 +75,9 @@ window.onunhandledrejection = function(e) {
     </style>
 </head>
 <body>
+    <div id="offline-banner" style="display:none; background:#f59e0b; color:#fff; text-align:center; padding:8px; font-size:0.85rem; font-weight:bold; position:fixed; top:0; width:100%; z-index:9999;">
+        <i class="fa-solid fa-triangle-exclamation"></i> You are currently offline. Local login available.
+    </div>
     <div class="card-wrap">
         <div class="login-card">
             <div class="brand-section">
@@ -140,6 +145,9 @@ window.onunhandledrejection = function(e) {
             e.preventDefault();
             const btn = document.getElementById('btn-signin');
             const errorEl = document.getElementById('error-msg');
+            const usernameInput = document.getElementById('username').value.trim();
+            const passwordInput = document.getElementById('password').value;
+
             errorEl.style.display = 'none';
             document.getElementById('terminated-msg').style.display = 'none';
 
@@ -151,14 +159,25 @@ window.onunhandledrejection = function(e) {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        username: document.getElementById('username').value.trim(),
-                        password: document.getElementById('password').value
+                        username: usernameInput,
+                        password: passwordInput
                     })
                 });
 
                 const data = await res.json();
 
                 if (res.ok) {
+                    // Save for offline login
+                    if (window.OfflineDB) {
+                        try {
+                            const salt = bcrypt.genSaltSync(10);
+                            const hash = bcrypt.hashSync(passwordInput, salt);
+                            await window.OfflineDB.saveOfflineCredentials(usernameInput, hash, data);
+                        } catch (e) {
+                            console.warn('Could not save offline credentials', e);
+                        }
+                    }
+
                     localStorage.removeItem('jomish_demo');
                     localStorage.setItem('jomish_token', data.token);
                     localStorage.setItem('jomish_role', data.role);
@@ -180,8 +199,32 @@ window.onunhandledrejection = function(e) {
                     btn.innerHTML = 'Sign In';
                 }
             } catch (err) {
+                // Offline fallback logic
+                if (window.OfflineDB) {
+                    try {
+                        const cachedUser = await window.OfflineDB.getOfflineCredentials(usernameInput);
+                        if (cachedUser) {
+                            const isMatch = bcrypt.compareSync(passwordInput, cachedUser.passwordHash);
+                            if (isMatch) {
+                                const data = cachedUser.userData;
+                                localStorage.removeItem('jomish_demo');
+                                localStorage.setItem('jomish_token', data.token);
+                                localStorage.setItem('jomish_role', data.role);
+                                localStorage.setItem('jomish_name', data.name);
+                                localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
+                                localStorage.setItem('jomish_user_id', data.user_id);
+                                if (data.prefix) localStorage.setItem('jomish_prefix', data.prefix);
+                                window.location.href = 'index.html?offline=true';
+                                return; // Stop execution
+                            }
+                        }
+                    } catch(e) {
+                        console.error("Offline login error", e);
+                    }
+                }
+                
                 errorEl.style.display = 'block';
-                errorEl.textContent = 'Cannot reach server. Is the system running?';
+                errorEl.textContent = 'Cannot reach server and no matching offline credentials found.';
                 btn.disabled = false;
                 btn.innerHTML = 'Sign In';
             }
@@ -210,6 +253,19 @@ window.onunhandledrejection = function(e) {
                 btn.innerHTML = 'Try Demo Mode';
             }
         });
+
+        // Online/Offline Banner handling
+        function updateOnlineStatus() {
+            const banner = document.getElementById('offline-banner');
+            if (!navigator.onLine) {
+                banner.style.display = 'block';
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+        window.addEventListener('online', updateOnlineStatus);
+        window.addEventListener('offline', updateOnlineStatus);
+        updateOnlineStatus(); // Check on initial load
     </script>
 </body>
 </html>

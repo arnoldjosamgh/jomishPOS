@@ -1,9 +1,9 @@
 // ============================================================
-// Jomish Business Suite — Service Worker
+// Jomish Business Suite — Service Worker v3
 // Handles: Offline caching + Push Notifications
 // ============================================================
 
-const CACHE_NAME = 'jomish-v2';
+const CACHE_NAME = 'jomish-v3';
 const STATIC_ASSETS = [
     '/login.html',
     '/index.html',
@@ -11,7 +11,8 @@ const STATIC_ASSETS = [
     '/app.js',
     '/offline-db.js',
     '/manifest.json',
-    '/favicon.png'
+    '/favicon.png',
+    '/lib/bcryptjs.min.js'
 ];
 
 // ─── INSTALL: Pre-cache core assets ──────────────────────────
@@ -86,13 +87,13 @@ self.addEventListener('push', (event) => {
     console.log('[SW] Push received:', data);
 
     const options = {
-        body: data.body,
-        icon: data.icon || '/favicon.png',
-        badge: data.badge || '/favicon.png',
-        tag: data.tag || 'jomish-notification',
+        body:              data.body,
+        icon:              data.icon || '/favicon.png',
+        badge:             data.badge || '/favicon.png',
+        tag:               data.tag || 'jomish-notification',
         requireInteraction: data.requireInteraction || false,
-        data: { url: data.url || '/' },
-        vibrate: [200, 100, 200]
+        data:              { url: data.url || '/' },
+        vibrate:           [200, 100, 200]
     };
 
     event.waitUntil(self.registration.showNotification(data.title, options));
