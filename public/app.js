@@ -404,9 +404,17 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('pay-change').style.color = 'var(--text-muted)';
             const panel = document.getElementById('payment-panel');
             panel.classList.remove('hidden');
-            // Auto-scroll to cash payment panel
+            // Auto-scroll to cash payment panel without scrolling the entire page
             setTimeout(() => {
-                panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                const cartContainer = document.querySelector('.pos-cart');
+                if (cartContainer) {
+                    cartContainer.scrollTo({
+                        top: panel.offsetTop,
+                        behavior: 'smooth'
+                    });
+                } else {
+                    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
             }, 100);
         });
     }
