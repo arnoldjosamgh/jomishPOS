@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 134;
+const CURRENT_VERSION = 135;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -1035,6 +1035,24 @@ function runMigrations(fromVersion) {
                 });
             }
         });
+    }
+
+    if (fromVersion < 135) {
+        // v135: Fix nickname column type in Postgres (was accidentally added as INTEGER in v130)
+        if (config.dbType === 'postgres') {
+            db.run('ALTER TABLE employees ALTER COLUMN nickname TYPE TEXT USING nickname::text', (err) => {
+                if (err) console.error('[Migration v135] Error altering nickname to TEXT:', err.message);
+                else {
+                    db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '135'], () => {
+                        console.log('Migration to v135 complete: Fixed nickname column type to TEXT.');
+                    });
+                }
+            });
+        } else {
+            db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '135'], () => {
+                console.log('Migration to v135 complete: Skipped SQLite (TEXT in INTEGER column allowed).');
+            });
+        }
     }
 }
 

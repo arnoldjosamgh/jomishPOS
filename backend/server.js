@@ -1100,7 +1100,7 @@ app.post('/api/attendance/manual-out', authenticateToken, (req, res) => {
 app.get('/api/transactions', authenticateToken, (req, res) => {
     db.all(`
         SELECT t.*, 
-               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS recorded_by_name
+               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name
         FROM transactions t 
         LEFT JOIN employees e ON t.recorded_by = e.id 
         ORDER BY t.transaction_date DESC
