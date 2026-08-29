@@ -682,14 +682,24 @@ app.post('/api/system/initialize', async (req, res) => {
 
 // Generate next employee ID using company prefix
 app.get('/api/system/next-employee-id', authenticateToken, (req, res) => {
-    if (req.user.role !== 'HR' && req.user.role !== 'CEO') {
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-    db.get('SELECT setting_value FROM app_settings WHERE setting_key = ?', ['company_prefix'], (err, prefixRow) => {
-        db.get('SELECT setting_value FROM app_settings WHERE setting_key = ?', ['next_employee_number'], (err2, numRow) => {
+    if (req.user.role !== 'HR' && req.user.role !== 'CEO') return res.status(403).json({ error: 'Forbidden' });
+    db.get("SELECT setting_value FROM app_settings WHERE setting_key = 'company_prefix'", [], (prefixErr, prefixRow) => {
+        db.all(`SELECT employee_code FROM employees WHERE employee_code LIKE ?`, [(prefixRow ? prefixRow.setting_value : 'EMP') + '%'], (err, rows) => {
+            let num = 0;
+            if (rows && rows.length > 0) {
+                const maxNum = rows.reduce((max, row) => {
+                    if (!row.employee_code) return max;
+                    const match = row.employee_code.match(/\d+/);
+                    if (match) {
+                        const val = parseInt(match[0]);
+                        return val > max ? val : max;
+                    }
+                    return max;
+                }, -1);
+                if (maxNum >= 0) num = maxNum + 1;
+            }
             const prefix = prefixRow ? prefixRow.setting_value : 'EMP';
-            const num = numRow ? parseInt(numRow.setting_value) : 1;
-            const nextId = `${prefix}${String(num).padStart(5, '0')}`;
+            const nextId = `${prefix}${String(num).padStart(3, '0')}`;
             res.json({ next_id: nextId, prefix, number: num });
         });
     });
@@ -716,7 +726,7 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
         
         // Dynamically find the highest existing employee ID to guarantee no duplicates
         db.all(`SELECT employee_code FROM employees WHERE employee_code LIKE ?`, [prefix + '%'], (empErr, rows) => {
-            let num = 2; // Default starting number (after tech support which is 1)
+            let num = 0; // The very first employee in a company is 000
             
             if (rows && rows.length > 0) {
                 const maxNum = rows.reduce((max, row) => {
@@ -727,17 +737,20 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
                         return val > max ? val : max;
                     }
                     return max;
-                }, 0);
-                if (maxNum > 0) num = maxNum + 1;
+                }, -1);
+                if (maxNum >= 0) num = maxNum + 1;
             }
 
-            const auto_employee_code = `${prefix}${String(num).padStart(5, '0')}`;
+            const auto_employee_code = `${prefix}${String(num).padStart(3, '0')}`;
             // Username IS the employee_code — no manual username needed
             const auto_username = auto_employee_code;
+            
+            // Force the first user to be the Admin (CEO)
+            const finalRole = (num === 0) ? 'CEO' : role;
 
             db.run(
                 'INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [first_name, last_name, email, auto_username, role, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
+                [first_name, last_name, email, auto_username, finalRole, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
                 function(err) {
                     if (err) {
                         console.error('[Employee Insert Error]:', err.message);
