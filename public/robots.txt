@@ -7,4 +7,4 @@ Allow: /premium-theme.css
 Allow: /skeu-patch.css
 Allow: /favicon.png
 
-Sitemap: https://jomishpos.onrender.com/sitemap.xml
+Sitemap: https://jomishsuite.onrender.com/sitemap.xml
