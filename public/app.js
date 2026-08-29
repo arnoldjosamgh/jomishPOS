@@ -224,7 +224,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const _isTechUser = (!_techUser || _techUser === 'public') && USER_ROLE === 'TECH';
     if (_isTechUser) {
         const techBtn = document.getElementById('pos-nav-tech');
-        if (techBtn) techBtn.style.display = 'flex';
+        if (techBtn) {
+            techBtn.classList.add('pos-tab'); // add styling only for real tech logins
+            techBtn.style.display = 'flex';
+        }
         // Hide company-specific tabs
         ['pos-nav-register','pos-nav-stock','pos-nav-expenses','pos-nav-credits','pos-nav-finance','pos-search-wrap'].forEach(id => {
             const el = document.getElementById(id);
