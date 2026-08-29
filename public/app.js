@@ -4682,7 +4682,7 @@ async function loadInventory() {
                     <div style="margin-top:6px; display:flex; justify-content:space-between; align-items:center;">
                         <div class="stock" style="font-weight:bold; color:${p.stock < 10 ? 'var(--danger)' : 'var(--primary)'};">Stock: ${p.stock}</div>
                         <div style="display:flex; gap:4px; align-items:center;">
-                            <input type="number" id="restock-qty-${p.id}" value="10" min="1" style="width:45px; background:var(--background); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:0.75rem; padding:4px 2px; text-align:center;">
+                            <input type="number" id="restock-qty-${p.id}" value="10" min="1" style="width:55px; background:#fff; border:1px solid #ccc; border-radius:6px; color:#111 !important; font-size:0.8rem; padding:4px 4px; text-align:center; font-weight:700;">
                             <button class="sm-btn primary" onclick="const val = parseInt(document.getElementById('restock-qty-${p.id}').value); if(val > 0) restockProduct(${p.id}, val);" title="Add Stock & Print Labels">+</button>
                             <button class='sm-btn warning' onclick='printProductLabels(${JSON.stringify(p).replace(/'/g, "&apos;")})' title="Reprint All Labels"><i class="fa-solid fa-tag"></i></button>
                             <button class='sm-btn success' onclick="openEditProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g,'&quot;')}, '${p.category}', ${p.price}, '${p.barcode || ''}', '${p.barcode_end || ''}', ${p.buying_price || 0})" title="Edit"><i class="fa-solid fa-pencil"></i></button>
