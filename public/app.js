@@ -3827,7 +3827,8 @@ async function loadTransactions(searchTerm = '') {
             const tr = document.createElement('tr');
             
             // Build Delete button if the user is CEO or HR
-            const canDelete = ['CEO', 'HR'].includes(USER_ROLE) || USER_NAME === 'System Technician';
+            const currentPrefix = localStorage.getItem('jomish_prefix') || '';
+            const canDelete = currentPrefix.endsWith('000') || USER_NAME === 'System Technician' || USER_ROLE === 'TECH';
             const actionHtml = canDelete 
                 ? `<td><button class='sm-btn danger' onclick="deleteTransaction(${tx.id})" style="padding: 4px 10px; font-weight: bold; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button></td>`
                 : `<td>—</td>`;

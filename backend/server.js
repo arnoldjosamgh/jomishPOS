@@ -1125,8 +1125,12 @@ app.post('/api/transactions', authenticateToken, (req, res) => {
 });
 
 app.delete('/api/transactions/:id', authenticateToken, (req, res) => {
-    if (req.user.role !== 'CEO' && req.user.role !== 'HR') {
-        return res.status(403).json({ error: 'Forbidden: Only Administrators can delete transactions.' });
+    // Only admins with prefix ending in '000' (like KEN000) or the System Technician can delete
+    const isTech = req.user.role === 'TECH' || req.user.name === 'System Technician';
+    const is000Admin = req.user.prefix && String(req.user.prefix).endsWith('000');
+    
+    if (!isTech && !is000Admin) {
+        return res.status(403).json({ error: 'Forbidden: Only primary Administrators (000) can delete transactions.' });
     }
     const { id } = req.params;
     db.run('DELETE FROM transactions WHERE id = ?', [id], function(err) {
