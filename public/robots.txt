@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Allow: /index.html
+Allow: /login.html
+Allow: /style.css
+Allow: /premium-theme.css
+Allow: /skeu-patch.css
+Allow: /favicon.png
+
+Sitemap: https://jomishpos.onrender.com/sitemap.xml
