@@ -3826,12 +3826,24 @@ async function loadTransactions(searchTerm = '') {
             const receiptNo = String(tx.id).padStart(4, '0');
             const tr = document.createElement('tr');
             
-            // Build Delete button if the user is CEO or HR
+            // Payment method badge based on type & description
+            const _desc = (tx.description || '').toLowerCase();
+            let _badge = '', _bColor = '';
+            if (tx.type === 'GOODS_ON_CREDIT') { _badge = '🔖 Credit Sale'; _bColor = '#f59e0b'; }
+            else if (_desc.includes('credit') && (_desc.includes('paid') || _desc.includes('payment'))) { _badge = '✅ Credit Paid'; _bColor = '#10b981'; }
+            else if (_desc.includes('mobile') || _desc.includes('momo') || _desc.includes('airtel') || _desc.includes('mtn')) { _badge = '📱 Mobile Money'; _bColor = '#6366f1'; }
+            else if (_desc.includes('bank') || _desc.includes('transfer')) { _badge = '🏦 Bank Transfer'; _bColor = '#3b82f6'; }
+            else if (_desc.includes('invoice')) { _badge = '🧾 Invoice'; _bColor = '#8b5cf6'; }
+            else if (tx.type === 'EXPENSE') { _badge = '💸 Expense'; _bColor = '#ef4444'; }
+            else if (tx.type === 'INCOME') { _badge = '💵 Cash Payment'; _bColor = '#10b981'; }
+            else { _badge = '📋 Manual Entry'; _bColor = '#64748b'; }
+            const _badgeHtml = `<span style="display:inline-block;padding:3px 9px;border-radius:20px;background:${_bColor}22;color:${_bColor};font-size:0.72rem;font-weight:700;border:1px solid ${_bColor}55;white-space:nowrap;">${_badge}</span>`;
+
+            // Delete button only for 000 admins / Tech
             const currentPrefix = localStorage.getItem('jomish_prefix') || '';
             const canDelete = currentPrefix.endsWith('000') || USER_NAME === 'System Technician' || USER_ROLE === 'TECH';
-            const actionHtml = canDelete 
-                ? `<td><button class='sm-btn danger' onclick="deleteTransaction(${tx.id})" style="padding: 4px 10px; font-weight: bold; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button></td>`
-                : `<td>—</td>`;
+            const _delBtn = canDelete ? `<button class='sm-btn danger' onclick="deleteTransaction(${tx.id})" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" title="Delete"><i class="fa-solid fa-trash"></i></button>` : '';
+            const actionHtml = `<td style="white-space:nowrap;">${_badgeHtml}${_delBtn}</td>`;
                 
             let displayType = tx.type;
             if (tx.type === 'GOODS_ON_CREDIT') displayType = 'GOODS ON CREDIT';
