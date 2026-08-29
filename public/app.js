@@ -1396,7 +1396,9 @@ function enforceRBAC() {
     const navSecretary = document.querySelector('[data-target="secretary-hub"]');
     const navTechHub   = document.querySelector('[data-target="tech-hub"]');
 
-    const isTech = localStorage.getItem('jomish_name') === 'System Technician';
+    // Only the global TECH login (prefix = 'public') gets Tech Hub access — not company-level users
+    const _storedPrefix = localStorage.getItem('jomish_prefix');
+    const isTech = USER_ROLE === 'TECH' && (!_storedPrefix || _storedPrefix === 'public');
     const isDemo = localStorage.getItem('jomish_demo') === 'true';
 
     // ── STRICT ROLE MAPS ─────────────────────────────────────────────────────
