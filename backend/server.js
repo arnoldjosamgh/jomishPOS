@@ -164,6 +164,16 @@ app.use((req, res, next) => {
     next();
 });
 
+// Google Site Verification - explicit routes (always served regardless of static deployment)
+app.get('/google4725248131705fcf.html', (req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.send('google-site-verification: google4725248131705fcf.html');
+});
+app.get('/googlef539f58ae5281262.html', (req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.send('google-site-verification: googlef539f58ae5281262.html');
+});
+
 // Serve Frontend
 app.use(express.static(path.join(APP_BASE_DIR, 'public')));
 
