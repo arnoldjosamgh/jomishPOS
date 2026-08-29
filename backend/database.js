@@ -290,14 +290,28 @@ function translateSql(sql) {
     // date('now') -> CURRENT_DATE
     newSql = newSql.replace(/date\('now'\)/gi, 'CURRENT_DATE');
     
+    // Convert SQLite INSERT OR IGNORE -> Postgres INSERT ... ON CONFLICT DO NOTHING
+    const hadInsertOrIgnore = /INSERT\s+OR\s+IGNORE\s+INTO/gi.test(sql);
+    newSql = newSql.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
+
+    // Convert SQLite INSERT OR REPLACE -> Postgres INSERT ... ON CONFLICT (...) DO UPDATE SET
+    newSql = newSql.replace(/INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*(\([^)]+\))/gi, (_, table, cols, vals) => {
+        const colList = cols.split(',').map(c => c.trim());
+        const pkCol = colList.find(c => c === 'id' || c === 'key') || colList[0];
+        const setCols = colList.filter(c => c !== pkCol).map(c => `${c} = EXCLUDED.${c}`).join(', ');
+        return `INSERT INTO ${table} (${cols}) VALUES ${vals} ON CONFLICT (${pkCol}) DO UPDATE SET ${setCols}`;
+    });
+    
     // Only append RETURNING id for tables that actually have a SERIAL id column
-    // Tables WITHOUT id: roles_config, devices, app_settings, system_info
-    const noIdTables = ['roles_config', 'devices', 'app_settings', 'system_info'];
+    // Tables WITHOUT id: roles_config, devices, app_settings, system_info, system_meta
+    const noIdTables = ['roles_config', 'devices', 'app_settings', 'system_info', 'system_meta'];
     const isInsert = newSql.trim().toUpperCase().startsWith('INSERT');
     const hasReturning = newSql.toUpperCase().includes('RETURNING');
+    const hasOnConflictNothing = hadInsertOrIgnore; // INSERT OR IGNORE -> never needs RETURNING
+    const hasOnConflictUpdate = newSql.toUpperCase().includes('ON CONFLICT') && newSql.toUpperCase().includes('DO UPDATE');
     const targetsNoIdTable = noIdTables.some(t => newSql.toLowerCase().includes(t));
     
-    if (isInsert && !hasReturning && !targetsNoIdTable) {
+    if (isInsert && !hasReturning && !targetsNoIdTable && !hasOnConflictNothing && !hasOnConflictUpdate) {
         newSql += ' RETURNING id';
     }
     return newSql;

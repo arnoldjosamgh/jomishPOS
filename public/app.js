@@ -3791,11 +3791,17 @@ async function loadTransactions(searchTerm = '') {
     try {
         const res = await fetchAuth(`${API_URL}/transactions?t=${Date.now()}`);
         if (!res.ok) {
-            const err = await res.json();
-            console.error('TX Load Error:', err);
+            let errMsg = `HTTP ${res.status}`;
+            try { const err = await res.json(); errMsg = err.error || errMsg; } catch(e) {}
+            console.error('TX Load Error:', errMsg);
+            showToast('Failed to load transactions: ' + errMsg, 'danger');
             return;
         }
         const data = await res.json();
+        if (!data || !Array.isArray(data.transactions)) {
+            console.error('TX Load: unexpected response format', data);
+            return;
+        }
         const tbody = document.querySelector('#transactions-table tbody');
         if (!tbody) return;
         tbody.innerHTML = '';
