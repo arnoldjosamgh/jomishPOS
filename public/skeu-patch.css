@@ -487,6 +487,18 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
   text-shadow: 0 1px 1px rgba(0,0,0,0.2) !important;
 }
 
+/* Tech Hub tab — hidden by default, only shown for global TECH login via JS */
+/* This overrides the .pos-tab display:inline-flex !important for non-tech users */
+#pos-nav-tech {
+  display: none !important;
+}
+/* JS will set element.style.display = 'flex' (inline) which takes priority over !important
+   only when the tech user is authenticated. This is intentional. */
+#pos-nav-tech[style*="display: flex"],
+#pos-nav-tech[style*="display:flex"] {
+  display: flex !important;
+}
+
 /* Finance Hub tab — gold */
 .pos-tab-finance {
   background: linear-gradient(145deg, #f5b942, #c07b0a) !important;
