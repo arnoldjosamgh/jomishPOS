@@ -273,6 +273,84 @@
                         <p style="color:var(--text-muted); text-align:center; padding:20px;">No messages from the front desk.</p>
                     </div>
                 </div>
+
+                <div class="products-grid dash-layout-grid" style="gap: 24px; align-items: start; margin-top: 25px;">
+                    <!-- 1. Live Timetable Board -->
+                    <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
+                        <header style="margin-bottom: 20px;">
+                            <h3><i class="fa-solid fa-calendar-days"></i> Today's Live Timetable</h3>
+                            <p style="font-size: 0.8rem; color: var(--text-muted);">Real-time shift distribution for the current day.</p>
+                        </header>
+                        <div class="table-container">
+                            <table id="dash-timetable">
+                                <thead>
+                                    <tr>
+                                        <th>Staff Name</th>
+                                        <th>Role</th>
+                                        <th>Shift Timing</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 2. Command Notice Board (Live Feed) -->
+                    <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border); max-height: 500px; overflow-y: auto;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
+                            <h3 style="display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-bullhorn"></i> Command Notice Board</h3>
+                            <button class="sm-btn primary" id="dash-new-notice-btn" style="display:none;" onclick="document.getElementById('add-notice-modal').classList.remove('hidden')">+ New Notice</button>
+                        </div>
+                        <div id="dash-notices-feed" style="display: flex; flex-direction: column; gap: 12px;">
+                            <p style="color: var(--text-muted); text-align:center; padding:20px;">Loading notices...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Hardware Radar (Network Monitoring) -->
+                <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border); margin-top: 25px;">
+                    <header style="margin-bottom: 20px; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h3 style="display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-satellite-dish"></i> Hardware Radar</h3>
+                            <p style="font-size: 0.8rem; color: #94A3B8;">Detects every phone, tablet, and terminal accessing the suite.</p>
+                        </div>
+                        <div style="background: rgba(16, 185, 129, 0.1); color: var(--success); padding: 5px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: bold;">LIVE SCANNING</div>
+                    </header>
+                    <div class="stats-grid" style="margin-bottom: 20px;">
+                        <div class="stat-card" style="padding: 15px; display: flex; align-items: center; gap: 15px;">
+                            <div style="font-size: 1.5rem;"><i class="fa-solid fa-server"></i></div>
+                            <div>
+                                <h3 style="margin:0; font-size: 0.7rem;">Active Database</h3>
+                                <p id="db-type-status" style="font-weight: bold; color: var(--primary);">Connecting...</p>
+                            </div>
+                        </div>
+                        <div class="stat-card" style="padding: 15px; display: flex; align-items: center; gap: 15px;">
+                            <div style="font-size: 1.5rem;"><i class="fa-solid fa-users"></i></div>
+                            <div>
+                                <h3 style="margin:0; font-size: 0.7rem;">Staff Records</h3>
+                                <p id="total-staff-status" style="font-weight: bold;">--</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table id="dash-devices">
+                            <thead>
+                                <tr>
+                                    <th>Hardware ID</th>
+                                    <th>Device / Model</th>
+                                    <th>IP Address</th>
+                                    <th>Status</th>
+                                    <th>Last Active</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </section>
 
             <!-- SME Business View -->
