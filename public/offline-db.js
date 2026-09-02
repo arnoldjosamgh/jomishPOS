@@ -4,10 +4,11 @@
 // ============================================================
 
 const DB_NAME = 'JomishOfflineDB';
-const DB_VERSION = 2;          // bumped from 1 → 2 for auth_cache store
+const DB_VERSION = 3;          // bumped to add salesQueue
 const STORE_CACHE = 'api_cache';
 const STORE_QUEUE = 'sync_queue';
 const STORE_AUTH  = 'auth_cache';
+const STORE_SALES = 'salesQueue';
 
 let _dbPromise = null;
 
@@ -29,6 +30,11 @@ function getDB() {
             if (!db.objectStoreNames.contains(STORE_AUTH)) {
                 // Store offline login credentials. Username is the key.
                 db.createObjectStore(STORE_AUTH, { keyPath: 'username' });
+            }
+            if (!db.objectStoreNames.contains(STORE_SALES)) {
+                // Offline sales queue
+                const store = db.createObjectStore(STORE_SALES, { keyPath: 'client_uuid' });
+                store.createIndex('queued_at', 'queued_at', { unique: false });
             }
         };
         request.onsuccess = (event) => resolve(event.target.result);
@@ -135,6 +141,74 @@ async function getPendingSyncCount() {
     }
 }
 
+// ─── OFFLINE SALES QUEUE METHODS ────────────────────────────────
+
+async function queueOfflineSale(client_uuid, payload) {
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx    = db.transaction(STORE_SALES, 'readwrite');
+            const store = tx.objectStore(STORE_SALES);
+            store.put({ client_uuid, payload, queued_at: Date.now() });
+            tx.oncomplete = () => {
+                console.log('[OfflineDB] Sale queued:', client_uuid);
+                resolve();
+            };
+            tx.onerror = () => reject(tx.error);
+        });
+    } catch (e) {
+        console.error('[OfflineDB] Failed to queue sale:', e);
+    }
+}
+
+async function getPendingOfflineSales() {
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx    = db.transaction(STORE_SALES, 'readonly');
+            const store = tx.objectStore(STORE_SALES);
+            const req   = store.index('queued_at').getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror   = () => reject(req.error);
+        });
+    } catch (e) {
+        console.error('[OfflineDB] Failed to get pending sales:', e);
+        return [];
+    }
+}
+
+async function removeSyncedSales(uuids = []) {
+    if (!uuids.length) return;
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx    = db.transaction(STORE_SALES, 'readwrite');
+            const store = tx.objectStore(STORE_SALES);
+            uuids.forEach(uuid => store.delete(uuid));
+            tx.oncomplete = () => {
+                console.log('[OfflineDB] Evicted confirmed sales:', uuids);
+                resolve();
+            };
+            tx.onerror = () => reject(tx.error);
+        });
+    } catch (e) {
+        console.error('[OfflineDB] Failed to evict sales:', e);
+    }
+}
+
+async function getPendingCount() {
+    try {
+        const db = await getDB();
+        return new Promise((resolve) => {
+            const tx    = db.transaction(STORE_SALES, 'readonly');
+            const store = tx.objectStore(STORE_SALES);
+            const req   = store.count();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror   = () => resolve(0);
+        });
+    } catch { return 0; }
+}
+
 // ─── OFFLINE AUTH CACHE METHODS ──────────────────────────────────
 // Stores a bcrypt hash of the user's password + their session data
 // so they can log in when the server is unreachable.
@@ -215,5 +289,9 @@ window.OfflineDB = {
     getPendingSyncCount,
     saveOfflineCredentials,
     getOfflineCredentials,
-    clearOfflineCredentials
+    clearOfflineCredentials,
+    queueOfflineSale,
+    getPendingOfflineSales,
+    removeSyncedSales,
+    getPendingCount
 };

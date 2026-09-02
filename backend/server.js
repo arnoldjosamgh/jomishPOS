@@ -5557,6 +5557,134 @@ app.delete("/api/petty-cash/:id", authenticateToken, (req, res) => {
   });
 });
 
+// --- POS OFFLINE BATCH SYNC ---
+app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
+  const { transactions } = req.body;
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    return res.status(400).json({ error: "No transactions provided." });
+  }
+
+  const syncedIds = [];
+  const errors = [];
+
+  for (const tx of transactions) {
+    const { client_uuid, payload } = tx;
+    if (!client_uuid || !payload) {
+      errors.push({ client_uuid, reason: "Missing client_uuid or payload." });
+      continue;
+    }
+
+    // Idempotency check: was this already synced?
+    const already = await new Promise((resolve) =>
+      db.get(
+        "SELECT id FROM pos_orders WHERE client_uuid = ?",
+        [client_uuid],
+        (err, row) => resolve(row),
+      ),
+    );
+    if (already) {
+      syncedIds.push(client_uuid);
+      continue;
+    }
+
+    const {
+      total_amount,
+      items,
+      payment_method = "CASH",
+      amount_paid,
+    } = payload;
+    if (!items || items.length === 0) {
+      errors.push({ client_uuid, reason: "Empty cart." });
+      continue;
+    }
+
+    const cashier_id = req.user.id;
+    const paid = amount_paid !== undefined ? amount_paid : total_amount;
+    const effectivePaymentMethod =
+      payment_method === "INVOICE" ? "COD" : payment_method;
+    const payment_status =
+      payment_method === "COD" || payment_method === "INVOICE"
+        ? "PENDING"
+        : "PAID";
+    const txAmount = payment_status === "PENDING" ? total_amount : paid;
+    const description = `POS Sale - Offline Sync (${payment_method})`;
+    const now = new Date().toISOString();
+
+    const success = await new Promise((resolve) => {
+      db.serialize(() => {
+        db.run("BEGIN TRANSACTION");
+        db.run(
+          "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
+          [txAmount, "INCOME", description, cashier_id, now, payment_status],
+          function (err) {
+            if (err) {
+              db.run("ROLLBACK");
+              return resolve(false);
+            }
+            const transaction_id = this.lastID;
+            db.run(
+              "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, client_uuid) VALUES (?, ?, ?, ?, ?, ?)",
+              [
+                cashier_id,
+                total_amount,
+                transaction_id,
+                effectivePaymentMethod,
+                paid,
+                client_uuid,
+              ],
+              function (err2) {
+                if (err2) {
+                  db.run("ROLLBACK");
+                  return resolve(false);
+                }
+                const pos_order_id = this.lastID;
+                items.forEach((item) => {
+                  db.run(
+                    "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
+                    [item.qty, item.id, item.qty],
+                  );
+                });
+                db.run("COMMIT", (err3) => {
+                  if (err3) {
+                    db.run("ROLLBACK");
+                    return resolve(false);
+                  }
+                  items.forEach((item) => {
+                    db.run(
+                      "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+                      [
+                        pos_order_id,
+                        item.id,
+                        item.name,
+                        item.qty,
+                        item.price,
+                        (item.price || 0) * (item.qty || 1),
+                      ],
+                    );
+                  });
+
+                  try {
+                    io.emit("db_updated", { module: "pos" });
+                  } catch (e) {}
+                  resolve(true);
+                });
+              },
+            );
+          },
+        );
+      });
+    });
+
+    if (success) syncedIds.push(client_uuid);
+    else errors.push({ client_uuid, reason: "Server processing failed." });
+  }
+
+  console.log(
+    `[BATCH-SYNC] ${transactions.length} tx: ${syncedIds.length} synced, ${errors.length} failed.`,
+  );
+  res.json({ syncedIds, errors });
+});
+
 // Start Server
 io.on("connection", (socket) => {
 });

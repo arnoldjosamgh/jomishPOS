@@ -3,7 +3,7 @@
 // Handles: Offline caching + Push Notifications
 // ============================================================
 
-const CACHE_NAME = 'jomish-v3';
+const CACHE_NAME = 'jomish-v4';
 const STATIC_ASSETS = [
     '/login.html',
     '/index.html',
@@ -75,6 +75,27 @@ self.addEventListener('fetch', (event) => {
                 });
             })
     );
+});
+
+// ═══ BACKGROUND SYNC: Offline Sales Queue ═══════════════════════════════════
+// Fired by the browser when network is restored after a sync.register() call.
+// We message all open clients to trigger syncOfflineSales() in app.js.
+// This covers the scenario where the user had the app open but in the background.
+self.addEventListener('sync', (event) => {
+    if (event.tag === 'sync-offline-sales') {
+        console.log('[SW] Background Sync triggered: sync-offline-sales');
+        event.waitUntil(
+            clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+                if (clientList.length > 0) {
+                    // Tell each open client to run its sync function
+                    clientList.forEach(client => {
+                        client.postMessage({ type: 'TRIGGER_SYNC' });
+                    });
+                }
+                // If no client is open, the user will sync manually next time they open the app
+            })
+        );
+    }
 });
 
 // ─── PUSH: Receive push notifications from server ─────────────

@@ -3465,6 +3465,56 @@ async function confirmPayment() {
       alert("Error: " + data.error);
     }
   } catch (e) {
+    if (
+      !navigator.onLine ||
+      e.message.toLowerCase().includes("failed to fetch")
+    ) {
+      const client_uuid = crypto.randomUUID();
+      const offlinePayload = {
+        total_amount: total,
+        items: posCart,
+        payment_method: paymentMethod,
+        amount_paid: paid,
+        buyer_name: buyerName,
+        buyer_phone: buyerPhone,
+      };
+      if (window.OfflineDB) {
+        await window.OfflineDB.queueOfflineSale(client_uuid, offlinePayload);
+      }
+      closePaymentPanel();
+
+      const mainContent = document.querySelector(".main-content");
+      if (mainContent) mainContent.scrollTop = 0;
+
+      if (change > 0) {
+        showToast(`Give change: UGX ${change.toLocaleString()}`, "success");
+      }
+
+      posCart.forEach((item) => {
+        if (item.barcodes) {
+          item.barcodes.forEach((bc) => soldBarcodes.add(bc));
+        }
+      });
+
+      printReceipt(
+        posCart,
+        total,
+        `OFFLINE-${client_uuid.slice(0, 8).toUpperCase()}`,
+        paymentMethod,
+        paid,
+        buyerName,
+        null,
+      );
+
+      posCart = [];
+      renderCart();
+      updateSyncBadge();
+      showToast(
+        "📶 Offline — sale saved locally. Will sync when reconnected.",
+        "warning",
+      );
+      return;
+    }
     alert("Checkout failed: " + e.message);
   }
 }
@@ -3530,7 +3580,118 @@ async function getInvoice() {
       alert("Error: " + data.error);
     }
   } catch (e) {
+    if (
+      !navigator.onLine ||
+      e.message.toLowerCase().includes("failed to fetch")
+    ) {
+      const client_uuid = crypto.randomUUID();
+      const offlinePayload = {
+        total_amount: total,
+        items: posCart,
+        payment_method: "INVOICE",
+        amount_paid: 0,
+        buyer_name: buyerName,
+        buyer_phone: buyerPhone,
+      };
+      if (window.OfflineDB) {
+        await window.OfflineDB.queueOfflineSale(client_uuid, offlinePayload);
+      }
+      closePaymentPanel();
+      showToast("📶 Offline — invoice saved locally.", "warning");
+
+      posCart.forEach((item) => {
+        if (item.barcodes) {
+          item.barcodes.forEach((bc) => soldBarcodes.add(bc));
+        }
+      });
+
+      printReceipt(
+        posCart,
+        total,
+        `OFFLINE-${client_uuid.slice(0, 8).toUpperCase()}`,
+        "INVOICE",
+        0,
+        buyerName,
+        null,
+        true,
+      );
+
+      posCart = [];
+      renderCart();
+      updateSyncBadge();
+      return;
+    }
     alert("Invoice generation failed: " + e.message);
+  }
+}
+
+// ============================================================
+// OFFLINE SALES SYNC ENGINE
+// ============================================================
+
+async function syncOfflineSales() {
+  if (!window.OfflineDB) return;
+  const pending = await window.OfflineDB.getPendingOfflineSales();
+  if (!pending.length) return;
+
+  const token = localStorage.getItem("jomish_token");
+  if (!token) return;
+
+  try {
+    const res = await fetch(`${API_URL}/pos/batch-sync`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ transactions: pending }),
+    });
+
+    if (!res.ok) throw new Error(`Server responded ${res.status}`);
+
+    const { syncedIds = [], errors = [] } = await res.json();
+
+    if (syncedIds.length) {
+      await window.OfflineDB.removeSyncedSales(syncedIds);
+      showToast(
+        `✅ ${syncedIds.length} offline sale(s) synced to server.`,
+        "success",
+      );
+    }
+    if (errors.length) {
+      console.warn("[Sync] Failed to sync some sales:", errors);
+    }
+  } catch (e) {
+    console.warn(
+      "[Sync] Batch sync failed \u2014 will retry on next reconnect:",
+      e.message,
+    );
+  }
+
+  updateSyncBadge();
+}
+
+async function updateSyncBadge() {
+  if (!window.OfflineDB) return;
+  const count = await window.OfflineDB.getPendingCount();
+  let badge = document.getElementById("offline-sync-badge");
+  if (count > 0) {
+    if (!badge) {
+      // Find a safe spot in POS UI to anchor the badge. The nav bar is ideal.
+      badge = document.createElement("span");
+      badge.id = "offline-sync-badge";
+      badge.style.cssText =
+        "position:fixed;top:14px;right:14px;background:#EF4444;color:#fff;border-radius:20px;padding:4px 10px;font-size:0.78rem;font-weight:700;z-index:9999;display:flex;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(0,0,0,0.2);cursor:pointer;";
+      badge.innerHTML = `<i class="fa-solid fa-cloud-arrow-up"></i> <span id="offline-sync-count">${count}</span> pending`;
+      badge.title = "Offline sales pending sync — click to retry";
+      badge.onclick = syncOfflineSales;
+      document.body.appendChild(badge);
+    } else {
+      const countEl = document.getElementById("offline-sync-count");
+      if (countEl) countEl.textContent = count;
+    }
+  } else {
+    if (badge) badge.remove();
   }
 }
 
@@ -9734,11 +9895,22 @@ async function syncOfflineMutations() {
 window.addEventListener("online", () => {
   showToast("Network restored. Syncing...", "success");
   syncOfflineMutations();
+  setTimeout(syncOfflineSales, 1500);
 });
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "TRIGGER_SYNC") {
+      syncOfflineMutations();
+      syncOfflineSales();
+    }
+  });
+}
 
 // Also try syncing on initial load if online
 document.addEventListener("DOMContentLoaded", () => {
   setTimeout(syncOfflineMutations, 2000);
+  setTimeout(syncOfflineSales, 2500);
 });
 
 // ===== PWA & Push Notifications =====
