@@ -317,8 +317,8 @@ document.addEventListener("DOMContentLoaded", () => {
   loadSystemStatus();
   checkDataLossWarning();
 
-  // Start clock manually since loadDashboard is removed
-  startLiveClock();
+  // Load dashboard data (financial intelligence, alerts, etc.)
+  loadDashboard();
 
   validateSession();
   initBarcodeAutoCalc();
@@ -605,7 +605,7 @@ function initNavigation() {
             document.body.focus();
           }
 
-          if (targetId === "dashboard") {
+          if (targetId === "dashboard" || targetId === "sme-home") {
             loadDashboard();
           }
           if (targetId === "attendance") {
