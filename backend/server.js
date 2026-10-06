@@ -3029,7 +3029,7 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
     params.push(cashier_id);
   }
 
-  sql += ` GROUP BY t.recorded_by, cashier_name ORDER BY total_income DESC`;
+  sql += ` GROUP BY t.recorded_by, e.nickname, e.first_name, e.last_name ORDER BY total_income DESC`;
 
   db.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });

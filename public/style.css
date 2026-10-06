@@ -839,8 +839,8 @@ tr:hover td {
     }
 
     body.print-mode-receipt .receipt-content {
-        width: 72mm !important;       /* 80mm paper - 4mm margins each side */
-        max-width: 72mm !important;
+        width: 100% !important; max-width: 100% !important; box-sizing: border-box !important;       /* 80mm paper - 4mm margins each side */
+        max-width: 100% !important; max-width: 100% !important; box-sizing: border-box !important;
         background: white !important;
         color: black !important;
         padding: 2mm !important;
