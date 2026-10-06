@@ -1749,11 +1749,11 @@ app.post(
   authenticateToken,
   requireTech,
   async (req, res) => {
-    const { company_name, prefix, num_cashiers } = req.body;
-    if (!company_name || !prefix)
+    const { company_name, prefix, admin_name, admin_title, email, password } = req.body;
+    if (!company_name || !prefix || !email || !password)
       return res
         .status(400)
-        .json({ error: "company_name and prefix are required." });
+        .json({ error: "Missing required admin/company fields." });
     if (!/^[A-Z]{3,5}$/.test(prefix.toUpperCase()))
       return res
         .status(400)
@@ -1761,7 +1761,6 @@ app.post(
 
     const normalPrefix = prefix.toUpperCase();
     const schemaName = "t_" + normalPrefix.toLowerCase();
-    const num = parseInt(num_cashiers) || 1;
 
     try {
       // 1. Create Postgres schema + all tables via existing helper
@@ -1783,35 +1782,27 @@ app.post(
           ["company_prefix", normalPrefix],
         );
 
-        // 3. Create the accounts: PREFIX001, PREFIX002, etc.
-        const defaultHash = await bcrypt.hash("password", 10);
-
-        for (let i = 1; i <= num; i++) {
-          const numStr = String(i).padStart(3, "0");
-          const username = `${normalPrefix}${numStr}`;
-          // First account is CEO (can see SME and POS/Inventory), rest are Cashier (can only see POS)
-          const role = i === 1 ? "CEO" : "Cashier";
-          const canSeeSme = i === 1 ? 1 : 0;
-          const canSeeDashboard = i === 1 ? 1 : 0;
-          const canSeePos = 1; // Both need POS
-
-          await client.query(
-            `INSERT INTO employees (first_name, last_name, username, email, password, role, is_active, can_see_sme, can_see_dashboard, can_see_pos)
-                     VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9)
-                     ON CONFLICT (username) DO NOTHING`,
-            [
-              role,
-              numStr,
-              username,
-              `${username}@jomish.local`,
-              defaultHash,
-              role,
-              canSeeSme,
-              canSeeDashboard,
-              canSeePos,
-            ],
-          );
-        }
+        // 3. Create the Admin account
+        const defaultHash = await bcrypt.hash(password, 10);
+        
+        // Split admin_name into first and last name if possible
+        const nameParts = admin_name.split(' ');
+        const firstName = nameParts[0];
+        const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+        
+        await client.query(
+          `INSERT INTO employees (first_name, last_name, username, email, password, role, is_active, can_see_sme, can_see_dashboard, can_see_pos)
+                   VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 1, 1)
+                   ON CONFLICT (email) DO NOTHING`,
+          [
+            firstName,
+            lastName,
+            email, // Using email as username for now
+            email,
+            defaultHash,
+            admin_title || "Admin",
+          ],
+        );
       } finally {
         client.release();
       }

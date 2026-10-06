@@ -10181,23 +10181,26 @@ async function loadTechTenants() {
 async function handleCreateTenant(event) {
   event.preventDefault();
   const nameInput = document.getElementById("tech-new-company-name");
-  const prefixInput = document.getElementById("tech-new-company-prefix");
-  const numInput = document.getElementById("tech-num-cashiers");
+  const adminNameInput = document.getElementById("tech-admin-name");
+  const adminTitleInput = document.getElementById("tech-admin-title");
+  const adminEmailInput = document.getElementById("tech-admin-email");
+  const adminPasswordInput = document.getElementById("tech-admin-password");
   const statusEl = document.getElementById("tech-create-status");
   const btn = event.target.querySelector('button[type="submit"]');
 
   const companyName = nameInput.value.trim();
-  const prefix = prefixInput.value.trim().toUpperCase();
-  const numCashiers = parseInt(numInput ? numInput.value : "1") || 1;
+  const adminName = adminNameInput.value.trim();
+  const adminTitle = adminTitleInput.value.trim();
+  const email = adminEmailInput.value.trim();
+  const password = adminPasswordInput.value.trim();
 
-  if (!companyName || !prefix) return;
-  if (!/^[A-Z]{3,5}$/.test(prefix)) {
-    showTechStatus(
-      "error",
-      "Prefix must be 3-5 capital letters only (e.g. ACM, SAL, PRE).",
-    );
-    return;
-  }
+  if (!companyName || !adminName || !email || !password) return;
+
+  // Auto-generate a prefix (e.g. first 3 letters of company + random letter)
+  const lettersOnly = companyName.replace(/[^A-Za-z]/g, "");
+  const baseStr = lettersOnly.length >= 3 ? lettersOnly.substring(0, 3).toUpperCase() : "COM";
+  const randomLetter = String.fromCharCode(65 + Math.floor(Math.random() * 26));
+  const prefix = baseStr + randomLetter;
 
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Provisioning...';
@@ -10209,7 +10212,10 @@ async function handleCreateTenant(event) {
       body: JSON.stringify({
         company_name: companyName,
         prefix,
-        num_cashiers: numCashiers,
+        admin_name: adminName,
+        admin_title: adminTitle,
+        email: email,
+        password: password,
       }),
     });
     const data = await res.json();
