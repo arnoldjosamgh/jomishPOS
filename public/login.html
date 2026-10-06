@@ -109,12 +109,12 @@ window.onunhandledrejection = function(e) {
 
             <form id="login-form" autocomplete="on">
                 <div class="field">
-                    <label>User ID / User name</label>
-                    <input type="text" id="username" placeholder="Enter User ID or User name" required autocomplete="username">
+                    <label>Email Address</label>
+                    <input type="email" id="username" placeholder="e.g. jerry@gmail.com" required autocomplete="email">
                 </div>
                 <div class="field">
-                    <label>Password</label>
-                    <input type="password" id="password" placeholder="Enter password" required autocomplete="current-password">
+                    <label>PIN / Password</label>
+                    <input type="password" id="password" placeholder="Enter your PIN or password" required autocomplete="current-password">
                     <button type="button" class="eye-btn" id="toggle-pwd" title="Show/Hide">&#x1F441;</button>
                 </div>
                 <button type="submit" class="submit-btn" id="btn-signin">Sign In</button>

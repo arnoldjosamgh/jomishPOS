@@ -391,279 +391,172 @@ app.post("/api/push/subscribe", authenticateToken, async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-app.post("/api/login", (req, res) => {
+app.post("/api/login", async (req, res) => {
   let { username, password } = req.body;
-
-  let prefix = "public";
-  let actualUsername = username; // Keep full username as primary lookup key
-  let numericPart = null; // Numeric-only fallback (e.g. "00001" from "SAL00001")
-
-  // Parse prefix (e.g., SAL00001 → prefix=SAL, numericPart=00001)
-  const match = username.match(/^([A-Za-z]+)(\d+)$/);
-  // Match both 'COMPANYtec' and 'COMPANYtech' formats (case-insensitive)
-  const tecMatch = username.match(/^([A-Za-z]+)tech?$/i);
-  if (
-    username.toLowerCase() === "tech" ||
-    username.toLowerCase() === "jomish_tech"
-  ) {
-    prefix = "PUBLIC";
-  } else if (match) {
-    prefix = match[1].toUpperCase();
-    actualUsername = username; // Use FULL username (e.g. "SAL00001") as primary
-    numericPart = match[2]; // Keep numeric part as fallback
-  } else if (tecMatch) {
-    prefix = tecMatch[1].toUpperCase();
-  } else if (username.includes("-")) {
-    const parts = username.split("-");
-    prefix = parts[0].toUpperCase();
-    actualUsername = username.substring(prefix.length + 1);
-  }
+  const emailInput = (username || "").trim().toLowerCase();
 
   // Rate limit: 10 login attempts per IP per 15 min
   const ip = req.ip || req.socket?.remoteAddress;
   if (rateLimit("login_" + ip, 10, 15 * 60 * 1000)) {
-    return res
-      .status(429)
-      .json({ error: "Too many login attempts. Try again in 15 minutes." });
+    return res.status(429).json({ error: "Too many login attempts. Try again in 15 minutes." });
   }
 
-  // Check company status first
-  if (prefix.toUpperCase() !== "PUBLIC" && prefix.toUpperCase() !== "DEMO") {
-    return new Promise((resolve) => {
-      asyncLocalStorage.run("public", () => {
-        db.get(
-          "SELECT status FROM companies WHERE prefix = ?",
-          [prefix.toUpperCase()],
-          (err, row) => {
-            resolve(row ? row.status : null);
-          },
-        );
-      });
-    }).then((status) => {
-      if (status === "PAUSED") {
-        return res
-          .status(403)
-          .json({
-            error:
-              "Company account is temporarily paused. Please contact support.",
+  // ── TECH / MASTER LOGIN (still username-based) ──────────────────────────────
+  const tecMatch = username.match(/^([A-Za-z]+)tech?$/i);
+  if (
+    username.toLowerCase() === "tech" ||
+    username.toLowerCase() === "jomish_tech" ||
+    tecMatch
+  ) {
+    // Check DB tech users
+    let isTech = false;
+    let techName = "System Technician";
+    let prefix = tecMatch ? tecMatch[1].toUpperCase() : "PUBLIC";
+
+    try {
+      const techUser = await new Promise((resolve, reject) => {
+        asyncLocalStorage.run("public", () => {
+          db.get("SELECT * FROM tech_users WHERE username = ?", [username], (err, row) => {
+            if (err) reject(err); else resolve(row);
           });
+        });
+      });
+      if (techUser) {
+        isTech = await bcrypt.compare(password, techUser.password);
+        if (isTech) techName = techUser.username;
       }
-      continueLogin();
-    });
-  } else {
-    continueLogin();
+    } catch (e) { /* ignore */ }
+
+    // Hardcoded emergency fallback
+    if (!isTech) {
+      if (
+        (tecMatch && password === "Jomish9!!") ||
+        (username.toLowerCase() === "tech" && password === "Jomish9!!") ||
+        (username.toLowerCase() === "jomish_tech" && password === "JomishRecovery99!!")
+      ) {
+        isTech = true;
+      }
+    }
+
+    if (isTech) {
+      const token = jwt.sign(
+        { id: 0, role: "TECH", name: techName, permissions: {}, prefix },
+        JWT_SECRET,
+        { expiresIn: "8h" }
+      );
+      res.cookie("jomish_auth", token, { httpOnly: true, secure: false, sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 });
+      return res.json({ token, role: "TECH", name: techName, permissions: {}, user_id: 0, prefix });
+    }
+    return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  function continueLogin() {
-    const proceedWithTenantLogin = () => {
-      // Determine the correct schema for this company prefix
-      const schemaName =
-        prefix === "PUBLIC" || prefix === "DEMO"
-          ? prefix.toLowerCase()
-          : "t_" + prefix.toLowerCase();
-
-      // Run ALL login DB queries inside the correct tenant schema
-      asyncLocalStorage.run(schemaName, () => {
-        // Search by full username (e.g. "SAL00001"), email, or numeric employee id
-        const numericId = /^\d+$/.test(actualUsername)
-          ? parseInt(actualUsername)
-          : null;
-
-        let query = `SELECT id, first_name, last_name, email, username, password, role, is_active,
-                COALESCE(is_suspended, 0) as is_suspended,
-                can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos,
-                can_see_secretary, can_see_transport, can_see_hardware, can_see_system_users, can_see_schedules
-                FROM employees WHERE username = ? OR email = ?`;
-        let params = [actualUsername, actualUsername];
-        if (numericId !== null) {
-          query += ` OR id = ?`;
-          params.push(numericId);
-        }
-
-        db.get(query, params, async (err, user) => {
-          if (err) {
-            console.error("Login DB Error:", err);
-            return res.status(500).json({ error: "Database error" });
-          }
-          if (!user && numericPart) {
-            // Fallback: try the numeric-only part (e.g. user typed "00001" instead of "SAL00001")
-            const numericId2 = parseInt(numericPart);
-            db.get(
-              `SELECT id, first_name, last_name, email, username, password, role, is_active, COALESCE(is_suspended, 0) as is_suspended,
-                         can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos,
-                         can_see_secretary, can_see_transport, can_see_hardware, can_see_system_users, can_see_schedules
-                         FROM employees WHERE username = ? OR (id = ?)`,
-              [numericPart, numericId2],
-              async (err2, user2) => {
-                if (err2 || !user2)
-                  return res.status(401).json({ error: "Invalid credentials" });
-                await finalizeLogin(user2);
-              },
-            );
-            return;
-          }
-          if (!user) {
-            return res.status(401).json({ error: "Invalid credentials" });
-          }
-          await finalizeLogin(user);
-
-          async function finalizeLogin(u) {
-            // SECURITY GATE: Block terminated employees
-            if (u.is_active === 0) {
-              console.warn(
-                `[LOGIN BLOCKED] Terminated employee — ID: ${u.id}, Name: ${u.first_name} ${u.last_name}`,
-              );
-              return res
-                .status(403)
-                .json({
-                  error:
-                    "Account terminated. Access permanently revoked. Contact HR.",
-                });
-            }
-            // SECURITY GATE: Block suspended accounts
-            if (u.is_suspended === 1) {
-              console.warn(
-                `[LOGIN BLOCKED] Suspended employee — ID: ${u.id}, Name: ${u.first_name} ${u.last_name}`,
-              );
-              return res
-                .status(403)
-                .json({
-                  error:
-                    "Account suspended. Contact your HR manager to restore access.",
-                });
-            }
-
-            // Guard against null password (credentials wiped on termination)
-            if (!u.password) {
-              return res.status(401).json({ error: "Invalid credentials" });
-            }
-
-            const isMatch = await bcrypt.compare(password, u.password);
-            if (!isMatch) {
-              return res.status(401).json({ error: "Invalid credentials" });
-            }
-
-            // Use per-employee permission columns directly — no roles_config lookup needed
-            const permissions = {
-              can_see_dashboard: COALESCE(u.can_see_dashboard, 0),
-              can_see_hr: COALESCE(u.can_see_hr, 0),
-              can_see_attendance: COALESCE(u.can_see_attendance, 1),
-              can_see_sme: COALESCE(u.can_see_sme, 0),
-              can_see_pos: COALESCE(u.can_see_pos, 0),
-              can_see_secretary: COALESCE(u.can_see_secretary, 0),
-              can_see_transport: COALESCE(u.can_see_transport, 0),
-              can_see_hardware: COALESCE(u.can_see_hardware, 0),
-              can_see_system_users: COALESCE(u.can_see_system_users, 0),
-              can_see_schedules: COALESCE(u.can_see_schedules, 0),
-            };
-            function COALESCE(v, def) {
-              return v !== null && v !== undefined ? v : def;
-            }
-            const token = jwt.sign(
-              {
-                id: u.id,
-                role: u.role,
-                name: `${u.first_name} ${u.last_name}`,
-                permissions,
-                prefix,
-              },
-              JWT_SECRET,
-              { expiresIn: "8h" },
-            );
-            res.cookie("jomish_auth", token, {
-              httpOnly: true,
-              secure: false,
-              sameSite: "lax",
-              maxAge: 8 * 60 * 60 * 1000,
-            });
-            res.json({
-              token,
-              role: u.role,
-              name: `${u.first_name} ${u.last_name}`,
-              permissions,
-              user_id: u.id,
-              prefix,
-            });
-          }
+  // ── EMAIL-BASED TENANT LOGIN ─────────────────────────────────────────────────
+  // 1. Get all company schemas from the public companies table
+  let companies = [];
+  try {
+    companies = await new Promise((resolve, reject) => {
+      asyncLocalStorage.run("public", () => {
+        db.all("SELECT prefix, name, status FROM companies ORDER BY created_at DESC", [], (err, rows) => {
+          if (err) reject(err); else resolve(rows || []);
         });
-      }); // end asyncLocalStorage.run
-    }; // End of proceedWithTenantLogin
-
-    // DYNAMIC & EMERGENCY TECHNICIAN GATEWAY
-    asyncLocalStorage.run("public", () => {
-      db.get(
-        "SELECT * FROM tech_users WHERE username = ?",
-        [username],
-        async (err, techUser) => {
-          let isTech = false;
-          let techName = "System Technician";
-
-          if (techUser) {
-            isTech = await bcrypt.compare(password, techUser.password);
-            if (isTech) techName = techUser.username;
-          }
-
-          // Emergency/hardcoded fallback — always checked regardless of DB result.
-          // This ensures master tech credentials work even if the DB record has a
-          // stale/wrong password hash, or the tech_users table is empty.
-          if (!isTech) {
-            if (
-              (tecMatch && password === "Jomish9!!") ||
-              (username.toLowerCase() === "tech" && password === "Jomish9!!") ||
-              (username.toLowerCase() === "jomish_tech" && password === "JomishRecovery99!!")
-            ) {
-              isTech = true;
-              techName = "System Technician";
-            }
-          }
-
-          if (isTech) {
-            const permissions = {
-              can_see_dashboard: 1,
-              can_see_hr: 1,
-              can_see_attendance: 1,
-              can_see_sme: 1,
-              can_see_pos: 1,
-              can_see_secretary: 1,
-              can_see_hardware: 1,
-              can_see_system_users: 1,
-              can_see_schedules: 1,
-              can_see_transport: 1,
-            };
-            const token = jwt.sign(
-              {
-                id: 9999,
-                role: "TECH",
-                name: techName,
-                prefix: prefix.toLowerCase(),
-                permissions,
-              },
-              JWT_SECRET,
-              { expiresIn: "8h" },
-            );
-            res.cookie("jomish_auth", token, {
-              httpOnly: true,
-              secure: false,
-              sameSite: "lax",
-              maxAge: 8 * 60 * 60 * 1000,
-            });
-            return res.json({
-              token,
-              role: "TECH",
-              name: techName,
-              permissions,
-              user_id: 9999,
-              prefix: prefix.toLowerCase(),
-            });
-          }
-
-          // If not tech, call standard tenant login logic
-          proceedWithTenantLogin();
-        },
-      );
+      });
     });
-  } // End of continueLogin
+  } catch (e) {
+    return res.status(500).json({ error: "Database error looking up companies." });
+  }
+
+  // Also include demo and public schemas
+  const schemasToCheck = [
+    { prefix: "DEMO", schema: "demo" },
+    { prefix: "PUBLIC", schema: "public" },
+    ...companies.map(c => ({ prefix: c.prefix, schema: "t_" + c.prefix.toLowerCase(), status: c.status })),
+  ];
+
+  // 2. Search each schema for the email
+  let foundUser = null;
+  let foundPrefix = null;
+  let foundSchemaName = null;
+
+  for (const entry of schemasToCheck) {
+    if (entry.status === "PAUSED") continue; // Skip paused companies
+
+    try {
+      const user = await new Promise((resolve, reject) => {
+        asyncLocalStorage.run(entry.schema, () => {
+          db.get(
+            `SELECT id, first_name, last_name, email, username, password, role, is_active,
+              COALESCE(is_suspended, 0) as is_suspended,
+              can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos,
+              can_see_secretary, can_see_transport, can_see_hardware, can_see_system_users, can_see_schedules
+             FROM employees WHERE LOWER(email) = ?`,
+            [emailInput],
+            (err, row) => {
+              if (err) resolve(null); else resolve(row);
+            }
+          );
+        });
+      });
+      if (user) {
+        foundUser = user;
+        foundPrefix = entry.prefix;
+        foundSchemaName = entry.schema;
+        break;
+      }
+    } catch (e) { continue; }
+  }
+
+  if (!foundUser) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  // 3. Authenticate
+  if (foundUser.is_active === 0) {
+    return res.status(403).json({ error: "Account terminated. Access permanently revoked. Contact HR." });
+  }
+  if (foundUser.is_suspended === 1) {
+    return res.status(403).json({ error: "Account suspended. Contact your HR manager to restore access." });
+  }
+  if (!foundUser.password) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  const isMatch = await bcrypt.compare(password, foundUser.password);
+  if (!isMatch) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  function COALESCE(v, def) { return v !== null && v !== undefined ? v : def; }
+  const permissions = {
+    can_see_dashboard: COALESCE(foundUser.can_see_dashboard, 0),
+    can_see_hr: COALESCE(foundUser.can_see_hr, 0),
+    can_see_attendance: COALESCE(foundUser.can_see_attendance, 1),
+    can_see_sme: COALESCE(foundUser.can_see_sme, 0),
+    can_see_pos: COALESCE(foundUser.can_see_pos, 0),
+    can_see_secretary: COALESCE(foundUser.can_see_secretary, 0),
+    can_see_transport: COALESCE(foundUser.can_see_transport, 0),
+    can_see_hardware: COALESCE(foundUser.can_see_hardware, 0),
+    can_see_system_users: COALESCE(foundUser.can_see_system_users, 0),
+    can_see_schedules: COALESCE(foundUser.can_see_schedules, 0),
+  };
+
+  const token = jwt.sign(
+    { id: foundUser.id, role: foundUser.role, name: `${foundUser.first_name} ${foundUser.last_name}`, permissions, prefix: foundPrefix },
+    JWT_SECRET,
+    { expiresIn: "8h" }
+  );
+  res.cookie("jomish_auth", token, { httpOnly: true, secure: false, sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 });
+  return res.json({
+    token,
+    role: foundUser.role,
+    name: `${foundUser.first_name} ${foundUser.last_name}`,
+    permissions,
+    user_id: foundUser.id,
+    prefix: foundPrefix,
+  });
 });
+
+
+
 
 app.post("/api/logout", (req, res) => {
   res.clearCookie("jomish_auth");
