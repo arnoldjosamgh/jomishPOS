@@ -4025,9 +4025,9 @@ th         { border-bottom: 1px dashed #888; padding: 3px 0; }
 <table>
     <thead>
         <tr>
-            <th style="text-align:left; width:55%;">Item</th>
-            <th style="text-align:left; width:15%;">Qty</th>
-            <th style="text-align:left; width:30%;">Amount</th>
+            <th style="text-align:left; width:40%;">Item</th>
+            <th style="text-align:left; width:10%;">Qty</th>
+            <th style="text-align:left; width:50%;">Amount</th>
         </tr>
     </thead>
     <tbody>${itemRows}</tbody>
