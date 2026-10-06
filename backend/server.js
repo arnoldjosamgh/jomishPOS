@@ -1671,6 +1671,15 @@ app.post(
 
         // Also register this company in the public schema's companies table
         await client.query(`SET search_path TO public`);
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS companies (
+            id SERIAL PRIMARY KEY,
+            prefix TEXT UNIQUE,
+            name TEXT,
+            status TEXT DEFAULT 'ACTIVE',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
         await client.query(
           `INSERT INTO companies (prefix, name, status) VALUES ($1, $2, 'ACTIVE') ON CONFLICT (prefix) DO NOTHING`,
           [normalPrefix, company_name]
