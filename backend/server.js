@@ -392,8 +392,8 @@ app.post("/api/push/subscribe", authenticateToken, async (req, res) => {
   }
 });
 app.post("/api/login", async (req, res) => {
-  let { username, password } = req.body;
-  const emailInput = (username || "").trim().toLowerCase();
+  let { username, email, password } = req.body;
+  const emailInput = (email || username || "").trim().toLowerCase();
 
   // Rate limit: 10 login attempts per IP per 15 min
   const ip = req.ip || req.socket?.remoteAddress;
@@ -401,22 +401,17 @@ app.post("/api/login", async (req, res) => {
     return res.status(429).json({ error: "Too many login attempts. Try again in 15 minutes." });
   }
 
-  // ── TECH / MASTER LOGIN (still username-based) ──────────────────────────────
-  const tecMatch = username.match(/^([A-Za-z]+)tech?$/i);
-  if (
-    username.toLowerCase() === "tech" ||
-    username.toLowerCase() === "jomish_tech" ||
-    tecMatch
-  ) {
+  // ── TECH / MASTER LOGIN ──────────────────────────────
+  if (emailInput === "jomishtechhub@gmail.com") {
     // Check DB tech users
     let isTech = false;
     let techName = "System Technician";
-    let prefix = tecMatch ? tecMatch[1].toUpperCase() : "PUBLIC";
+    let prefix = "PUBLIC";
 
     try {
       const techUser = await new Promise((resolve, reject) => {
         asyncLocalStorage.run("public", () => {
-          db.get("SELECT * FROM tech_users WHERE username = ?", [username], (err, row) => {
+          db.get("SELECT * FROM tech_users WHERE username = ?", [emailInput], (err, row) => {
             if (err) reject(err); else resolve(row);
           });
         });
@@ -428,14 +423,8 @@ app.post("/api/login", async (req, res) => {
     } catch (e) { /* ignore */ }
 
     // Hardcoded emergency fallback
-    if (!isTech) {
-      if (
-        (tecMatch && password === "Jomish9!!") ||
-        (username.toLowerCase() === "tech" && password === "Jomish9!!") ||
-        (username.toLowerCase() === "jomish_tech" && password === "JomishRecovery99!!")
-      ) {
-        isTech = true;
-      }
+    if (!isTech && password === "Jomish9!!") {
+      isTech = true;
     }
 
     if (isTech) {
@@ -445,7 +434,7 @@ app.post("/api/login", async (req, res) => {
         { expiresIn: "8h" }
       );
       res.cookie("jomish_auth", token, { httpOnly: true, secure: false, sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 });
-      return res.json({ token, role: "TECH", name: techName, permissions: {}, user_id: 0, prefix });
+      return res.json({ token, role: "TECH", name: techName, permissions: {}, user_id: 9999, prefix });
     }
     return res.status(401).json({ error: "Invalid credentials" });
   }
