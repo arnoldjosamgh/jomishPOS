@@ -3813,16 +3813,16 @@ function printReceipt(
     });
   }
 
-  set("r-subtotal", `UGX ${Math.round(sub).toLocaleString()}`);
+  set("r-subtotal", `${Math.round(sub).toLocaleString()}`);
   set(
     "r-tax",
     taxRate > 0
-      ? `UGX ${Math.round(tax).toLocaleString()} (${taxRate}%)`
-      : "UGX 0",
+      ? `${Math.round(tax).toLocaleString()} (${taxRate}%)`
+      : "0",
   );
-  set("r-total", `UGX ${Math.round(total).toLocaleString()}`);
+  set("r-total", `${Math.round(total).toLocaleString()}`);
   set("r-method", paymentMethod);
-  set("r-paid", `UGX ${Math.round(paid).toLocaleString()}`);
+  set("r-paid", `${Math.round(paid).toLocaleString()}`);
 
   // Conditional rows
   const show = (id, visible) => {
@@ -3831,14 +3831,14 @@ function printReceipt(
   };
 
   if (change > 0) {
-    set("r-change", `UGX ${Math.round(change).toLocaleString()}`);
+    set("r-change", `${Math.round(change).toLocaleString()}`);
     show("r-change-row", true);
   } else {
     show("r-change-row", false);
   }
 
   if (bal > 0) {
-    set("r-balance", `UGX ${Math.round(bal).toLocaleString()}`);
+    set("r-balance", `${Math.round(bal).toLocaleString()}`);
     show("r-balance-row", true);
   } else {
     show("r-balance-row", false);
@@ -3896,7 +3896,7 @@ function closeReceipt() {
  * Used by doPrint() to create the print window.
  */
 function _buildReceiptHTML(d) {
-  const fmtUGX = (n) => "UGX " + Math.round(n).toLocaleString();
+  const fmtUGX = (n) => Math.round(n).toLocaleString();
   const heading = d.isInvoice ? "INVOICE" : "RECEIPT";
 
   let itemRows = "";
