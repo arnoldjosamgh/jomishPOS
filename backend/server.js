@@ -844,6 +844,10 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
     layout_type,
   } = req.body;
 
+  // Treat blank/empty email as NULL so the UNIQUE constraint doesn't
+  // fire when multiple employees are added without an email address.
+  const safeEmail = (email && email.trim()) ? email.trim() : null;
+
   if (!password)
     return res
       .status(400)
@@ -895,7 +899,7 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
             [
               first_name,
               last_name,
-              email,
+              safeEmail,
               auto_username,
               finalRole,
               department,
@@ -909,7 +913,8 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
             ],
             function (err) {
               if (err) {
-                console.error("[Employee Insert Error]:", err.message);
+                const schema = require('./database').asyncLocalStorage ? require('./database').asyncLocalStorage.getStore() : 'unknown';
+                console.error("[ADD EMP ERROR] schema:", getSchema(), "| safeEmail:", safeEmail, "| err:", err.message);
                 if (
                   (err.message || "").includes("UNIQUE constraint failed") ||
                   (err.message || "").includes(
@@ -931,7 +936,7 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
                     .status(400)
                     .json({
                       error:
-                        "This email is already registered to another staff member.",
+                        `This email is already registered to another staff member. (schema: ${getSchema()}, email: ${safeEmail})`,
                     });
                 }
                 return res.status(500).json({ error: err.message });
