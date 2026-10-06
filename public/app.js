@@ -1976,7 +1976,7 @@ function enforceRBAC() {
   const isCashier = role === "CASHIER";
 
   const posNavMap = {
-    "pos-nav-register": isAdminLike || isCashier,          // admin + cashier
+    "pos-nav-register": isCashier,                         // cashier only
     "pos-nav-stock":    isAdminLike,                        // admin only (Inventory)
     "pos-nav-expenses": isAdminLike || isSupervisor,        // admin + supervisor
     "pos-nav-credits":  isAdminLike || isSupervisor,        // admin + supervisor
