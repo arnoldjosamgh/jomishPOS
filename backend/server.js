@@ -1653,10 +1653,10 @@ app.post(
       // 1. Create Postgres schema + all tables via existing helper
       await db.createCompanySchema(normalPrefix.toLowerCase());
 
-      // Wait a short moment for initDb() to run
-      await new Promise((r) => setTimeout(r, 1500));
+      // Wait a bit longer for initDb() migrations to settle
+      await new Promise((r) => setTimeout(r, 3000));
 
-      // 2. Save company settings in the new schema
+      // 2. Save company settings and create admin in the new schema
       const client = await db.pool.connect();
       try {
         await client.query(`SET search_path TO "${schemaName}", public`);
@@ -1669,7 +1669,7 @@ app.post(
           ["company_prefix", normalPrefix],
         );
 
-        // Also register this company in the public schema's companies table
+        // Register this company in the public schema's companies table
         await client.query(`SET search_path TO public`);
         await client.query(`
           CREATE TABLE IF NOT EXISTS companies (
@@ -1690,23 +1690,33 @@ app.post(
         const defaultHash = await bcrypt.hash(password, 10);
         
         // Split admin_name into first and last name if possible
-        const nameParts = admin_name.split(' ');
+        const nameParts = admin_name ? admin_name.split(' ') : ['Admin'];
         const firstName = nameParts[0];
         const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+
+        // Delete existing employee with this email first (in case of partial failure / retry)
+        await client.query(`DELETE FROM employees WHERE LOWER(email) = LOWER($1)`, [email]);
         
-        await client.query(
+        // Now insert fresh — no ON CONFLICT DO NOTHING that would silently drop the row
+        const insertResult = await client.query(
           `INSERT INTO employees (first_name, last_name, username, email, password, role, is_active, can_see_sme, can_see_dashboard, can_see_pos)
                    VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 1, 1)
-                   ON CONFLICT (email) DO NOTHING`,
+                   RETURNING id`,
           [
             firstName,
             lastName,
-            email, // Using email as username for now
+            email,
             email,
             defaultHash,
             admin_title || "Admin",
           ],
         );
+
+        if (!insertResult.rows || insertResult.rows.length === 0) {
+          throw new Error("Admin user was not created in the new schema. Please try again.");
+        }
+
+        console.log(`[TECH] Created company ${normalPrefix}, admin user id=${insertResult.rows[0].id}, email=${email}`);
       } finally {
         client.release();
       }
