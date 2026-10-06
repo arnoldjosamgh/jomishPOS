@@ -3803,13 +3803,17 @@ function printReceipt(
   if (tbody) {
     tbody.innerHTML = "";
     items.forEach((i) => {
-      const tr = document.createElement("tr");
-      const qty = i.qty || 1;
-      tr.innerHTML = `
-                <td style="padding:2px 0; width:50%; word-break:break-word;">${i.name}</td>
-                <td style="text-align:center; padding:2px 2px; width:10%;">${qty}</td>
-                <td style="text-align:right; padding:2px 0; width:40%; white-space:nowrap;">UGX ${(i.price * qty).toLocaleString()}</td>`;
-      tbody.appendChild(tr);
+      // Row 1: item name (full width, wraps freely)
+      const trName = document.createElement("tr");
+      trName.innerHTML = `
+        <td colspan="2" style="padding:2px 0 0 0; word-break:break-word; white-space:normal;">${i.name}</td>`;
+      tbody.appendChild(trName);
+      // Row 2: qty on left, amount on right
+      const trAmt = document.createElement("tr");
+      trAmt.innerHTML = `
+        <td style="padding:0 0 4px 0; color:#555; font-size:0.75em;">x${qty}</td>
+        <td style="text-align:right; padding:0 0 4px 0; white-space:nowrap; font-weight:600;">UGX ${(i.price * qty).toLocaleString()}</td>`;
+      tbody.appendChild(trAmt);
     });
   }
 
