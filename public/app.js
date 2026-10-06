@@ -3804,17 +3804,12 @@ function printReceipt(
     tbody.innerHTML = "";
     items.forEach((i) => {
       const qty = i.qty || 1;
-      // Row 1: item name (full width, wraps freely)
-      const trName = document.createElement("tr");
-      trName.innerHTML = `
-        <td colspan="2" style="padding:2px 0 0 0; word-break:break-word; white-space:normal;">${i.name}</td>`;
-      tbody.appendChild(trName);
-      // Row 2: qty on left, amount on right
-      const trAmt = document.createElement("tr");
-      trAmt.innerHTML = `
-        <td style="padding:0 0 4px 0; color:#555; font-size:0.75em;">x${qty}</td>
-        <td style="text-align:right; padding:0 0 4px 0; white-space:nowrap; font-weight:600;">UGX ${(i.price * qty).toLocaleString()}</td>`;
-      tbody.appendChild(trAmt);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="padding:2px 0 2px 0; word-break:break-word; white-space:normal;">${i.name}</td>
+        <td style="padding:2px 0; text-align:left;">${qty}</td>
+        <td style="padding:2px 0; text-align:left; white-space:nowrap; font-weight:600;">UGX ${(i.price * qty).toLocaleString()}</td>`;
+      tbody.appendChild(tr);
     });
   }
 
@@ -3910,11 +3905,9 @@ function _buildReceiptHTML(d) {
     const lineTotal = i.price * qty;
     itemRows += `
             <tr>
-                <td colspan="2" style="padding:2px 0 0 0; word-break:break-word; white-space:normal;">${i.name}</td>
-            </tr>
-            <tr>
-                <td style="padding:0 0 4px 0; color:#555; font-size:0.85em;">x${qty}</td>
-                <td style="padding:0 0 4px 0; text-align:right; white-space:nowrap; font-weight:bold;">${fmtUGX(lineTotal)}</td>
+                <td style="padding:3px 0; word-break:break-word; white-space:normal;">${i.name}</td>
+                <td style="padding:3px 0; text-align:left;">${qty}</td>
+                <td style="padding:3px 0; text-align:left; white-space:nowrap; font-weight:bold;">${fmtUGX(lineTotal)}</td>
             </tr>`;
   });
 
@@ -4032,8 +4025,9 @@ th         { border-bottom: 1px dashed #888; padding: 3px 0; }
 <table>
     <thead>
         <tr>
-            <th style="text-align:left;">Item</th>
-            <th style="text-align:right;">Amount</th>
+            <th style="text-align:left; width:55%;">Item</th>
+            <th style="text-align:left; width:15%;">Qty</th>
+            <th style="text-align:left; width:30%;">Amount</th>
         </tr>
     </thead>
     <tbody>${itemRows}</tbody>
