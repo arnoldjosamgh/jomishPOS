@@ -3906,12 +3906,15 @@ function _buildReceiptHTML(d) {
 
   let itemRows = "";
   d.items.forEach((i) => {
-    const lineTotal = i.price * (i.qty || 1);
+    const qty = i.qty || 1;
+    const lineTotal = i.price * qty;
     itemRows += `
             <tr>
-                <td style="padding:3px 0; text-align:left;">${i.name}</td>
-                <td style="padding:3px 4px; text-align:center;">${i.qty || 1}</td>
-                <td style="padding:3px 0; text-align:right;">${fmtUGX(lineTotal)}</td>
+                <td colspan="2" style="padding:2px 0 0 0; word-break:break-word; white-space:normal;">${i.name}</td>
+            </tr>
+            <tr>
+                <td style="padding:0 0 4px 0; color:#555; font-size:0.85em;">x${qty}</td>
+                <td style="padding:0 0 4px 0; text-align:right; white-space:nowrap; font-weight:bold;">${fmtUGX(lineTotal)}</td>
             </tr>`;
   });
 
@@ -4030,7 +4033,6 @@ th         { border-bottom: 1px dashed #888; padding: 3px 0; }
     <thead>
         <tr>
             <th style="text-align:left;">Item</th>
-            <th style="text-align:center; width:30px;">Qty</th>
             <th style="text-align:right;">Amount</th>
         </tr>
     </thead>
