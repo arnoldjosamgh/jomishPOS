@@ -3985,8 +3985,12 @@ body {
 .divider   { border-top: 1px dashed #888; margin: 6px 0; }
 .divider-solid { border-top: 1px solid #000; margin: 6px 0; }
 .heading   { font-size: 13pt; font-weight: bold; text-align: center; margin: 4px 0; }
-.row       { display: flex; justify-content: space-between; margin: 2px 0; font-size: 10pt; }
-.total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 12pt; margin-top: 4px; }
+.row       { display: flex; margin: 2px 0; font-size: 10pt; }
+.row > span:first-child, .row > strong:first-child { width: 50%; }
+.row > span:last-child, .row > strong:last-child { width: 50%; text-align: left; }
+.total-row { display: flex; font-weight: bold; font-size: 12pt; margin-top: 4px; }
+.total-row > span:first-child { width: 50%; }
+.total-row > span:last-child { width: 50%; text-align: left; }
 table      { width: 100%; border-collapse: collapse; }
 th, td     { font-size: 10pt; vertical-align: top; }
 th         { border-bottom: 1px dashed #888; padding: 3px 0; }
