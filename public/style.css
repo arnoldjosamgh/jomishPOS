@@ -839,8 +839,8 @@ tr:hover td {
     }
 
     body.print-mode-receipt .receipt-content {
-        width: 76mm !important;
-        max-width: 76mm !important;
+        width: 100% !important;
+        max-width: 100% !important;
         box-sizing: border-box !important;
         background: white !important;
         color: black !important;
