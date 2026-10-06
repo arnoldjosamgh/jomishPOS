@@ -282,7 +282,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // If this is the global TECH user — show Tech Hub tab, redirect there, hide normal tabs
   const _techUser = localStorage.getItem("jomish_prefix");
   const _isTechUser =
-    (!_techUser || _techUser === "public") && USER_ROLE === "TECH";
+    (!_techUser || _techUser.toLowerCase() === "public") && USER_ROLE === "TECH";
   if (_isTechUser) {
     const techBtn = document.getElementById("pos-nav-tech");
     if (techBtn) {
