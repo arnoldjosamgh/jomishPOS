@@ -894,53 +894,47 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
           // Force the first user to be the Admin (CEO)
           const finalRole = num === 0 ? "CEO" : role;
 
-          db.run(
-            "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-              first_name,
-              last_name,
-              safeEmail,
-              auto_username,
-              finalRole,
-              department,
-              salary,
-              hashedPassword,
-              auto_employee_code,
-              photo_base64,
-              profile_color,
-              layout_type,
-              nextPayDateStr,
-            ],
-            function (err) {
-              if (err) {
-                const schema = require('./database').asyncLocalStorage ? require('./database').asyncLocalStorage.getStore() : 'unknown';
-                console.error("[ADD EMP ERROR] schema:", getSchema(), "| safeEmail:", safeEmail, "| err:", err.message);
-                if (
-                  (err.message || "").includes("UNIQUE constraint failed") ||
-                  (err.message || "").includes(
-                    "duplicate key value violates unique constraint",
-                  )
-                ) {
-                  if (
-                    (err.message || "").includes("username") ||
-                    (err.message || "").includes("employee_code")
-                  ) {
-                    return res
-                      .status(400)
-                      .json({
-                        error:
-                          "System error: Employee ID counter out of sync. Please try adding the employee again.",
-                      });
+          // Helper: do the actual INSERT and call done(err, ctx)
+          function doInsert(emailVal, done) {
+            db.run(
+              "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              [first_name, last_name, emailVal, auto_username, finalRole, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
+              function(err) { done(err, this); }
+            );
+          }
+
+          doInsert(safeEmail, function(err, ctx) {
+            // If email caused a unique conflict, silently retry with NULL email
+            if (err) {
+              const msg = err.message || "";
+              const isEmailConflict =
+                (msg.includes("UNIQUE constraint failed") || msg.includes("duplicate key value violates unique constraint")) &&
+                !msg.includes("username") && !msg.includes("employee_code");
+
+              if (isEmailConflict) {
+                console.warn("[ADD EMP] Email conflict on", safeEmail, "— retrying without email.");
+                return doInsert(null, function(err2, ctx2) {
+                  if (err2) {
+                    const m2 = err2.message || "";
+                    if (m2.includes("username") || m2.includes("employee_code")) {
+                      return res.status(400).json({ error: "System error: Employee ID counter out of sync. Please try again." });
+                    }
+                    return res.status(500).json({ error: err2.message });
                   }
-                  return res
-                    .status(400)
-                    .json({
-                      error:
-                        `This email is already registered to another staff member. (schema: ${getSchema()}, email: ${safeEmail})`,
-                    });
-                }
-                return res.status(500).json({ error: err.message });
+                  finishInsert(ctx2);
+                });
               }
+
+              console.error("[ADD EMP ERROR] schema:", getSchema(), "| err:", msg);
+              if (msg.includes("username") || msg.includes("employee_code")) {
+                return res.status(400).json({ error: "System error: Employee ID counter out of sync. Please try adding the employee again." });
+              }
+              return res.status(500).json({ error: msg });
+            }
+            finishInsert(ctx);
+          });
+
+          function finishInsert(ctx) {
               if (role) {
                 db.run(
                   "INSERT INTO roles_config (role_name) VALUES (?) ON CONFLICT DO NOTHING",
@@ -948,7 +942,7 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
                 );
               }
               // Copy default role permissions from roles_config into the new employee's own permission columns
-              const newId = this.lastID;
+              const newId = ctx.lastID;
               if (role) {
                 db.run(
                   `UPDATE employees SET
@@ -963,29 +957,16 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
                             can_see_system_users = COALESCE((SELECT can_see_system_users FROM roles_config WHERE role_name = ?), 0),
                             can_see_schedules    = COALESCE((SELECT can_see_schedules    FROM roles_config WHERE role_name = ?), 0)
                             WHERE id = ?`,
-                  [
-                    role,
-                    role,
-                    role,
-                    role,
-                    role,
-                    role,
-                    role,
-                    role,
-                    role,
-                    role,
-                    newId,
-                  ],
+                  [role,role,role,role,role,role,role,role,role,role,newId],
                 );
               }
-              // Keep app_settings updated just for reference
               db.run(
                 `INSERT INTO app_settings (setting_key, setting_value) VALUES ('next_employee_number', ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`,
                 [String(num + 1)],
               );
               emitAndBust("employees", "employees");
               res.json({
-                id: this.lastID,
+                id: newId,
                 first_name,
                 last_name,
                 email,
@@ -993,19 +974,18 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
                 employee_code: auto_employee_code,
                 message: "Employee added successfully",
                 name: `${first_name} ${last_name}`,
-
                 role,
                 photo_base64,
                 profile_color,
                 layout_type,
               });
-            },
-          );
+          }
         },
       );
     },
   );
 });
+
 
 app.patch("/api/employees/:id/permissions", authenticateToken, (req, res) => {
   const _role = (req.user.role || "").toLowerCase();
