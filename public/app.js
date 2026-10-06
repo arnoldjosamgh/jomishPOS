@@ -1964,17 +1964,33 @@ function enforceRBAC() {
     firstVisible.click();
   }
 
-  // POS Specific RBAC
-  const btnPosStock = document.getElementById("pos-nav-stock");
-  if (btnPosStock) {
-    const canSeeStock =
-      ["CEO", "HR", "Supervisor", "Manager", "Cashier"].includes(USER_ROLE) ||
-      isTech;
-    btnPosStock.style.display = canSeeStock ? "block" : "none";
-  }
+  // ── POS NAV TAB VISIBILITY BY ROLE ───────────────────────────────────
+  // Admin / Manager / HR : Inventory, Expenses, Credits, Finance Hub, Staff/HR
+  // Supervisor            : Expenses, Credits, Finance Hub
+  // Cashier               : Register, Finance Hub
+  // Tech (global)         : everything hidden except Tech Hub (handled above)
 
-  // Show/Hide buying price inputs (CEO and HR only)
-  const canSeeAdminStuff = ["CEO", "HR"].includes(USER_ROLE) || isTech;
+  const role = (USER_ROLE || "").toUpperCase();
+  const isAdminLike = ["CEO", "ADMIN", "HR", "MANAGER"].includes(role) || isTech;
+  const isSupervisor = role === "SUPERVISOR";
+  const isCashier = role === "CASHIER";
+
+  const posNavMap = {
+    "pos-nav-register": isAdminLike || isCashier,          // admin + cashier
+    "pos-nav-stock":    isAdminLike,                        // admin only (Inventory)
+    "pos-nav-expenses": isAdminLike || isSupervisor,        // admin + supervisor
+    "pos-nav-credits":  isAdminLike || isSupervisor,        // admin + supervisor
+    "pos-nav-finance":  isAdminLike || isSupervisor || isCashier, // all non-tech
+    "pos-nav-hr":       isAdminLike,                        // admin only (Staff/HR)
+  };
+
+  Object.entries(posNavMap).forEach(([id, visible]) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.style.display = visible ? "" : "none";
+  });
+
+  // Show/Hide buying price inputs (Admin/HR only)
+  const canSeeAdminStuff = isAdminLike;
   const addBuyingPriceGroup =
     document.getElementById("prod-buying-price")?.parentElement;
   if (addBuyingPriceGroup)
@@ -1984,6 +2000,19 @@ function enforceRBAC() {
   )?.parentElement;
   if (editBuyingPriceGroup)
     editBuyingPriceGroup.style.display = canSeeAdminStuff ? "block" : "none";
+
+  // Auto-switch to first visible POS tab if current tab is now hidden
+  const posNavOrder = [
+    "pos-nav-register", "pos-nav-stock", "pos-nav-expenses",
+    "pos-nav-credits", "pos-nav-finance", "pos-nav-hr"
+  ];
+  const activeTab = document.querySelector(".pos-tab.active");
+  if (activeTab && activeTab.style.display === "none") {
+    const firstVisibleTab = posNavOrder
+      .map(id => document.getElementById(id))
+      .find(btn => btn && btn.style.display !== "none");
+    if (firstVisibleTab) firstVisibleTab.click();
+  }
 }
 
 async function fetchAuth(url, options = {}) {
