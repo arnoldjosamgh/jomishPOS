@@ -3808,7 +3808,7 @@ function printReceipt(
       tr.innerHTML = `
         <td style="padding:2px 0 2px 0; word-break:break-word; white-space:normal;">${i.name}</td>
         <td style="padding:2px 0; text-align:left;">${qty}</td>
-        <td style="padding:2px 0; text-align:left; white-space:nowrap; font-weight:600;">UGX ${(i.price * qty).toLocaleString()}</td>`;
+        <td style="padding:2px 0; text-align:left; white-space:nowrap; font-weight:600;">${(i.price * qty).toLocaleString()}</td>`;
       tbody.appendChild(tr);
     });
   }
@@ -3907,7 +3907,7 @@ function _buildReceiptHTML(d) {
             <tr>
                 <td style="padding:3px 0; word-break:break-word; white-space:normal;">${i.name}</td>
                 <td style="padding:3px 0; text-align:left;">${qty}</td>
-                <td style="padding:3px 0; text-align:left; white-space:nowrap; font-weight:bold;">${fmtUGX(lineTotal)}</td>
+                <td style="padding:3px 0; text-align:left; white-space:nowrap; font-weight:bold;">${Math.round(lineTotal).toLocaleString()}</td>
             </tr>`;
   });
 
