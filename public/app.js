@@ -10227,16 +10227,18 @@ async function handleCreateTenant(event) {
             <i class="fa-solid fa-check-circle"></i> <strong>Portal created successfully!</strong><br>
             <div style="margin-top:10px; font-size:0.9rem;">
                 Company: <strong>${companyName}</strong><br>
-                Accounts created: <strong>${numCashiers}</strong><br>
-                First Login: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">${prefix}001</code><br>
-                Password: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">password</code><br>
-                <small style="opacity:0.8;">Ask the company to change their password immediately after first login.</small>
+                Admin Login: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">${email}</code><br>
+                Password: <code style="background:rgba(255,255,255,0.3);padding:2px 8px;border-radius:4px;">${password}</code><br>
+                <small style="opacity:0.8;">Admin can now log in using the email and PIN above.</small>
             </div>
         `,
     );
 
     nameInput.value = "";
-    prefixInput.value = "";
+    adminNameInput.value = "";
+    adminTitleInput.value = "";
+    adminEmailInput.value = "";
+    adminPasswordInput.value = "";
     loadTechTenants(); // Refresh the list
   } catch (e) {
     showTechStatus(
