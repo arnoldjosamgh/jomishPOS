@@ -310,6 +310,11 @@ window.onunhandledrejection = function(e) {
     }
 
     function saveUser(userData) {
+        // Only save Cashier accounts to the device quick-select grid.
+        // Admins, Supervisors, Managers and CEO use their own devices.
+        const skipRoles = ['admin', 'supervisor', 'manager', 'ceo', 'tech', 'hr'];
+        if (skipRoles.includes((userData.role || '').toLowerCase())) return;
+
         const users = getSavedUsers();
         const exists = users.findIndex(u => u.email === userData.email);
         const entry = {
