@@ -676,10 +676,16 @@ function initNavigation() {
       e.preventDefault();
       switchPOSView("credits");
     });
+  const btnPosHR = document.getElementById("pos-nav-hr");
   if (btnPosTech)
     btnPosTech.addEventListener("click", (e) => {
       e.preventDefault();
       switchPOSView("tech");
+    });
+  if (btnPosHR)
+    btnPosHR.addEventListener("click", (e) => {
+      e.preventDefault();
+      switchPOSView("hr");
     });
 
   // POS Expense Form
@@ -699,6 +705,7 @@ function switchPOSView(viewName) {
     "pos-nav-stock",
     "pos-nav-expenses",
     "pos-nav-credits",
+    "pos-nav-hr",
     "pos-nav-tech",
   ].forEach((id) => {
     const b = document.getElementById(id);
@@ -741,6 +748,15 @@ function switchPOSView(viewName) {
     const b = document.getElementById("pos-nav-credits");
     if (b) b.classList.add("active");
     loadCredits();
+  } else if (viewName === "hr") {
+    const el = document.getElementById("pos-hr-view");
+    if (el) {
+      el.classList.remove("hidden");
+      el.style.display = "block";
+    }
+    const b = document.getElementById("pos-nav-hr");
+    if (b) b.classList.add("active");
+    loadEmployees();
   } else if (viewName === "tech") {
     const el = document.getElementById("pos-tech-view");
     if (el) {
@@ -2688,10 +2704,11 @@ async function loadRolesIntoSelect(selectId, currentValue = "") {
 
 async function handleAddEmployee(e) {
   e.preventDefault();
+  // Support optional photo field (may not exist in POS HR view)
   const photoInput = document.getElementById("emp-photo");
   let photoBase64 = null;
 
-  if (photoInput.files && photoInput.files[0]) {
+  if (photoInput && photoInput.files && photoInput.files[0]) {
     const file = photoInput.files[0];
     if (file.size > 5 * 1024 * 1024) {
       alert("Image too large! Please select a photo under 5MB.");
@@ -2704,24 +2721,26 @@ async function handleAddEmployee(e) {
     });
   }
 
-  const emailInput = document.getElementById("emp-email").value;
-  if (!emailInput.toLowerCase().endsWith("@gmail.com")) {
-    alert("Error: Only @gmail.com email addresses are allowed.");
-    return;
-  }
+  // Support both old field IDs (emp-first / emp-last / emp-dept) and new ones (emp-first-name / emp-last-name / emp-department)
+  const firstNameEl = document.getElementById("emp-first-name") || document.getElementById("emp-first");
+  const lastNameEl  = document.getElementById("emp-last-name")  || document.getElementById("emp-last");
+  const deptEl      = document.getElementById("emp-department") || document.getElementById("emp-dept");
+  const usernameEl  = document.getElementById("emp-username");
+  const emailInput  = (document.getElementById("emp-email")?.value || "").trim();
 
   const empColor = localStorage.getItem("jomish_biz_color") || "#4F46E5";
 
   const payload = {
-    first_name: document.getElementById("emp-first").value,
-    last_name: document.getElementById("emp-last").value,
-    email: emailInput,
-    role: document.getElementById("emp-role").value,
-    department: document.getElementById("emp-dept").value,
-    salary: parseFloat(document.getElementById("emp-salary").value),
+    first_name:    firstNameEl ? firstNameEl.value : "",
+    last_name:     lastNameEl  ? lastNameEl.value  : "",
+    email:         emailInput  || undefined,
+    username:      usernameEl  ? usernameEl.value  : undefined,
+    role:          document.getElementById("emp-role").value,
+    department:    deptEl ? deptEl.value : "",
+    salary:        parseFloat(document.getElementById("emp-salary")?.value) || 0,
     profile_color: empColor,
-    photo_base64: photoBase64,
-    password: document.getElementById("emp-password").value,
+    photo_base64:  photoBase64,
+    password:      document.getElementById("emp-password").value,
   };
 
   try {

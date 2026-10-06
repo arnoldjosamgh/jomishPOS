@@ -338,6 +338,7 @@
                             <button id="pos-nav-expenses" class="pos-tab"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
                             <button id="pos-nav-credits" class="pos-tab"><i class="fa-solid fa-handshake"></i> Credits</button>
                             <button id="pos-nav-finance" class="pos-tab pos-tab-finance" onclick="toggleSmeFinanceMode()"><i class="fa-solid fa-sack-dollar"></i> Finance Hub</button>
+                            <button id="pos-nav-hr" class="pos-tab pos-tab-hr"><i class="fa-solid fa-users"></i> Staff / HR</button>
                             <button id="pos-nav-tech" class="pos-tab-tech" style="display:none;"><i class="fa-solid fa-server"></i> Tech Hub</button>
                         </div>
                         <div id="pos-search-wrap">
@@ -542,6 +543,34 @@
                     </div>
                 </div>
 
+                <!-- HR / Staff View -->
+                <div id="pos-hr-view" class="pos-sub-view hidden" style="overflow-y: auto; height: 100%; padding: 20px;">
+                    <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
+                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                            <h2><i class="fa-solid fa-users"></i> Staff & Employees</h2>
+                            <button class="primary-btn" onclick="document.getElementById('add-employee-modal').classList.remove('hidden')"><i class="fa-solid fa-user-plus"></i> Add Employee</button>
+                        </header>
+                        <div class="table-container">
+                            <table id="employees-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Name</th>
+                                        <th>Email</th>
+                                        <th>Role</th>
+                                        <th>Department</th>
+                                        <th>Salary</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Tech Hub View -->
                 <div id="pos-tech-view" class="pos-sub-view hidden" style="overflow-y: auto; height: 100%;">
                     <div style="display:flex; gap:20px; height: 100%;">
@@ -687,6 +716,66 @@
         </div>
     </div>
 
+
+    <!-- Add Employee Modal -->
+    <div id="add-employee-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:520px;">
+            <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                <h2><i class="fa-solid fa-user-plus"></i> Add Employee</h2>
+                <button type="button" onclick="document.getElementById('add-employee-modal').classList.add('hidden')" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--text);"><i class="fa-solid fa-xmark"></i></button>
+            </header>
+            <form id="form-add-employee" style="display:flex; flex-direction:column; gap:14px;" onsubmit="handleAddEmployee(event)">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label>First Name *</label>
+                        <input type="text" id="emp-first-name" placeholder="First Name" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Last Name *</label>
+                        <input type="text" id="emp-last-name" placeholder="Last Name" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Email (optional)</label>
+                    <input type="email" id="emp-email" placeholder="employee@email.com">
+                </div>
+                <div class="form-group">
+                    <label>Username (for login)</label>
+                    <input type="text" id="emp-username" placeholder="e.g. john_cashier">
+                </div>
+                <div class="form-group">
+                    <label>Password *</label>
+                    <input type="password" id="emp-password" placeholder="Set login password" required>
+                </div>
+                <div class="form-group">
+                    <label>Role *</label>
+                    <select id="emp-role" required>
+                        <option value="">-- Select Role --</option>
+                        <option value="CEO">CEO</option>
+                        <option value="HR">HR</option>
+                        <option value="Cashier">Cashier</option>
+                        <option value="Supervisor">Supervisor</option>
+                        <option value="Security">Security</option>
+                        <option value="Transport">Transport</option>
+                        <option value="Secretary">Secretary</option>
+                        <option value="Finance">Finance</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Department (optional)</label>
+                    <input type="text" id="emp-department" placeholder="e.g. Sales, Finance">
+                </div>
+                <div class="form-group">
+                    <label>Salary (optional)</label>
+                    <input type="number" step="0.01" id="emp-salary" placeholder="0.00">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" onclick="document.getElementById('add-employee-modal').classList.add('hidden')" class="secondary-btn">Cancel</button>
+                    <button type="submit" class="primary-btn"><i class="fa-solid fa-user-plus"></i> Add Staff</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Edit Product Modal -->
     <!-- Add Product Modal -->

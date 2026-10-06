@@ -439,40 +439,52 @@ app.post("/api/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  // ── EMAIL-BASED TENANT LOGIN ─────────────────────────────────────────────────
-  // 1. Get all company schemas from the public companies table
-  let companies = [];
-  try {
-    companies = await new Promise((resolve, reject) => {
-      asyncLocalStorage.run("public", () => {
-        db.all("SELECT * FROM companies ORDER BY created_at DESC", [], (err, rows) => {
-          if (err) {
-            console.warn("[LOGIN] Could not query companies table:", err.message);
-            resolve([]); // Fallback to empty if table doesn't exist
-          } else {
-            resolve(rows || []);
-          }
+  // ── DETERMINE WHICH SCHEMA(S) TO SEARCH ──────────────────────────────────────
+  // If the username looks like a company-prefixed ID (e.g. ABC001, XYZ0023),
+  // search ONLY that company's schema — this is the core of multi-tenant isolation.
+  const usernameRaw = (email || username || "").trim();
+  const prefixMatch  = usernameRaw.match(/^([A-Za-z]{2,8})\d+$/);
+  const prefixFromUsername = prefixMatch ? prefixMatch[1].toUpperCase() : null;
+
+  let schemasToCheck = [];
+
+  if (prefixFromUsername) {
+    // Direct lookup: only check the specific company schema
+    const directSchema = "t_" + prefixFromUsername.toLowerCase();
+    schemasToCheck = [{ prefix: prefixFromUsername, schema: directSchema, status: "ACTIVE" }];
+  } else {
+    // Email-based: check all registered company schemas, then demo/public fallback
+    let companies = [];
+    try {
+      companies = await new Promise((resolve, reject) => {
+        asyncLocalStorage.run("public", () => {
+          db.all("SELECT * FROM companies ORDER BY created_at DESC", [], (err, rows) => {
+            if (err) {
+              console.warn("[LOGIN] Could not query companies table:", err.message);
+              resolve([]);
+            } else {
+              resolve(rows || []);
+            }
+          });
         });
       });
-    });
-  } catch (e) {
-    console.error(e);
+    } catch (e) {
+      console.error(e);
+    }
+    schemasToCheck = [
+      ...companies.map(c => ({ prefix: c.prefix, schema: "t_" + (c.prefix || "").toLowerCase(), status: c.status || "ACTIVE" })),
+      { prefix: "DEMO",   schema: "demo"   },
+      { prefix: "PUBLIC", schema: "public" },
+    ];
   }
 
-  // Also include demo and public schemas
-  const schemasToCheck = [
-    { prefix: "DEMO", schema: "demo" },
-    { prefix: "PUBLIC", schema: "public" },
-    ...companies.map(c => ({ prefix: c.prefix, schema: "t_" + (c.prefix || "").toLowerCase(), status: c.status || 'ACTIVE' })),
-  ];
-
-  // 2. Search each schema for the email
+  // 2. Search schema(s) for the user (by email OR username)
   let foundUser = null;
   let foundPrefix = null;
   let foundSchemaName = null;
 
   for (const entry of schemasToCheck) {
-    if (entry.status === "PAUSED") continue; // Skip paused companies
+    if (entry.status === "PAUSED") continue;
 
     try {
       const user = await new Promise((resolve, reject) => {
@@ -482,8 +494,8 @@ app.post("/api/login", async (req, res) => {
               COALESCE(is_suspended, 0) as is_suspended,
               can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos,
               can_see_secretary, can_see_transport, can_see_hardware, can_see_system_users, can_see_schedules
-             FROM employees WHERE LOWER(email) = ?`,
-            [emailInput],
+             FROM employees WHERE LOWER(email) = ? OR LOWER(username) = ?`,
+            [emailInput, emailInput],
             (err, row) => {
               if (err) resolve(null); else resolve(row);
             }
@@ -491,8 +503,8 @@ app.post("/api/login", async (req, res) => {
         });
       });
       if (user) {
-        foundUser = user;
-        foundPrefix = entry.prefix;
+        foundUser       = user;
+        foundPrefix     = entry.prefix;
         foundSchemaName = entry.schema;
         break;
       }

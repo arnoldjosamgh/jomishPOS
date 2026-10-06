@@ -45,6 +45,15 @@ if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
     
     // Compatibility Wrapper for Postgres to mimic sqlite3 API
+    // IMPORTANT: search_path does NOT include 'public' as a fallback.
+    // Each tenant schema is fully isolated — queries must only see their own schema's data.
+    // The only exception is 'public' itself, which stores shared system tables (companies, tech_users).
+    function searchPathFor(schema) {
+        // For the shared public schema, use public only.
+        // For tenant schemas (t_xxx), use ONLY that schema — no public fallback.
+        return schema === 'public' ? '"public"' : `"${schema}"`;
+    }
+
     db = {
         pool: pool,
         run: function(sql, params, callback) {
@@ -53,7 +62,7 @@ if (config.dbType === 'postgres') {
             const schema = asyncLocalStorage.getStore() || 'public';
             
             pool.connect().then(client => {
-                client.query(`SET search_path TO "${schema}", public`)
+                client.query(`SET search_path TO ${searchPathFor(schema)}`)
                     .then(() => client.query(pgSql, params))
                     .then(res => {
                         client.release();
@@ -74,7 +83,7 @@ if (config.dbType === 'postgres') {
             const schema = asyncLocalStorage.getStore() || 'public';
             
             pool.connect().then(client => {
-                client.query(`SET search_path TO "${schema}", public`)
+                client.query(`SET search_path TO ${searchPathFor(schema)}`)
                     .then(() => client.query(translateSql(sql), params))
                     .then(res => {
                         client.release();
@@ -91,7 +100,7 @@ if (config.dbType === 'postgres') {
             const schema = asyncLocalStorage.getStore() || 'public';
             
             pool.connect().then(client => {
-                client.query(`SET search_path TO "${schema}", public`)
+                client.query(`SET search_path TO ${searchPathFor(schema)}`)
                     .then(() => client.query(translateSql(sql), params))
                     .then(res => {
                         client.release();
@@ -105,12 +114,11 @@ if (config.dbType === 'postgres') {
         },
         serialize: function(fn) { fn(); }, // Postgres is pool-based, serialize is dummy
         prepare: function(sql) {
-            // Basic mimic for mt.run
             return {
                 run: (params) => {
                     const schema = asyncLocalStorage.getStore() || 'public';
                     return pool.connect().then(client => {
-                        return client.query(`SET search_path TO "${schema}", public`)
+                        return client.query(`SET search_path TO ${searchPathFor(schema)}`)
                             .then(() => client.query(translateSql(sql), params))
                             .finally(() => client.release());
                     });
