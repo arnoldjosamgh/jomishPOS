@@ -829,7 +829,7 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
   if (_role !== "hr" && _role !== "ceo" && _role !== "admin" && _role !== "tech") {
     return res
       .status(403)
-      .json({ error: "Forbidden: Only Admin, HR, or CEO can add employees." });
+      .json({ error: `Forbidden: Only Admin, HR, or CEO can add employees. (Your role is: ${_role})` });
   }
   const {
     first_name,
