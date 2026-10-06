@@ -4904,13 +4904,11 @@ async function loadTransactions(searchTerm = "") {
       }
       const _badgeHtml = `<span style="display:inline-block;padding:3px 9px;border-radius:20px;background:${_bColor}22;color:${_bColor};font-size:0.72rem;font-weight:700;border:1px solid ${_bColor}55;white-space:nowrap;">${_badge}</span>`;
 
-      // Delete button only for 000 admins / Tech
-      const currentPrefix = localStorage.getItem("jomish_prefix") || "";
-      const canDelete =
-        currentPrefix.endsWith("000") ||
-        USER_NAME === "System Technician" ||
-        USER_ROLE === "TECH";
-      const _delBtn = canDelete
+      // Delete button: only visible for Admin/HR/CEO/Manager
+      // Cashiers can delete ONLY by selecting the row and pressing F8
+      const _role = (USER_ROLE || "").toUpperCase();
+      const canDeleteDirectly = ["CEO", "ADMIN", "HR", "MANAGER"].includes(_role) || USER_NAME === "System Technician" || _role === "TECH";
+      const _delBtn = canDeleteDirectly
         ? `<button class='sm-btn danger' onclick="deleteTransaction(${tx.id})" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" title="Delete"><i class="fa-solid fa-trash"></i></button>`
         : "";
       const actionHtml = `<td style="white-space:nowrap;">${_badgeHtml}${_delBtn}</td>`;
@@ -4921,6 +4919,15 @@ async function loadTransactions(searchTerm = "") {
       const cashierName = tx.recorded_by_name || "—";
 
       tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">RCPT-${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${tx.type === "INCOME" ? "+" : "-"}UGX ${tx.amount.toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
+      tr.dataset.txId = tx.id;
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", function(e) {
+        if (e.target.closest("button") || e.target.closest("a")) return;
+        document.querySelectorAll("#transactions-table tr.tx-selected").forEach(r => r.classList.remove("tx-selected"));
+        tr.classList.add("tx-selected");
+        tr.style.outline = "2px solid var(--primary)";
+        tr.style.outlineOffset = "-2px";
+      });
       tbody.appendChild(tr);
     });
   } catch (e) {
@@ -5153,6 +5160,23 @@ async function deleteTransaction(id) {
     alert("Network error. Check server connection.");
   }
 }
+
+// ── F8: Cashier can delete a selected transaction row ──────────────────────
+document.addEventListener("keydown", async function(e) {
+  if (e.key !== "F8") return;
+  const _role = (USER_ROLE || "").toUpperCase();
+  if (_role !== "CASHIER") return; // Admins use the direct button
+
+  const selectedRow = document.querySelector("#transactions-table tr.tx-selected");
+  if (!selectedRow) {
+    showToast("Select a transaction row first, then press F8 to delete.", "warning");
+    return;
+  }
+  const txId = selectedRow.dataset.txId;
+  if (!txId) return;
+  e.preventDefault();
+  await deleteTransaction(parseInt(txId));
+});
 
 async function resetDatabase() {
   // Custom prompt for Electron compatibility to avoid native confirm() focus loss
