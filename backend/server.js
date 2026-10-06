@@ -825,10 +825,10 @@ app.get("/api/system/next-employee-id", authenticateToken, (req, res) => {
 });
 
 app.post("/api/employees", authenticateToken, async (req, res) => {
-  if (req.user.role !== "HR" && req.user.role !== "CEO") {
+  if (req.user.role !== "HR" && req.user.role !== "CEO" && req.user.role !== "Admin") {
     return res
       .status(403)
-      .json({ error: "Forbidden: Only HR or CEO can add employees." });
+      .json({ error: "Forbidden: Only Admin, HR, or CEO can add employees." });
   }
   const {
     first_name,
@@ -1002,7 +1002,7 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
 });
 
 app.patch("/api/employees/:id/permissions", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { id } = req.params;
 
@@ -1051,7 +1051,7 @@ app.patch("/api/employees/:id/permissions", authenticateToken, (req, res) => {
 });
 
 app.delete("/api/employees/:id", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { id } = req.params;
 
@@ -1092,7 +1092,7 @@ app.delete("/api/employees/:id", authenticateToken, (req, res) => {
 
 // Suspend an employee account (reversible — preserves credentials)
 app.patch("/api/employees/:id/suspend", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   db.run(
     "UPDATE employees SET is_suspended = 1 WHERE id = ? AND is_active = 1",
@@ -1109,7 +1109,7 @@ app.patch("/api/employees/:id/suspend", authenticateToken, (req, res) => {
 
 // Unsuspend (restore) an employee account
 app.patch("/api/employees/:id/unsuspend", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   db.run(
     "UPDATE employees SET is_suspended = 0 WHERE id = ? AND is_active = 1",
@@ -1123,7 +1123,7 @@ app.patch("/api/employees/:id/unsuspend", authenticateToken, (req, res) => {
 });
 
 app.put("/api/employees/:id/role", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { id } = req.params;
   const { role } = req.body;
@@ -1152,7 +1152,7 @@ app.get("/api/roles", authenticateToken, (req, res) => {
 });
 
 app.post("/api/roles", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: "Role name required" });
@@ -1173,7 +1173,7 @@ app.post("/api/roles", authenticateToken, (req, res) => {
 });
 
 app.put("/api/roles/:name", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { name } = req.params;
   const {
@@ -1255,7 +1255,7 @@ app.put("/api/roles/:name", authenticateToken, (req, res) => {
 
 // Set portal password for all employees with a given role
 app.patch("/api/roles/:name/password", authenticateToken, async (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { name } = req.params;
   const { password } = req.body;
@@ -1281,7 +1281,7 @@ app.patch("/api/roles/:name/password", authenticateToken, async (req, res) => {
 });
 
 app.delete("/api/roles/:roleName", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { roleName } = req.params;
   db.run(
@@ -3307,7 +3307,7 @@ app.post("/api/shifts/toggle", authenticateToken, (req, res) => {
 });
 
 app.patch("/api/users/:id/credentials", authenticateToken, async (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { id } = req.params;
   const { password, role, username, nickname } = req.body;
@@ -3427,7 +3427,7 @@ app.get("/api/settings", authenticateToken, (req, res) => {
 });
 
 app.post("/api/settings", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(401).json({ error: "Unauthorized" });
   const { key, data } = req.body;
 
@@ -3590,7 +3590,7 @@ app.post("/api/notes", authenticateToken, (req, res) => {
 });
 
 app.delete("/api/notes/:id", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   db.run(
     "DELETE FROM employee_notes WHERE id = ?",
@@ -3637,7 +3637,7 @@ app.get("/api/attendance/summary", authenticateToken, (req, res) => {
 
 // 13. Intelligent Workforce Scheduler
 app.post("/api/scheduler/auto-generate", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "HQ Only" });
 
   const { start_date, days_count, staff_per_shift = 2 } = req.body;
@@ -3734,7 +3734,7 @@ app.get("/api/expense-categories", authenticateToken, (req, res) => {
 });
 
 app.post("/api/expense-categories", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   const { name, budget_limit, color } = req.body;
   if (!name) return res.status(400).json({ error: "Category name required" });
@@ -3754,7 +3754,7 @@ app.post("/api/expense-categories", authenticateToken, (req, res) => {
 });
 
 app.delete("/api/expense-categories/:id", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR")
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin")
     return res.status(403).json({ error: "Forbidden" });
   db.run(
     "DELETE FROM expense_categories WHERE id = ?",
@@ -5229,7 +5229,7 @@ app.post("/api/notices", authenticateToken, (req, res) => {
 });
 
 app.delete("/api/notices/:id", authenticateToken, (req, res) => {
-  if (req.user.role !== "CEO" && req.user.role !== "HR") {
+  if (req.user.role !== "CEO" && req.user.role !== "HR" && req.user.role !== "Admin") {
     return res
       .status(403)
       .json({ error: "Forbidden: Only administrators can delete notices." });
