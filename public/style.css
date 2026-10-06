@@ -839,21 +839,22 @@ tr:hover td {
     }
 
     body.print-mode-receipt .receipt-content {
-        width: 100% !important; max-width: 100% !important; box-sizing: border-box !important;       /* 80mm paper - 4mm margins each side */
-        max-width: 100% !important; max-width: 100% !important; box-sizing: border-box !important;
+        width: 76mm !important;
+        max-width: 76mm !important;
+        box-sizing: border-box !important;
         background: white !important;
         color: black !important;
-        padding: 2mm !important;
+        padding: 0 !important;
+        margin: 0 auto !important;
         border: none !important;
         box-shadow: none !important;
         border-radius: 0 !important;
         font-family: 'Courier New', monospace !important;
         font-size: 9pt !important;
-        margin: 0 auto !important;
         page-break-inside: avoid !important;
         max-height: none !important;
         height: auto !important;
-        overflow: visible !important;
+        overflow: hidden !important;
     }
 
     body.print-mode-receipt .receipt-content h2 { font-size: 12pt !important; margin: 0 !important; }
