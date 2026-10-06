@@ -1,4 +1,4 @@
-@page { margin: 0; }
+@page { margin: 0; size: 80mm auto; }
 /* 
     Unified Jomish Business Suite CSS
     Neumorphic soft-UI design with flexbox layout
@@ -861,7 +861,7 @@ tr:hover td {
     body.print-mode-receipt .receipt-content h2 { font-size: 12pt !important; margin: 0 !important; }
     body.print-mode-receipt .receipt-content h3 { font-size: 11pt !important; margin: 0 !important; }
     body.print-mode-receipt .receipt-content p { font-size: 8pt !important; margin: 0 !important; }
-    body.print-mode-receipt .receipt-table { font-size: 8pt !important; margin-bottom: 2mm !important; }
+    body.print-mode-receipt .receipt-table { font-size: 7.5pt !important; margin-bottom: 2mm !important; width: 100% !important; table-layout: fixed !important; }
 
     /* ── BARCODE LABEL PRINT MODE ── */
     body.print-mode-label > #label-overlay {

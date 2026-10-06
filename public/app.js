@@ -3806,9 +3806,9 @@ function printReceipt(
       const tr = document.createElement("tr");
       const qty = i.qty || 1;
       tr.innerHTML = `
-                <td style="padding:2px 0;">${i.name}</td>
-                <td style="text-align:center; padding:2px 4px;">${qty}</td>
-                <td style="text-align:right; padding:2px 0;">UGX ${(i.price * qty).toLocaleString()}</td>`;
+                <td style="padding:2px 0; width:50%; word-break:break-word;">${i.name}</td>
+                <td style="text-align:center; padding:2px 2px; width:10%;">${qty}</td>
+                <td style="text-align:right; padding:2px 0; width:40%; white-space:nowrap;">UGX ${(i.price * qty).toLocaleString()}</td>`;
       tbody.appendChild(tr);
     });
   }
