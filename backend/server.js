@@ -637,10 +637,27 @@ app.delete("/api/system/companies/:prefix", authenticateToken, (req, res) => {
   asyncLocalStorage.run("public", () => {
     db.run("DELETE FROM companies WHERE prefix = ?", [prefix], function (err) {
       if (err) return res.status(500).json({ error: err.message });
-      // Drop schema (Postgres) or just leave the data in SQLite since SQLite doesn't support DROP SCHEMA easily.
-      // In a real multi-tenant Postgres, we'd do: db.run(`DROP SCHEMA t_${prefix.toLowerCase()} CASCADE`);
-      // We just remove it from registry for now so it's inaccessible.
-      res.json({ message: `Company ${prefix} deleted.` });
+      
+      if (db.pool) {
+        // Postgres: drop schema completely
+        const schemaName = `t_${prefix.toLowerCase()}`;
+        db.pool.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`)
+          .then(() => res.json({ message: `Company ${prefix} deleted.` }))
+          .catch(e => res.status(500).json({ error: "Failed to drop schema: " + e.message }));
+      } else {
+        // SQLite: delete database file
+        const fs = require('fs');
+        const path = require('path');
+        const dbPath = path.join(process.cwd(), 'data', `jomish_t${prefix.toLowerCase()}.db`);
+        try {
+          if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+          if (fs.existsSync(dbPath + '-wal')) fs.unlinkSync(dbPath + '-wal');
+          if (fs.existsSync(dbPath + '-shm')) fs.unlinkSync(dbPath + '-shm');
+        } catch (e) {
+          console.error(`Failed to delete SQLite file for ${prefix}:`, e.message);
+        }
+        res.json({ message: `Company ${prefix} deleted.` });
+      }
     });
   });
 });
