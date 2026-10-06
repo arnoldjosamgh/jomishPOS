@@ -456,20 +456,25 @@ app.post("/api/login", async (req, res) => {
   try {
     companies = await new Promise((resolve, reject) => {
       asyncLocalStorage.run("public", () => {
-        db.all("SELECT prefix, name, status FROM companies ORDER BY created_at DESC", [], (err, rows) => {
-          if (err) reject(err); else resolve(rows || []);
+        db.all("SELECT * FROM companies ORDER BY created_at DESC", [], (err, rows) => {
+          if (err) {
+            console.warn("[LOGIN] Could not query companies table:", err.message);
+            resolve([]); // Fallback to empty if table doesn't exist
+          } else {
+            resolve(rows || []);
+          }
         });
       });
     });
   } catch (e) {
-    return res.status(500).json({ error: "Database error looking up companies." });
+    console.error(e);
   }
 
   // Also include demo and public schemas
   const schemasToCheck = [
     { prefix: "DEMO", schema: "demo" },
     { prefix: "PUBLIC", schema: "public" },
-    ...companies.map(c => ({ prefix: c.prefix, schema: "t_" + c.prefix.toLowerCase(), status: c.status })),
+    ...companies.map(c => ({ prefix: c.prefix, schema: "t_" + (c.prefix || "").toLowerCase(), status: c.status || 'ACTIVE' })),
   ];
 
   // 2. Search each schema for the email
