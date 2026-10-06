@@ -13,14 +13,9 @@ window.onunhandledrejection = function(e) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="canonical" href="https://jomishsuite.onrender.com/login.html">
     <meta name="google-site-verification" content="google4725248131705fcf" />
-    <title>Jomish Business Suite - Enterprise POS & Management Software</title>
-    <meta name="description" content="Jomish Business Suite is a powerful cloud-based POS and enterprise management system designed to streamline your business operations, inventory, and finances.">
-    <meta name="keywords" content="Jomish, Jomish Business Suite, jomishsuite, POS software, enterprise management, inventory management, point of sale, business software, Uganda POS">
+    <title>Jomish Business Suite - Enterprise POS &amp; Management Software</title>
+    <meta name="description" content="Jomish Business Suite is a powerful cloud-based POS and enterprise management system.">
     <meta name="author" content="Arnold Josam">
-    <meta property="og:title" content="Jomish Business Suite">
-    <meta property="og:description" content="Streamline your business with Jomish's cloud-based Point of Sale and Management system.">
-    <meta property="og:type" content="website">
-    <meta property="og:site_name" content="Jomish Business Suite">
     <link rel="icon" type="image/png" href="favicon.png?v=2">
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#6366f1">
@@ -33,248 +28,510 @@ window.onunhandledrejection = function(e) {
     <script src="offline-db.js"></script>
     <script src="lib/bcryptjs.min.js"></script>
     <style>
-        *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-        :root{--cyan:#00e5ff;--magenta:#e040fb;--dark:#0c0c1a;--card:#161628;--input-bg:#1e1e35;--border:rgba(255,255,255,0.06);--text:#eee;--muted:#7a7a9a;--radius:14px}
-        body{font-family:'Segoe UI',-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--dark);overflow:hidden}
-        body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 30% 20%,rgba(0,229,255,0.06),transparent 60%),radial-gradient(ellipse at 70% 80%,rgba(224,64,251,0.05),transparent 60%);pointer-events:none}
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --cyan: #00e5ff; --magenta: #e040fb; --dark: #0c0c1a;
+            --card: #161628; --input-bg: #1e1e35;
+            --border: rgba(255,255,255,0.08); --text: #eee; --muted: #7a7a9a;
+            --radius: 14px; --green: #10b981;
+        }
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            min-height: 100vh; display: flex; align-items: center;
+            justify-content: center; background: var(--dark); overflow: hidden;
+        }
+        body::before {
+            content: ''; position: fixed; inset: 0;
+            background: radial-gradient(ellipse at 30% 20%, rgba(0,229,255,0.06), transparent 60%),
+                        radial-gradient(ellipse at 70% 80%, rgba(224,64,251,0.05), transparent 60%);
+            pointer-events: none;
+        }
 
-        .card-wrap{position:relative;z-index:10;padding:3px;border-radius:22px;animation:cardIn .5s ease both}
-        @keyframes cardIn{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:none}}
+        /* ── Animated border card ── */
+        .card-wrap { position: relative; z-index: 10; padding: 3px; border-radius: 22px; animation: cardIn .5s ease both; }
+        @keyframes cardIn { from { opacity:0; transform:translateY(20px) scale(.97) } to { opacity:1; transform:none } }
+        .card-wrap::before {
+            content: ''; position: absolute; inset: -2px; border-radius: 22px;
+            background: repeating-conic-gradient(from var(--angle,0deg),var(--cyan) 0%,var(--magenta) 5%,transparent 5%,transparent 40%,var(--cyan) 50%);
+            filter: drop-shadow(0 15px 50px rgba(0,229,255,0.15));
+            animation: spinBorder 4s linear infinite; z-index: -1;
+        }
+        @property --angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+        @keyframes spinBorder { to { --angle: 360deg } }
+        .card-wrap::after {
+            content: ''; position: absolute; inset: -2px; border-radius: 22px;
+            background: repeating-conic-gradient(from var(--angle,0deg),var(--cyan) 0%,var(--magenta) 5%,transparent 5%,transparent 40%,var(--cyan) 50%);
+            filter: blur(20px); opacity: .3; animation: spinBorder 4s linear infinite; z-index: -2;
+        }
 
-        .card-wrap::before{content:'';position:absolute;inset:-2px;border-radius:22px;background:repeating-conic-gradient(from var(--angle,0deg),var(--cyan) 0%,var(--magenta) 5%,transparent 5%,transparent 40%,var(--cyan) 50%);filter:drop-shadow(0 15px 50px rgba(0,229,255,0.15));animation:spinBorder 4s linear infinite;z-index:-1}
-        @property --angle{syntax:'<angle>';initial-value:0deg;inherits:false}
-        @keyframes spinBorder{to{--angle:360deg}}
-        .card-wrap::after{content:'';position:absolute;inset:-2px;border-radius:22px;background:repeating-conic-gradient(from var(--angle,0deg),var(--cyan) 0%,var(--magenta) 5%,transparent 5%,transparent 40%,var(--cyan) 50%);filter:blur(20px);opacity:.3;animation:spinBorder 4s linear infinite;z-index:-2}
+        .login-card {
+            background: var(--card); border-radius: 20px; padding: 32px 28px;
+            width: min(460px, 95vw); position: relative; overflow: hidden;
+        }
 
-        .login-card{background:var(--card);border-radius:20px;padding:44px 38px 36px;width:min(400px,90vw);position:relative}
-        .brand-section{display:flex;flex-direction:column;align-items:center;margin-bottom:28px;gap:10px}
-        .brand-logo-wrap{width:68px;height:68px;background:rgba(0,229,255,0.08);border:1.5px solid rgba(0,229,255,0.2);border-radius:18px;display:flex;align-items:center;justify-content:center;overflow:hidden}
-        .brand-logo-wrap img#login-logo{display:none;width:100%;height:100%;object-fit:cover;border-radius:16px}
-        .brand-logo-placeholder{font-size:1.8rem}
-        .brand-name{font-size:1.3rem;font-weight:800;letter-spacing:-.3px;text-align:center;color:var(--text)}
-        .brand-name span{background:linear-gradient(135deg,var(--cyan),var(--magenta));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-        .brand-tagline{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;font-weight:500}
+        /* ── Brand ── */
+        .brand { display: flex; flex-direction: column; align-items: center; margin-bottom: 24px; gap: 8px; }
+        .brand-logo { width: 56px; height: 56px; object-fit: contain; border-radius: 14px; }
+        .brand-name { font-size: 1.2rem; font-weight: 800; }
+        .brand-name span { background: linear-gradient(135deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .brand-tag { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; }
 
-        .form-heading{font-size:.88rem;color:var(--muted);margin-bottom:18px;text-align:center}
-        .field{position:relative;margin-bottom:14px}
-        .field label{display:block;font-size:.7rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
-        .field input{width:100%;background:var(--input-bg);border:1px solid var(--border);color:var(--text);padding:13px 16px;border-radius:var(--radius);font-size:.92rem;font-family:inherit;outline:none;transition:border-color .2s,box-shadow .2s}
-        .field input::placeholder{color:#4a4a65}
-        .field input:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,229,255,0.1)}
-        .eye-btn{position:absolute;right:14px;bottom:13px;background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem}
+        /* ── Screens ── */
+        .screen { display: none; }
+        .screen.active { display: block; animation: fadeIn .3s ease; }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
 
-        #error-msg{display:none;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:#f87171;padding:10px;border-radius:10px;font-size:.82rem;margin-bottom:12px;text-align:center}
-        #terminated-msg{display:none;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);color:#fbbf24;padding:12px;border-radius:10px;font-size:.82rem;margin-bottom:12px;text-align:center;line-height:1.5}
-        #terminated-msg strong{display:block;font-size:.9rem;margin-bottom:4px}
+        /* ── Error / success ── */
+        .alert { display: none; padding: 10px 14px; border-radius: 10px; font-size: .82rem; margin-bottom: 14px; text-align: center; }
+        .alert.error { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.25); color: #f87171; }
+        .alert.success { background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.25); color: #34d399; }
 
-        .id-hint{font-size:.72rem;color:var(--muted);margin-top:4px;padding-left:2px}
-        .id-hint code{background:rgba(0,229,255,0.08);color:var(--cyan);padding:1px 5px;border-radius:4px;font-size:.7rem}
+        /* ── User grid (screen 1) ── */
+        .screen-title { font-size: .82rem; color: var(--muted); text-align: center; margin-bottom: 18px; text-transform: uppercase; letter-spacing: 1px; }
+        .user-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; max-height: 260px; overflow-y: auto; }
+        .user-tile {
+            display: flex; flex-direction: column; align-items: center; gap: 8px;
+            padding: 14px 8px; border-radius: 14px;
+            background: var(--input-bg); border: 1.5px solid var(--border);
+            cursor: pointer; transition: all .2s; user-select: none;
+        }
+        .user-tile:hover { border-color: var(--cyan); background: rgba(0,229,255,0.06); transform: translateY(-2px); }
+        .user-tile:active { transform: scale(.96); }
+        .user-avatar {
+            width: 48px; height: 48px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--cyan), var(--magenta));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.3rem; font-weight: 800; color: #0c0c1a;
+        }
+        .user-name { font-size: .78rem; font-weight: 600; color: var(--text); text-align: center; word-break: break-word; }
+        .user-role { font-size: .65rem; color: var(--muted); text-align: center; }
 
-        .submit-btn{width:100%;padding:14px;background:linear-gradient(135deg,#00e5ff,#00b8d4);color:#0c0c1a;border:none;border-radius:var(--radius);font-size:.95rem;font-weight:700;font-family:inherit;cursor:pointer;margin-top:8px;transition:transform .15s,box-shadow .2s;box-shadow:0 4px 24px rgba(0,229,255,0.25);letter-spacing:.3px}
-        .submit-btn:hover{transform:translateY(-1px);box-shadow:0 8px 32px rgba(0,229,255,0.35)}
-        .submit-btn:active{transform:translateY(1px)}
-        .submit-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+        .other-btn {
+            width: 100%; padding: 13px; border-radius: var(--radius);
+            background: transparent; border: 1.5px dashed rgba(255,255,255,0.12);
+            color: var(--muted); font-size: .88rem; cursor: pointer;
+            transition: all .2s; font-family: inherit;
+        }
+        .other-btn:hover { border-color: var(--magenta); color: var(--magenta); }
 
-        .login-footer{text-align:center;margin-top:20px;font-size:.7rem;color:#3a3a55}
-        .login-footer strong{color:#5a5a75}
+        /* ── PIN screen (screen 2) ── */
+        .pin-user-info { display: flex; flex-direction: column; align-items: center; margin-bottom: 20px; gap: 6px; }
+        .pin-avatar {
+            width: 64px; height: 64px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--cyan), var(--magenta));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.8rem; font-weight: 800; color: #0c0c1a; margin-bottom: 4px;
+        }
+        .pin-user-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+        .pin-user-email { font-size: .75rem; color: var(--muted); }
 
-        @keyframes spin-load{to{transform:rotate(360deg)}}
-        .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(12,12,26,0.3);border-top-color:#0c0c1a;border-radius:50%;animation:spin-load .7s linear infinite;vertical-align:middle;margin-right:6px}
-        @media(max-width:500px){.login-card{padding:32px 24px 28px}}
+        .pin-dots { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; }
+        .pin-dot {
+            width: 14px; height: 14px; border-radius: 50%;
+            border: 2px solid var(--muted); background: transparent;
+            transition: all .15s;
+        }
+        .pin-dot.filled { background: var(--cyan); border-color: var(--cyan); }
+
+        .pinpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+        .pin-key {
+            padding: 18px; border-radius: 14px; font-size: 1.2rem; font-weight: 700;
+            background: var(--input-bg); border: 1.5px solid var(--border);
+            color: var(--text); cursor: pointer; transition: all .15s;
+            text-align: center; font-family: inherit; user-select: none;
+        }
+        .pin-key:hover { background: rgba(0,229,255,0.08); border-color: var(--cyan); }
+        .pin-key:active { transform: scale(.92); background: rgba(0,229,255,0.15); }
+        .pin-key.del { color: var(--muted); font-size: 1rem; }
+        .pin-key.submit { background: linear-gradient(135deg, var(--cyan), #00b8d4); color: #0c0c1a; border-color: transparent; font-size: .9rem; }
+        .pin-key.submit:hover { box-shadow: 0 4px 20px rgba(0,229,255,0.3); }
+        .pin-key.zero { grid-column: span 2; }
+
+        .back-link { text-align: center; font-size: .78rem; color: var(--muted); cursor: pointer; margin-top: 4px; }
+        .back-link:hover { color: var(--cyan); }
+
+        /* ── Manual email screen (screen 3) ── */
+        .field { position: relative; margin-bottom: 14px; }
+        .field label { display: block; font-size: .7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+        .field input {
+            width: 100%; background: var(--input-bg); border: 1px solid var(--border);
+            color: var(--text); padding: 13px 16px; border-radius: var(--radius);
+            font-size: .92rem; font-family: inherit; outline: none;
+            transition: border-color .2s, box-shadow .2s;
+        }
+        .field input::placeholder { color: #4a4a65; }
+        .field input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,229,255,0.1); }
+        .eye-btn { position: absolute; right: 14px; bottom: 13px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1rem; }
+
+        /* ── Buttons ── */
+        .submit-btn {
+            width: 100%; padding: 14px; background: linear-gradient(135deg, #00e5ff, #00b8d4);
+            color: #0c0c1a; border: none; border-radius: var(--radius);
+            font-size: .95rem; font-weight: 700; font-family: inherit;
+            cursor: pointer; margin-top: 6px; transition: transform .15s, box-shadow .2s;
+            box-shadow: 0 4px 24px rgba(0,229,255,0.25); letter-spacing: .3px;
+        }
+        .submit-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 32px rgba(0,229,255,0.35); }
+        .submit-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+        .demo-btn {
+            width: 100%; padding: 13px; background: linear-gradient(135deg, #e040fb, #b020c0);
+            color: white; border: none; border-radius: var(--radius);
+            font-size: .92rem; font-weight: 700; font-family: inherit;
+            cursor: pointer; margin-top: 10px; transition: transform .15s, box-shadow .2s;
+        }
+
+        @keyframes spin-load { to { transform: rotate(360deg) } }
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(12,12,26,0.3); border-top-color: #0c0c1a; border-radius: 50%; animation: spin-load .7s linear infinite; vertical-align: middle; margin-right: 6px; }
+        .spinner-white { border-color: rgba(255,255,255,0.3); border-top-color: white; }
+
+        /* ── Offline banner ── */
+        #offline-banner { display: none; background: #f59e0b; color: #fff; text-align: center; padding: 8px; font-size: .85rem; font-weight: bold; position: fixed; top: 0; width: 100%; z-index: 9999; }
+
+        @media(max-width: 500px) { .login-card { padding: 24px 16px; } .pinpad { gap: 7px; } .pin-key { padding: 16px; } }
     </style>
 </head>
 <body>
-    <div id="offline-banner" style="display:none; background:#f59e0b; color:#fff; text-align:center; padding:8px; font-size:0.85rem; font-weight:bold; position:fixed; top:0; width:100%; z-index:9999;">
-        <i class="fa-solid fa-triangle-exclamation"></i> You are currently offline. Local login available.
-    </div>
-    <div class="card-wrap">
-        <div class="login-card">
-            <div class="brand-section">
-                <div class="brand-logo-wrap" id="logo-wrap" style="background:transparent; border:none;">
-                    <img src="favicon.png" alt="Jomish Logo" style="width:100%; height:100%; object-fit:contain; display:block;">
-                </div>
-                <div>
-                    <div class="brand-name"><span>Jomish Workforce</span></div>
-                    <div class="brand-tagline">Enterprise Platform</div>
-                </div>
-            </div>
+<div id="offline-banner">⚠ You are currently offline. Local login available.</div>
 
-            <p class="form-heading">Sign in to your workspace</p>
-            <div id="success-msg" style="display:none; background:rgba(16,185,129,.1); border:1px solid rgba(16,185,129,.25); color:#34d399; padding:12px; border-radius:10px; font-size:.82rem; margin-bottom:12px; text-align:center; line-height:1.5;"></div>
-            <div id="error-msg"></div>
-            <div id="terminated-msg">
-                <strong>Account Terminated</strong>
-                Your access has been permanently revoked. Contact HR for assistance.
-            </div>
+<div class="card-wrap">
+    <div class="login-card">
+        <!-- Brand -->
+        <div class="brand">
+            <img src="favicon.png" alt="Jomish" class="brand-logo">
+            <div class="brand-name"><span>Jomish Workforce</span></div>
+            <div class="brand-tag">Enterprise Platform</div>
+        </div>
 
-            <form id="login-form" autocomplete="on">
+        <!-- ─── SCREEN 1: User Select ─── -->
+        <div class="screen active" id="screen-select">
+            <p class="screen-title">Who's working today?</p>
+            <div id="error-select" class="alert error"></div>
+            <div class="user-grid" id="user-grid"></div>
+            <button class="other-btn" id="btn-other">
+                ➕ &nbsp;Sign in with email
+            </button>
+            <button class="demo-btn" id="btn-demo" style="margin-top:10px;">Try Demo</button>
+        </div>
+
+        <!-- ─── SCREEN 2: PIN Pad ─── -->
+        <div class="screen" id="screen-pin">
+            <div class="pin-user-info">
+                <div class="pin-avatar" id="pin-avatar">?</div>
+                <div class="pin-user-name" id="pin-name">User</div>
+                <div class="pin-user-email" id="pin-email-label"></div>
+            </div>
+            <div id="error-pin" class="alert error"></div>
+            <!-- PIN dots (up to 8) -->
+            <div class="pin-dots" id="pin-dots">
+                <div class="pin-dot" id="d0"></div>
+                <div class="pin-dot" id="d1"></div>
+                <div class="pin-dot" id="d2"></div>
+                <div class="pin-dot" id="d3"></div>
+                <div class="pin-dot" id="d4"></div>
+                <div class="pin-dot" id="d5"></div>
+                <div class="pin-dot" id="d6"></div>
+                <div class="pin-dot" id="d7"></div>
+            </div>
+            <!-- PIN Pad -->
+            <div class="pinpad">
+                <button class="pin-key" data-k="1">1</button>
+                <button class="pin-key" data-k="2">2</button>
+                <button class="pin-key" data-k="3">3</button>
+                <button class="pin-key" data-k="4">4</button>
+                <button class="pin-key" data-k="5">5</button>
+                <button class="pin-key" data-k="6">6</button>
+                <button class="pin-key" data-k="7">7</button>
+                <button class="pin-key" data-k="8">8</button>
+                <button class="pin-key" data-k="9">9</button>
+                <button class="pin-key zero" data-k="0">0</button>
+                <button class="pin-key del" id="pin-del">⌫</button>
+            </div>
+            <button class="submit-btn" id="pin-submit">Sign In</button>
+            <p class="back-link" id="pin-back">← Back to users</p>
+        </div>
+
+        <!-- ─── SCREEN 3: Manual Email + PIN ─── -->
+        <div class="screen" id="screen-manual">
+            <div id="error-manual" class="alert error"></div>
+            <form id="form-manual" autocomplete="on">
                 <div class="field">
                     <label>Email Address</label>
-                    <input type="email" id="username" placeholder="e.g. jerry@gmail.com" required autocomplete="email">
+                    <input type="email" id="manual-email" placeholder="e.g. jerry@gmail.com" required autocomplete="email">
                 </div>
                 <div class="field">
                     <label>PIN / Password</label>
-                    <input type="password" id="password" placeholder="Enter your PIN or password" required autocomplete="current-password">
-                    <button type="button" class="eye-btn" id="toggle-pwd" title="Show/Hide">&#x1F441;</button>
+                    <input type="password" id="manual-password" placeholder="Enter your PIN or password" required autocomplete="current-password">
+                    <button type="button" class="eye-btn" id="toggle-pwd">👁</button>
                 </div>
-                <button type="submit" class="submit-btn" id="btn-signin">Sign In</button>
-                <button type="button" class="submit-btn" id="btn-demo" style="margin-top: 10px; background: linear-gradient(135deg, #e040fb, #b020c0); color: white;">Try Demo</button>
+                <button type="submit" class="submit-btn" id="btn-manual-signin">Sign In</button>
             </form>
-
-            <div class="login-footer">
-                <strong>Jomish Enterprise Workforce Platform</strong>
-            </div>
+            <p class="back-link" id="manual-back" style="margin-top:14px;">← Back to users</p>
         </div>
     </div>
+</div>
 
-    <script>
-        const BASE = window.location.protocol === 'file:' ? 'http://localhost:3005' : window.location.origin;
+<script>
+    const BASE = window.location.protocol === 'file:' ? 'http://localhost:3005' : window.location.origin;
+    const SAVED_USERS_KEY = 'jomish_known_users'; // array of {name, email, role, initials}
 
-        // Branding is now static as requested
+    let pinBuffer = '';
+    let selectedEmail = '';
 
+    // ───── Utilities ─────
+    function getInitials(name) {
+        if (!name) return '?';
+        const parts = name.trim().split(' ');
+        return parts.length >= 2
+            ? (parts[0][0] + parts[parts.length-1][0]).toUpperCase()
+            : parts[0].substring(0, 2).toUpperCase();
+    }
 
-        function checkReset() {
-            const params = new URLSearchParams(window.location.search);
-            if (params.get('reset') === 'success') {
-                const msg = document.getElementById('success-msg');
-                if (msg) {
-                    msg.style.display = 'block';
-                    msg.innerHTML = `<strong>System Reset Successful!</strong><br>The database is clean and ready.`;
-                }
-            }
+    function showScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    }
+
+    function showError(screenId, msg) {
+        const el = document.getElementById('error-' + screenId);
+        if (!el) return;
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 4000);
+    }
+
+    function clearError(screenId) {
+        const el = document.getElementById('error-' + screenId);
+        if (el) el.style.display = 'none';
+    }
+
+    // ───── Load saved users ─────
+    function getSavedUsers() {
+        try { return JSON.parse(localStorage.getItem(SAVED_USERS_KEY) || '[]'); } catch { return []; }
+    }
+
+    function saveUser(userData) {
+        const users = getSavedUsers();
+        const exists = users.findIndex(u => u.email === userData.email);
+        const entry = {
+            name: userData.name,
+            email: userData.email || userData.username || '',
+            role: userData.role,
+            initials: getInitials(userData.name),
+        };
+        if (exists >= 0) users[exists] = entry; else users.push(entry);
+        localStorage.setItem(SAVED_USERS_KEY, JSON.stringify(users));
+    }
+
+    // ───── Build user grid ─────
+    function buildUserGrid() {
+        const users = getSavedUsers();
+        const grid = document.getElementById('user-grid');
+        grid.innerHTML = '';
+
+        if (users.length === 0) {
+            // First time — go straight to email form
+            showScreen('screen-manual');
+            document.getElementById('btn-other').style.display = 'none';
+            document.getElementById('btn-demo').style.display = 'none';
+            return;
         }
-        checkReset();
 
-        document.getElementById('toggle-pwd').addEventListener('click', () => {
-            const pwd = document.getElementById('password');
-            pwd.type = pwd.type === 'password' ? 'text' : 'password';
+        users.forEach(u => {
+            const tile = document.createElement('button');
+            tile.className = 'user-tile';
+            tile.innerHTML = `
+                <div class="user-avatar">${u.initials}</div>
+                <div class="user-name">${u.name.split(' ')[0]}</div>
+                <div class="user-role">${u.role || ''}</div>
+            `;
+            tile.addEventListener('click', () => selectUser(u));
+            grid.appendChild(tile);
         });
+    }
 
-        document.getElementById('login-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const btn = document.getElementById('btn-signin');
-            const errorEl = document.getElementById('error-msg');
-            const usernameInput = document.getElementById('username').value.trim();
-            const passwordInput = document.getElementById('password').value;
+    // ───── Select user → PIN screen ─────
+    function selectUser(u) {
+        selectedEmail = u.email;
+        pinBuffer = '';
+        updatePinDots();
+        clearError('pin');
 
-            errorEl.style.display = 'none';
-            document.getElementById('terminated-msg').style.display = 'none';
+        document.getElementById('pin-avatar').textContent = u.initials;
+        document.getElementById('pin-name').textContent = u.name;
+        document.getElementById('pin-email-label').textContent = u.email;
 
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner"></span>Signing in...';
+        showScreen('screen-pin');
+    }
 
-            try {
-                const res = await fetch(`${BASE}/api/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        username: usernameInput,
-                        password: passwordInput
-                    })
-                });
+    // ───── PIN pad logic ─────
+    function updatePinDots() {
+        for (let i = 0; i < 8; i++) {
+            const dot = document.getElementById('d' + i);
+            dot.classList.toggle('filled', i < pinBuffer.length);
+        }
+    }
 
-                const data = await res.json();
+    document.querySelectorAll('.pin-key[data-k]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (pinBuffer.length >= 8) return;
+            pinBuffer += btn.dataset.k;
+            updatePinDots();
+        });
+    });
 
-                if (res.ok) {
-                    // Save for offline login
-                    if (window.OfflineDB) {
-                        try {
-                            const salt = bcrypt.genSaltSync(10);
-                            const hash = bcrypt.hashSync(passwordInput, salt);
-                            await window.OfflineDB.saveOfflineCredentials(usernameInput, hash, data);
-                        } catch (e) {
-                            console.warn('Could not save offline credentials', e);
-                        }
-                    }
+    document.getElementById('pin-del').addEventListener('click', () => {
+        pinBuffer = pinBuffer.slice(0, -1);
+        updatePinDots();
+    });
 
-                    localStorage.removeItem('jomish_demo');
-                    localStorage.setItem('jomish_token', data.token);
-                    localStorage.setItem('jomish_role', data.role);
-                    localStorage.setItem('jomish_name', data.name);
-                    localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
-                    localStorage.setItem('jomish_user_id', data.user_id);
-                    if (data.prefix) localStorage.setItem('jomish_prefix', data.prefix);
-                    window.location.href = 'index.html';
-                } else {
-                    const terminatedEl = document.getElementById('terminated-msg');
-                    const isTerminated = res.status === 403 && data.error && data.error.includes('terminated');
-                    if (isTerminated) {
-                        terminatedEl.style.display = 'block';
-                    } else {
-                        errorEl.style.display = 'block';
-                        errorEl.textContent = data.error || 'Invalid credentials';
-                    }
-                    btn.disabled = false;
-                    btn.innerHTML = 'Sign In';
-                }
-            } catch (err) {
-                // Offline fallback logic
+    document.getElementById('pin-submit').addEventListener('click', async () => {
+        if (!pinBuffer) return showError('pin', 'Please enter your PIN.');
+        await doLogin(selectedEmail, pinBuffer, 'pin');
+    });
+
+    document.getElementById('pin-back').addEventListener('click', () => {
+        pinBuffer = '';
+        showScreen('screen-select');
+    });
+
+    // ───── Manual form ─────
+    document.getElementById('toggle-pwd').addEventListener('click', () => {
+        const p = document.getElementById('manual-password');
+        p.type = p.type === 'password' ? 'text' : 'password';
+    });
+
+    document.getElementById('form-manual').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('manual-email').value.trim();
+        const pass = document.getElementById('manual-password').value;
+        await doLogin(email, pass, 'manual');
+    });
+
+    document.getElementById('manual-back').addEventListener('click', () => {
+        const users = getSavedUsers();
+        if (users.length > 0) showScreen('screen-select');
+    });
+
+    document.getElementById('btn-other').addEventListener('click', () => {
+        clearError('manual');
+        showScreen('screen-manual');
+    });
+
+    // ───── Core login ─────
+    async function doLogin(email, password, source) {
+        const btnId = source === 'pin' ? 'pin-submit' : 'btn-manual-signin';
+        const btn = document.getElementById(btnId);
+        btn.disabled = true;
+        btn.innerHTML = source === 'pin'
+            ? '<span class="spinner"></span>Signing in...'
+            : '<span class="spinner"></span>Signing in...';
+
+        try {
+            const res = await fetch(`${BASE}/api/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: email, password })
+            });
+            const data = await res.json();
+
+            if (res.ok) {
+                // Save this user for future quick-select
+                saveUser({ name: data.name, email, role: data.role });
+
+                // Save offline credentials
                 if (window.OfflineDB) {
                     try {
-                        const cachedUser = await window.OfflineDB.getOfflineCredentials(usernameInput);
-                        if (cachedUser) {
-                            const isMatch = bcrypt.compareSync(passwordInput, cachedUser.passwordHash);
-                            if (isMatch) {
-                                const data = cachedUser.userData;
-                                localStorage.removeItem('jomish_demo');
-                                localStorage.setItem('jomish_token', data.token);
-                                localStorage.setItem('jomish_role', data.role);
-                                localStorage.setItem('jomish_name', data.name);
-                                localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
-                                localStorage.setItem('jomish_user_id', data.user_id);
-                                if (data.prefix) localStorage.setItem('jomish_prefix', data.prefix);
-                                window.location.href = 'index.html?offline=true';
-                                return; // Stop execution
-                            }
-                        }
-                    } catch(e) {
-                        console.error("Offline login error", e);
-                    }
+                        const salt = bcrypt.genSaltSync(10);
+                        const hash = bcrypt.hashSync(password, salt);
+                        await window.OfflineDB.saveOfflineCredentials(email, hash, data);
+                    } catch (e) { console.warn('Offline save failed', e); }
                 }
-                
-                errorEl.style.display = 'block';
-                errorEl.textContent = 'Cannot reach server and no matching offline credentials found.';
-                btn.disabled = false;
-                btn.innerHTML = 'Sign In';
-            }
-        });
 
-        document.getElementById('btn-demo').addEventListener('click', async () => {
-            const btn = document.getElementById('btn-demo');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner"></span>Starting Demo...';
-            try {
-                const res = await fetch(`${BASE}/api/login/demo`, { method: 'POST' });
-                const data = await res.json();
-                if (res.ok) {
-                    localStorage.setItem('jomish_token', data.token);
-                    localStorage.setItem('jomish_role', data.role);
-                    localStorage.setItem('jomish_name', data.name);
-                    localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
-                    localStorage.setItem('jomish_user_id', data.user_id);
-                    localStorage.setItem('jomish_prefix', data.prefix);
-                    localStorage.setItem('jomish_demo', 'true');
-                    window.location.href = 'index.html';
-                }
-            } catch (err) {
-                alert('Demo login failed: ' + err.message);
-                btn.disabled = false;
-                btn.innerHTML = 'Try Demo Mode';
-            }
-        });
-
-        // Online/Offline Banner handling
-        function updateOnlineStatus() {
-            const banner = document.getElementById('offline-banner');
-            if (!navigator.onLine) {
-                banner.style.display = 'block';
+                localStorage.removeItem('jomish_demo');
+                localStorage.setItem('jomish_token', data.token);
+                localStorage.setItem('jomish_role', data.role);
+                localStorage.setItem('jomish_name', data.name);
+                localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
+                localStorage.setItem('jomish_user_id', data.user_id);
+                if (data.prefix) localStorage.setItem('jomish_prefix', data.prefix);
+                window.location.href = 'index.html';
             } else {
-                banner.style.display = 'none';
+                const isTerminated = res.status === 403 && data.error && data.error.includes('terminated');
+                const msg = isTerminated ? 'Account terminated. Contact HR.' : (data.error || 'Invalid credentials');
+                showError(source === 'pin' ? 'pin' : 'manual', msg);
+                if (source === 'pin') { pinBuffer = ''; updatePinDots(); }
+                btn.disabled = false;
+                btn.textContent = 'Sign In';
             }
+        } catch (err) {
+            // Offline fallback
+            if (window.OfflineDB) {
+                try {
+                    const cached = await window.OfflineDB.getOfflineCredentials(email);
+                    if (cached && bcrypt.compareSync(password, cached.passwordHash)) {
+                        const d = cached.userData;
+                        localStorage.removeItem('jomish_demo');
+                        localStorage.setItem('jomish_token', d.token);
+                        localStorage.setItem('jomish_role', d.role);
+                        localStorage.setItem('jomish_name', d.name);
+                        localStorage.setItem('jomish_permissions', JSON.stringify(d.permissions));
+                        localStorage.setItem('jomish_user_id', d.user_id);
+                        if (d.prefix) localStorage.setItem('jomish_prefix', d.prefix);
+                        window.location.href = 'index.html?offline=true';
+                        return;
+                    }
+                } catch(e) { console.error('Offline login error', e); }
+            }
+            showError(source === 'pin' ? 'pin' : 'manual', 'Cannot reach server. Check connection.');
+            btn.disabled = false;
+            btn.textContent = 'Sign In';
         }
-        window.addEventListener('online', updateOnlineStatus);
-        window.addEventListener('offline', updateOnlineStatus);
-        updateOnlineStatus(); // Check on initial load
-    </script>
+    }
+
+    // ───── Demo ─────
+    document.getElementById('btn-demo').addEventListener('click', async () => {
+        const btn = document.getElementById('btn-demo');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner spinner-white"></span>Starting Demo...';
+        try {
+            const res = await fetch(`${BASE}/api/login/demo`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                localStorage.setItem('jomish_token', data.token);
+                localStorage.setItem('jomish_role', data.role);
+                localStorage.setItem('jomish_name', data.name);
+                localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
+                localStorage.setItem('jomish_user_id', data.user_id);
+                localStorage.setItem('jomish_prefix', data.prefix);
+                localStorage.setItem('jomish_demo', 'true');
+                window.location.href = 'index.html';
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Try Demo';
+            }
+        } catch (e) {
+            btn.disabled = false;
+            btn.textContent = 'Try Demo';
+        }
+    });
+
+    // ───── Online/Offline banner ─────
+    function updateOnlineStatus() {
+        document.getElementById('offline-banner').style.display = navigator.onLine ? 'none' : 'block';
+    }
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    updateOnlineStatus();
+
+    // ───── Reset URL params ─────
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('reset') === 'success') {
+        // Clear saved users on full reset
+        localStorage.removeItem(SAVED_USERS_KEY);
+    }
+
+    // ───── Init ─────
+    buildUserGrid();
+</script>
 </body>
 </html>
