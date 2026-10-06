@@ -3803,6 +3803,7 @@ function printReceipt(
   if (tbody) {
     tbody.innerHTML = "";
     items.forEach((i) => {
+      const qty = i.qty || 1;
       // Row 1: item name (full width, wraps freely)
       const trName = document.createElement("tr");
       trName.innerHTML = `
