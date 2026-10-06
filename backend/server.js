@@ -1680,6 +1680,14 @@ app.post(
           ["company_prefix", normalPrefix],
         );
 
+        // Also register this company in the public schema's companies table
+        await client.query(`SET search_path TO public`);
+        await client.query(
+          `INSERT INTO companies (prefix, name, status) VALUES ($1, $2, 'ACTIVE') ON CONFLICT (prefix) DO NOTHING`,
+          [normalPrefix, company_name]
+        );
+        await client.query(`SET search_path TO "${schemaName}", public`);
+
         // 3. Create the Admin account
         const defaultHash = await bcrypt.hash(password, 10);
         
