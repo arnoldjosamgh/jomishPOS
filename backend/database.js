@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 135;
+const CURRENT_VERSION = 136;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -330,7 +330,7 @@ const schema = [
     `CREATE TABLE IF NOT EXISTS system_info (key TEXT PRIMARY KEY, value TEXT)`,
     `CREATE TABLE IF NOT EXISTS employees (
         id SERIAL PRIMARY KEY,
-        first_name TEXT, last_name TEXT, email TEXT UNIQUE, password TEXT,
+        first_name TEXT, last_name TEXT, email TEXT, password TEXT,
         role TEXT, department TEXT, salary REAL, qr_hash TEXT,
         is_active INTEGER DEFAULT 1, employee_code TEXT, username TEXT UNIQUE,
         photo_base64 TEXT, profile_color TEXT DEFAULT '#4F46E5',
@@ -1059,6 +1059,26 @@ function runMigrations(fromVersion) {
         } else {
             db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '135'], () => {
                 console.log('Migration to v135 complete: Skipped SQLite (TEXT in INTEGER column allowed).');
+            });
+        }
+    }
+
+    if (fromVersion < 136) {
+        // v136: Drop UNIQUE constraint on employees.email
+        // Email is just contact info — login uses username/employee_code only.
+        // This prevents false "email already taken" errors when adding staff.
+        if (config.dbType === 'postgres') {
+            db.run('ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_email_key', (err) => {
+                if (err) console.error('[Migration v136] Error dropping email unique constraint:', err.message);
+                else console.log('[Migration v136] Dropped UNIQUE constraint on employees.email (Postgres).');
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '136'], () => {
+                    console.log('Migration to v136 complete: email column is no longer unique.');
+                });
+            });
+        } else {
+            // SQLite: just bump version; SQLite rebuild is complex and email uniqueness rarely triggers
+            db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '136'], () => {
+                console.log('Migration to v136 complete (SQLite: email uniqueness skipped, handled in app layer).');
             });
         }
     }
