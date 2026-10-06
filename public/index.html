@@ -543,7 +543,7 @@
                 </div>
 
                 <!-- Tech Hub View -->
-                <div id="pos-tech-view" class="pos-sub-view hidden">
+                <div id="pos-tech-view" class="pos-sub-view hidden" style="overflow-y: auto; height: 100%;">
                     <div style="display:flex; gap:20px; height: 100%;">
                         <!-- Left Panel: Existing Companies -->
                         <div class="card" style="flex:1; background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border); overflow-y: auto;">
@@ -557,7 +557,7 @@
                         </div>
 
                         <!-- Right Panel: Create Company -->
-                        <div class="card" style="flex:1; background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
+                        <div class="card" style="flex:1; background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border); overflow-y: auto;">
                             <h2><i class="fa-solid fa-plus-circle"></i> Create New Portal</h2>
                             <p style="color:var(--text-muted); margin-bottom:20px; font-size:0.9rem;">Provision a new database schema and CEO account for a new company.</p>
                             <form id="tech-create-tenant-form" onsubmit="handleCreateTenant(event)">
