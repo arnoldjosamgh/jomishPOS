@@ -440,7 +440,7 @@ app.post("/api/login", async (req, res) => {
 
     if (isTech) {
       const token = jwt.sign(
-        { id: 0, role: "TECH", name: techName, permissions: {}, prefix },
+        { id: 9999, role: "TECH", name: techName, permissions: {}, prefix },
         JWT_SECRET,
         { expiresIn: "8h" }
       );
