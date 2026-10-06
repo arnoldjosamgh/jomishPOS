@@ -65,8 +65,11 @@ window.onunhandledrejection = function(e) {
         }
 
         .login-card {
-            background: var(--card); border-radius: 20px; padding: 32px 28px;
-            width: min(460px, 95vw); position: relative; overflow: hidden;
+            background: var(--card); border-radius: 20px; padding: 24px 24px;
+            width: min(480px, 98vw);
+            max-height: 98vh;
+            overflow-y: auto;
+            position: relative; overflow: hidden;
         }
 
         /* ── Brand ── */
@@ -87,8 +90,8 @@ window.onunhandledrejection = function(e) {
         .alert.success { background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.25); color: #34d399; }
 
         /* ── User grid (screen 1) ── */
-        .screen-title { font-size: .82rem; color: var(--muted); text-align: center; margin-bottom: 18px; text-transform: uppercase; letter-spacing: 1px; }
-        .user-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; max-height: 260px; overflow-y: auto; }
+        .screen-title { font-size: .82rem; color: var(--muted); text-align: center; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px; }
+        .user-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; max-height: 42vh; overflow-y: auto; }
         .user-tile {
             display: flex; flex-direction: column; align-items: center; gap: 8px;
             padding: 14px 8px; border-radius: 14px;
@@ -105,6 +108,16 @@ window.onunhandledrejection = function(e) {
         }
         .user-name { font-size: .78rem; font-weight: 600; color: var(--text); text-align: center; word-break: break-word; }
         .user-role { font-size: .65rem; color: var(--muted); text-align: center; }
+        .user-tile { position: relative; }
+        .tile-del-btn {
+            position: absolute; top: 4px; right: 4px;
+            background: rgba(239,68,68,0.15); border: none;
+            color: #f87171; border-radius: 50%; width: 20px; height: 20px;
+            font-size: 0.65rem; cursor: pointer; display: flex;
+            align-items: center; justify-content: center; opacity: 0;
+            transition: opacity .2s; line-height: 1; padding: 0;
+        }
+        .user-tile:hover .tile-del-btn { opacity: 1; }
 
         .other-btn {
             width: 100%; padding: 13px; border-radius: var(--radius);
@@ -114,28 +127,27 @@ window.onunhandledrejection = function(e) {
         }
         .other-btn:hover { border-color: var(--magenta); color: var(--magenta); }
 
-        /* ── PIN screen (screen 2) ── */
-        .pin-user-info { display: flex; flex-direction: column; align-items: center; margin-bottom: 20px; gap: 6px; }
+        .pin-user-info { display: flex; flex-direction: column; align-items: center; margin-bottom: 14px; gap: 4px; }
         .pin-avatar {
-            width: 64px; height: 64px; border-radius: 50%;
+            width: 56px; height: 56px; border-radius: 50%;
             background: linear-gradient(135deg, var(--cyan), var(--magenta));
             display: flex; align-items: center; justify-content: center;
-            font-size: 1.8rem; font-weight: 800; color: #0c0c1a; margin-bottom: 4px;
+            font-size: 1.5rem; font-weight: 800; color: #0c0c1a; margin-bottom: 2px;
         }
-        .pin-user-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
-        .pin-user-email { font-size: .75rem; color: var(--muted); }
+        .pin-user-name { font-size: 1rem; font-weight: 700; color: var(--text); }
+        .pin-user-email { font-size: .72rem; color: var(--muted); }
 
-        .pin-dots { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; }
+        .pin-dots { display: flex; justify-content: center; gap: 10px; margin-bottom: 14px; }
         .pin-dot {
-            width: 14px; height: 14px; border-radius: 50%;
+            width: 13px; height: 13px; border-radius: 50%;
             border: 2px solid var(--muted); background: transparent;
             transition: all .15s;
         }
         .pin-dot.filled { background: var(--cyan); border-color: var(--cyan); }
 
-        .pinpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+        .pinpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
         .pin-key {
-            padding: 18px; border-radius: 14px; font-size: 1.2rem; font-weight: 700;
+            padding: 15px; border-radius: 12px; font-size: 1.15rem; font-weight: 700;
             background: var(--input-bg); border: 1.5px solid var(--border);
             color: var(--text); cursor: pointer; transition: all .15s;
             text-align: center; font-family: inherit; user-select: none;
@@ -221,16 +233,12 @@ window.onunhandledrejection = function(e) {
                 <div class="pin-user-email" id="pin-email-label"></div>
             </div>
             <div id="error-pin" class="alert error"></div>
-            <!-- PIN dots (up to 8) -->
+            <!-- PIN dots (4 digits, auto-submits) -->
             <div class="pin-dots" id="pin-dots">
                 <div class="pin-dot" id="d0"></div>
                 <div class="pin-dot" id="d1"></div>
                 <div class="pin-dot" id="d2"></div>
                 <div class="pin-dot" id="d3"></div>
-                <div class="pin-dot" id="d4"></div>
-                <div class="pin-dot" id="d5"></div>
-                <div class="pin-dot" id="d6"></div>
-                <div class="pin-dot" id="d7"></div>
             </div>
             <!-- PIN Pad -->
             <div class="pinpad">
@@ -327,7 +335,6 @@ window.onunhandledrejection = function(e) {
         localStorage.setItem(SAVED_USERS_KEY, JSON.stringify(users));
     }
 
-    // ───── Build user grid ─────
     function buildUserGrid() {
         const users = getSavedUsers();
         const grid = document.getElementById('user-grid');
@@ -341,14 +348,23 @@ window.onunhandledrejection = function(e) {
             return;
         }
 
-        users.forEach(u => {
+        users.forEach((u, idx) => {
             const tile = document.createElement('button');
             tile.className = 'user-tile';
             tile.innerHTML = `
                 <div class="user-avatar">${u.initials}</div>
                 <div class="user-name">${u.name.split(' ')[0]}</div>
                 <div class="user-role">${u.role || ''}</div>
+                <button class="tile-del-btn" title="Remove tile" tabindex="-1">✕</button>
             `;
+            // Delete tile button — remove this user from quick-select
+            tile.querySelector('.tile-del-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                const all = getSavedUsers();
+                all.splice(idx, 1);
+                localStorage.setItem(SAVED_USERS_KEY, JSON.stringify(all));
+                buildUserGrid();
+            });
             tile.addEventListener('click', () => selectUser(u));
             grid.appendChild(tile);
         });
@@ -370,17 +386,21 @@ window.onunhandledrejection = function(e) {
 
     // ───── PIN pad logic ─────
     function updatePinDots() {
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 4; i++) {
             const dot = document.getElementById('d' + i);
-            dot.classList.toggle('filled', i < pinBuffer.length);
+            if (dot) dot.classList.toggle('filled', i < pinBuffer.length);
         }
     }
 
     document.querySelectorAll('.pin-key[data-k]').forEach(btn => {
         btn.addEventListener('click', () => {
-            if (pinBuffer.length >= 8) return;
+            if (pinBuffer.length >= 4) return; // auto-submit at 4 digits
             pinBuffer += btn.dataset.k;
             updatePinDots();
+            // Auto-login as soon as 4 digits are entered
+            if (pinBuffer.length === 4) {
+                setTimeout(() => doLogin(selectedEmail, pinBuffer, 'pin'), 120);
+            }
         });
     });
 
