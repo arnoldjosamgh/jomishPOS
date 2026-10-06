@@ -3181,6 +3181,16 @@ async function stopProductScanner() {
 
 function addToCart(p, scannedBarcode = null) {
   const existing = posCart.find((i) => i.id === p.id);
+  
+  // Calculate what the stock will be after adding 1 more to the cart
+  const currentQtyInCart = existing ? existing.qty : 0;
+  const remainingAfterAdd = p.stock - currentQtyInCart - 1;
+  
+  // Check if remaining stock is hitting the warning threshold
+  if (remainingAfterAdd <= 10 && remainingAfterAdd >= 0) {
+    showToast(`Low Inventory Warning: Only ${remainingAfterAdd} remaining for ${p.name}`, "warning");
+  }
+
   if (existing) {
     if (existing.qty < p.stock) {
       existing.qty += 1;
@@ -3188,15 +3198,21 @@ function addToCart(p, scannedBarcode = null) {
         if (!existing.barcodes) existing.barcodes = [];
         existing.barcodes.push(scannedBarcode);
       }
+    } else {
+      showToast(`Cannot add ${p.name}. Out of stock!`, "error");
     }
   } else {
-    const item = { ...p, qty: 1 };
-    if (scannedBarcode && !isNaN(scannedBarcode)) {
-      item.barcodes = [scannedBarcode];
+    if (p.stock > 0) {
+      const item = { ...p, qty: 1 };
+      if (scannedBarcode && !isNaN(scannedBarcode)) {
+        item.barcodes = [scannedBarcode];
+      } else {
+        item.barcodes = [];
+      }
+      posCart.push(item);
     } else {
-      item.barcodes = [];
+      showToast(`Cannot add ${p.name}. Out of stock!`, "error");
     }
-    posCart.push(item);
   }
   renderCart();
 }
