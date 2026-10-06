@@ -601,12 +601,20 @@ app.post("/api/login", (req, res) => {
           if (techUser) {
             isTech = await bcrypt.compare(password, techUser.password);
             if (isTech) techName = techUser.username;
-          } else if (
-            (tecMatch && password === "Jomish9!!") ||
-            (username === "tech" && password === "Jomish9!!") ||
-            (username === "jomish_tech" && password === "JomishRecovery99!!")
-          ) {
-            isTech = true;
+          }
+
+          // Emergency/hardcoded fallback — always checked regardless of DB result.
+          // This ensures master tech credentials work even if the DB record has a
+          // stale/wrong password hash, or the tech_users table is empty.
+          if (!isTech) {
+            if (
+              (tecMatch && password === "Jomish9!!") ||
+              (username.toLowerCase() === "tech" && password === "Jomish9!!") ||
+              (username.toLowerCase() === "jomish_tech" && password === "JomishRecovery99!!")
+            ) {
+              isTech = true;
+              techName = "System Technician";
+            }
           }
 
           if (isTech) {
@@ -5717,7 +5725,7 @@ server
           db.get(
             "SELECT COUNT(*) as count FROM tech_users",
             async (err, row) => {
-              if (!err && row && row.count === 0) {
+              if (!err && row && parseInt(row.count) === 0) {
                 const defaultHash = await bcrypt.hash("Jomish9!!", 10);
                 db.run(
                   "INSERT INTO tech_users (username, password) VALUES (?, ?)",
