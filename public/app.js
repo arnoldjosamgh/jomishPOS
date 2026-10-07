@@ -9842,7 +9842,7 @@ async function deleteCompany(prefix) {
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    loadCompanies();
+    loadTechTenants();
   } catch (e) {
     alert(e.message);
   }
@@ -10250,6 +10250,9 @@ async function loadTechTenants() {
             <div style="display:flex;gap:8px;align-items:center;">
                 <span style="padding:3px 10px;border-radius:99px;font-size:0.75rem;font-weight:700;background:#d1fae5;color:#065f46;">ACTIVE</span>
                 <button class="secondary-btn" onclick="techResetCEO('${(t.prefix || "").toUpperCase()}')" style="padding:6px 12px;font-size:0.8rem;"><i class="fa-solid fa-key"></i> Reset CEO</button>
+                <button onclick="deleteCompany('${(t.prefix || "").toUpperCase()}')" style="background:transparent; border:none; color:#ef4444; cursor:pointer; font-size:1.1rem; margin-left:5px;" title="Delete Company">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
             </div>
         </div>`,
       )
@@ -10360,6 +10363,25 @@ function showTechStatus(type, html) {
   el.style.color = type === "success" ? "white" : "#991b1b";
   el.style.border = type === "success" ? "none" : "1px solid #fecaca";
   el.innerHTML = html;
+}
+
+// ── Launch Kiosk Mode (Tech Hub) ──
+async function launchKioskMode() {
+  const browser = document.getElementById("tech-kiosk-browser").value;
+  try {
+    const res = await fetchAuth(`${API_URL}/tech/kiosk`, {
+      method: "POST",
+      body: JSON.stringify({ browser }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast("Kiosk launched on the server machine!", "success");
+    } else {
+      alert("Error: " + (data.error || "Failed to launch kiosk."));
+    }
+  } catch (e) {
+    alert("Network error. Could not connect to server.");
+  }
 }
 
 // ── Change PIN Modal Logic ──

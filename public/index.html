@@ -614,6 +614,22 @@
                                 <button type="submit" class="primary-btn" style="width:100%; padding:12px; font-size:1.1rem;"><i class="fa-solid fa-rocket"></i> Provision Portal</button>
                             </form>
                             <div id="tech-create-status" style="margin-top:20px; padding:15px; border-radius:6px; display:none;"></div>
+                            
+                            <hr style="border:none; border-top:1px solid var(--border); margin: 30px 0;">
+
+                            <h2><i class="fa-solid fa-desktop"></i> Launch POS Kiosk</h2>
+                            <p style="color:var(--text-muted); margin-bottom:15px; font-size:0.9rem;">
+                                Start the POS on this PC in full-screen silent printing mode. 
+                                <br><small>Note: Windows will automatically use your default printer.</small>
+                            </p>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label style="display:block; margin-bottom:5px; font-weight:600;">Select Browser</label>
+                                <select id="tech-kiosk-browser" style="width:100%; padding:10px; border-radius:6px; border:1px solid var(--border); background:var(--input-bg); color:var(--text);">
+                                    <option value="chrome">Google Chrome</option>
+                                    <option value="msedge">Microsoft Edge</option>
+                                </select>
+                            </div>
+                            <button onclick="launchKioskMode()" class="secondary-btn" style="width:100%; padding:12px; font-size:1rem;"><i class="fa-solid fa-play"></i> Start Kiosk Mode</button>
                         </div>
                     </div>
                 </div>

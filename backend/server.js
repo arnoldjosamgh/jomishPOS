@@ -5651,6 +5651,30 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
   res.json({ syncedIds, errors });
 });
 
+const { spawn } = require("child_process");
+app.post("/api/tech/kiosk", authenticateToken, (req, res) => {
+  const _role = (req.user.role || "").toLowerCase();
+  if (_role !== "tech" && req.user.name !== "System Technician") {
+    return res.status(403).json({ error: "Forbidden: Tech access required" });
+  }
+
+  const { browser } = req.body;
+  const targetBrowser = browser === "msedge" ? "msedge" : "chrome";
+  
+  // Note: Windows defaults to chrome.exe / msedge.exe being in the PATH, or standard shell execute resolves them.
+  // Using shell: true so `start chrome ...` works natively on Windows.
+  const command = `start ${targetBrowser} --kiosk-printing --app=http://localhost:${PORT}`;
+  
+  const child = spawn(command, { shell: true });
+  
+  child.on('error', (err) => {
+    console.error("Failed to start kiosk process:", err);
+    return res.status(500).json({ error: "Failed to launch browser: " + err.message });
+  });
+
+  res.json({ message: "Kiosk mode launched on server machine." });
+});
+
 // Start Server
 io.on("connection", (socket) => {
 });
