@@ -6962,14 +6962,37 @@ function autoRedirect() {
 }
 
 async function handleLogout() {
-  if (!confirm("Are you sure you want to logout?")) return;
+  // Use custom modal instead of confirm() — native dialogs may be blocked in Electron/kiosk
+  const confirmed = await new Promise((resolve) => {
+    // Create overlay
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;";
+
+    const box = document.createElement("div");
+    box.style.cssText = "background:var(--surface,#fff);border-radius:12px;padding:28px 32px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.25);min-width:260px;";
+    box.innerHTML = `
+      <p style="font-size:1.05rem;font-weight:600;margin-bottom:18px;color:var(--text,#222);">Are you sure you want to logout?</p>
+      <div style="display:flex;gap:12px;justify-content:center;">
+        <button id="_logout-yes" style="padding:8px 22px;background:#ef4444;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:0.97rem;">Yes, Logout</button>
+        <button id="_logout-no" style="padding:8px 22px;background:var(--border,#e5e7eb);color:var(--text,#222);border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:0.97rem;">Cancel</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    overlay.querySelector("#_logout-yes").onclick = () => { document.body.removeChild(overlay); resolve(true); };
+    overlay.querySelector("#_logout-no").onclick  = () => { document.body.removeChild(overlay); resolve(false); };
+    overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(false); } };
+  });
+
+  if (!confirmed) return;
   try {
     await fetch(`${API_URL}/logout`, { method: "POST" });
   } catch (e) {}
   localStorage.removeItem("jomish_token");
   localStorage.removeItem("jomish_role");
   localStorage.removeItem("jomish_name");
-  location.reload();
+  localStorage.removeItem("jomish_permissions");
+  location.replace("login.html");
 }
 
 async function validateSession() {
