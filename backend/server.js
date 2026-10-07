@@ -5686,6 +5686,16 @@ server
       console.error("[SEED] Failed to seed demo tenant:", err),
     );
 
+    // Ensure all existing tenant schemas have all tables (runs missing CREATE TABLE IF NOT EXISTS)
+    // This fixes "relation does not exist" errors after new tables are added to the schema.
+    if (db.ensureAllTenantSchemas) {
+      db.ensureAllTenantSchemas().then(() => {
+        console.log("[MIGRATE] All tenant schema migrations complete.");
+      }).catch(err => {
+        console.error("[MIGRATE] Startup migration error:", err.message);
+      });
+    }
+
     // Initialize global tech_users table
     asyncLocalStorage.run("public", () => {
       let execSql = `CREATE TABLE IF NOT EXISTS tech_users (

@@ -155,6 +155,49 @@ if (config.dbType === 'postgres') {
         }
         return schemaName;
     };
+
+    // ── Startup migration: ensure all existing t_* schemas have every table ──
+    // This fixes "relation does not exist" errors when new tables are added to
+    // the schema array after companies were already provisioned.
+    db.ensureAllTenantSchemas = async function() {
+        let client;
+        try {
+            client = await pool.connect();
+            const result = await client.query(
+                `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\' ORDER BY schema_name`
+            );
+            const tenantSchemas = result.rows.map(r => r.schema_name);
+            client.release();
+            client = null;
+
+            for (const schemaName of tenantSchemas) {
+                let c2;
+                try {
+                    c2 = await pool.connect();
+                    await c2.query(`SET search_path TO "${schemaName}", public`);
+                    for (const sql of schema) {
+                        try {
+                            await c2.query(translateSql(sql));
+                        } catch (e) {
+                            // ignore "already exists" type errors, log others
+                            if (!e.message.includes('already exists')) {
+                                console.warn(`[MIGRATE] ${schemaName} - ${e.message.split('\n')[0]}`);
+                            }
+                        }
+                    }
+                    console.log(`[MIGRATE] Schema "${schemaName}" tables verified OK.`);
+                } catch (e) {
+                    console.error(`[MIGRATE] Failed to migrate "${schemaName}":`, e.message);
+                } finally {
+                    if (c2) c2.release();
+                }
+            }
+        } catch (e) {
+            console.error('[MIGRATE] ensureAllTenantSchemas failed:', e.message);
+            if (client) client.release();
+        }
+    };
+
     console.log('Using PostgreSQL database at', config.postgres.host);
 } else {
     // Guard: if sqlite3 failed to load (e.g. native compile error on Linux/Railway),
@@ -266,6 +309,22 @@ if (config.dbType === 'postgres') {
 
                     console.log('[DB] SQLite schema provisioned for company prefix ' + prefix + ' -> data/jomish_t' + safePrefix + '.db');
                     return schemaName;
+                };
+            }
+            if (method === 'ensureAllTenantSchemas') {
+                // In SQLite mode, each company .db already gets initDb() run when opened.
+                // For companies loaded from existing .db files, initDb is called on openSqliteDb.
+                // Return a no-op async function — nothing to do here.
+                return async function() {
+                    const dataDir = path.join(process.pkg ? process.cwd() : path.join(__dirname, '..'), 'data');
+                    if (!fs.existsSync(dataDir)) return;
+                    const files = fs.readdirSync(dataDir).filter(f => f.startsWith('jomish_t') && f.endsWith('.db'));
+                    for (const file of files) {
+                        const prefix = file.replace('jomish_', '').replace('.db', '');
+                        openSqliteDb(prefix);
+                        await new Promise(resolve => asyncLocalStorage.run(prefix, () => { initDb(); setTimeout(resolve, 500); }));
+                        console.log(`[MIGRATE] SQLite schema for "${prefix}" verified.`);
+                    }
                 };
             }
             return (...args) => {
