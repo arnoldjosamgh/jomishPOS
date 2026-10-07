@@ -3531,7 +3531,7 @@ app.get("/api/finance/summary", authenticateToken, (req, res) => {
   const monthStart = today.substring(0, 7) + "-01";
 
   db.all(
-    "SELECT amount, type, transaction_date FROM transactions",
+    "SELECT amount, type, transaction_date, payment_status FROM transactions",
     [],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -3549,22 +3549,25 @@ app.get("/api/finance/summary", authenticateToken, (req, res) => {
         const txDate = toEAT(tx.transaction_date);
         const amt = parseFloat(tx.amount) || 0;
 
-        if (tx.type === "INCOME") totalIncome += amt;
-        else totalExpense += amt;
+        // Only count INCOME if it is actually PAID (ignore PENDING COD/Invoices)
+        const isIncomePaid = tx.type === "INCOME" && tx.payment_status !== "PENDING";
+        
+        if (isIncomePaid) totalIncome += amt;
+        else if (tx.type === "EXPENSE") totalExpense += amt;
 
         if (!txDate) return;
 
         if (txDate === today) {
-          if (tx.type === "INCOME") todayIncome += amt;
-          else todayExpense += amt;
+          if (isIncomePaid) todayIncome += amt;
+          else if (tx.type === "EXPENSE") todayExpense += amt;
         }
         if (txDate >= weekAgo) {
-          if (tx.type === "INCOME") weekIncome += amt;
-          else weekExpense += amt;
+          if (isIncomePaid) weekIncome += amt;
+          else if (tx.type === "EXPENSE") weekExpense += amt;
         }
         if (txDate >= monthStart) {
-          if (tx.type === "INCOME") monthIncome += amt;
-          else monthExpense += amt;
+          if (isIncomePaid) monthIncome += amt;
+          else if (tx.type === "EXPENSE") monthExpense += amt;
         }
       });
 

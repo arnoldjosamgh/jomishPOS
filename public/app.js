@@ -3773,6 +3773,7 @@ async function getInvoice() {
       loadPOSProducts();
       loadDashboard();
       loadTransactions();
+      if (typeof loadPendingCOD === "function") loadPendingCOD();
     } else {
       const data = await res.json();
       alert("Error: " + data.error);
