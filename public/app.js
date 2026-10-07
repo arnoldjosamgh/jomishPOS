@@ -282,7 +282,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // If this is the global TECH user — show Tech Hub tab, redirect there, hide normal tabs
   const _techUser = localStorage.getItem("jomish_prefix");
   const _isTechUser =
-    (!_techUser || _techUser.toLowerCase() === "public") && USER_ROLE === "TECH";
+    (!_techUser || _techUser.toLowerCase() === "public") && (USER_ROLE || "").toUpperCase() === "TECH";
   if (_isTechUser) {
     const techBtn = document.getElementById("pos-nav-tech");
     if (techBtn) {
@@ -1764,7 +1764,7 @@ function enforceRBAC() {
   // Only the global TECH login (prefix = 'public') gets Tech Hub access — not company-level users
   const _storedPrefix = localStorage.getItem("jomish_prefix");
   const isTech =
-    USER_ROLE === "TECH" && (!_storedPrefix || _storedPrefix === "public");
+    (USER_ROLE || "").toUpperCase() === "TECH" && (!_storedPrefix || _storedPrefix === "public");
   const isDemo = localStorage.getItem("jomish_demo") === "true";
 
   // ── STRICT ROLE MAPS ─────────────────────────────────────────────────────
@@ -2019,11 +2019,13 @@ function enforceRBAC() {
   const isCashier = role === "CASHIER";
 
   const isPureTech = uRole === "TECH" && isTech; // global system technician only
+  const isManager = role === "MANAGER";
+
   const posNavMap = {
-    "pos-nav-register": isCashier && !isPureTech,                               // Cashier ONLY
-    "pos-nav-stock":    (isAdminLike || isHRRole) && !isPureTech,               // CEO/Manager/Admin/HR only
+    "pos-nav-register": (isAdminLike || isCashier) && !isManager && !isPureTech,
+    "pos-nav-stock":    (isAdminLike || isHRRole) && !isPureTech,
     "pos-nav-expenses": (isAdminLike || isHRRole || isSupervisor) && !isPureTech,
-    "pos-nav-credits":  (isAdminLike || isHRRole) && !isPureTech,
+    "pos-nav-credits":  (isAdminLike || isHRRole || isCashier) && !isPureTech,
     "pos-nav-finance":  (isAdminLike || isHRRole || isSupervisor || isCashier) && !isPureTech,
     "pos-nav-hr":       (isAdminLike || isHRRole) && !isPureTech,
     "pos-nav-tech":     isPureTech,                                              // Tech ONLY
@@ -2031,7 +2033,13 @@ function enforceRBAC() {
 
   Object.entries(posNavMap).forEach(([id, visible]) => {
     const btn = document.getElementById(id);
-    if (btn) btn.style.display = visible ? "" : "none";
+    if (btn) {
+      if (visible) {
+        btn.style.display = id === "pos-nav-tech" ? "flex" : "block";
+      } else {
+        btn.style.display = "none";
+      }
+    }
   });
 
   // Show/Hide buying price inputs (Admin/CEO/Manager/HR only)
@@ -2070,7 +2078,7 @@ function enforceRBAC() {
   if (isCashier && !isTech) {
     setTimeout(() => switchPOSView("register"), 150);
   } else if (isSupervisor && !isTech) {
-    setTimeout(() => switchPOSView("finance"), 150);
+    setTimeout(() => switchPOSView("expenses"), 150);
   }
 }
 
@@ -6613,13 +6621,15 @@ async function handleEditProduct(e) {
   const duplicate = cachedProducts.find((p) => {
     if (p.id === currentId) return false; // Skip self
     const existingBarcode = (p.barcode || "").toString().trim().toLowerCase();
-    return existingBarcode === newBarcode;
+    return newBarcode !== "" && existingBarcode === newBarcode;
   });
 
   if (duplicate) {
     alert(
       `Duplicate Barcode: This barcode is already assigned to '${duplicate.name}'.`,
     );
+    btn.textContent = originalText;
+    btn.disabled = false;
     return;
   }
 

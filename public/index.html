@@ -334,13 +334,13 @@
                     <div id="pos-toolbar">
                         <span id="pos-toolbar-title"><i class="fa-solid fa-cash-register"></i> JomishPOS</span>
                         <div id="pos-tab-bar">
-                            <button id="pos-nav-register" class="pos-tab active"><i class="fa-solid fa-cash-register"></i> Register</button>
-                            <button id="pos-nav-stock" class="pos-tab"><i class="fa-solid fa-box"></i> Inventory</button>
-                            <button id="pos-nav-expenses" class="pos-tab"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
-                            <button id="pos-nav-credits" class="pos-tab"><i class="fa-solid fa-handshake"></i> Credits</button>
+                            <button id="pos-nav-register" class="pos-tab active" onclick="switchPOSView('register')"><i class="fa-solid fa-cash-register"></i> Register</button>
+                            <button id="pos-nav-stock" class="pos-tab" onclick="switchPOSView('stock')"><i class="fa-solid fa-box"></i> Inventory</button>
+                            <button id="pos-nav-expenses" class="pos-tab" onclick="switchPOSView('expenses')"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
+                            <button id="pos-nav-credits" class="pos-tab" onclick="switchPOSView('credits')"><i class="fa-solid fa-handshake"></i> Credits</button>
                             <button id="pos-nav-finance" class="pos-tab pos-tab-finance" onclick="toggleSmeFinanceMode()"><i class="fa-solid fa-sack-dollar"></i> Finance Hub</button>
-                            <button id="pos-nav-hr" class="pos-tab pos-tab-hr"><i class="fa-solid fa-users"></i> Staff / HR</button>
-                            <button id="pos-nav-tech" class="pos-tab-tech" style="display:none;"><i class="fa-solid fa-server"></i> Tech Hub</button>
+                            <button id="pos-nav-hr" class="pos-tab pos-tab-hr" onclick="switchPOSView('hr')"><i class="fa-solid fa-users"></i> Staff / HR</button>
+                            <button id="pos-nav-tech" class="pos-tab-tech" style="display:none;" onclick="switchPOSView('tech')"><i class="fa-solid fa-server"></i> Tech Hub</button>
                         </div>
                         <div id="pos-search-wrap">
                             <i class="fa-solid fa-magnifying-glass"></i>
@@ -432,7 +432,6 @@
                                     <button class="num-key del-key" onclick="numpadPress('⌫')">⌫</button>
                                     <button class="num-key exact-key" onclick="numpadExact()" style="grid-column: span 3;">EXACT</button>
                                 </div>
-                                <button id="btn-get-invoice" class="secondary-btn checkout-btn" style="margin-top:10px; background:var(--surface); border:1px solid var(--border); color:var(--text); width:100%; padding:14px; font-weight:700; border-radius:8px; display:flex; justify-content:center; align-items:center; gap:8px;" onclick="getInvoice()"><i class="fa-solid fa-file-invoice"></i> SAVE UNPAID INVOICE</button>
                                 <button id="btn-confirm-pay" class="primary-btn checkout-btn" style="margin-top:10px;" onclick="confirmPayment()"><i class="fa-solid fa-check"></i> CONFIRM PAYMENT</button>
                             </div>
                         </div>
@@ -1320,6 +1319,6 @@
     </div>
 
     <script src="offline-db.js?v=2"></script>
-    <script src="app.js?v=32"></script>
+    <script src="app.js?v=33"></script>
 </body>
 </html>

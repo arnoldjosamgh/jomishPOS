@@ -915,14 +915,11 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
             // Username IS the employee_code — no manual username needed
             const auto_username = auto_employee_code;
 
-            // Force the first user to be the Admin (CEO)
-            const finalRole = num === 0 ? "CEO" : role;
-
             // Helper: do the actual INSERT and call done(err, ctx)
             function doInsert(emailVal, done) {
               db.run(
                 "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [first_name, last_name, emailVal, auto_username, finalRole, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
+                [first_name, last_name, emailVal, auto_username, role, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
                 function(err) { done(err, this); }
               );
             }
