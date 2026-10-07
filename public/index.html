@@ -334,7 +334,7 @@
                     <div id="pos-toolbar">
                         <span id="pos-toolbar-title"><i class="fa-solid fa-cash-register"></i> JomishPOS</span>
                         <div id="pos-tab-bar">
-                            <button id="pos-nav-register" class="pos-tab active" onclick="switchPOSView('register')"><i class="fa-solid fa-cash-register"></i> Register</button>
+                            <button id="pos-nav-register" class="pos-tab hidden" style="display: none;" onclick="switchPOSView('register')"><i class="fa-solid fa-cash-register"></i> Register</button>
                             <button id="pos-nav-stock" class="pos-tab" onclick="switchPOSView('stock')"><i class="fa-solid fa-box"></i> Inventory</button>
                             <button id="pos-nav-expenses" class="pos-tab" onclick="switchPOSView('expenses')"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
                             <button id="pos-nav-credits" class="pos-tab" onclick="switchPOSView('credits')"><i class="fa-solid fa-handshake"></i> Credits</button>
@@ -350,7 +350,7 @@
                 </header>
 
                 <!-- Sales Register View -->
-                <div id="pos-register-view" class="pos-sub-view">
+                <div id="pos-register-view" class="pos-sub-view hidden" style="display: none;">
                     <div class="pos-layout">
                         <!-- Products Grid -->
                         <div class="products-grid" id="pos-products">
@@ -1320,6 +1320,6 @@
     </div>
 
     <script src="offline-db.js?v=2"></script>
-    <script src="app.js?v=33"></script>
+    <script src="app.js?v=34"></script>
 </body>
 </html>
