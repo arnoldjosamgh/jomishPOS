@@ -5223,9 +5223,14 @@ window.printCashierReport = function(start, end, cashierLabel) {
     .sub { font-size: 10px; color: #444; margin-top: 1px; }
     .divider { border-top: 1px dashed #888; margin: 5px 0; }
     .divider-solid { border-top: 1px solid #000; margin: 5px 0; }
-    table { width: 100%; border-collapse: collapse; }
-    td { font-size: 10px; vertical-align: middle; }
-    .total-row { font-weight: bold; font-size: 11px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    td, th { font-size: 10px; vertical-align: middle; width: 50%; }
+    th { text-align: left; padding: 2px 4px; }
+    th:last-child { text-align: right; }
+    td { padding: 2px 4px; border-bottom: 1px solid #ddd; }
+    td:last-child { text-align: right; font-weight: bold; }
+    .total-row td { border-bottom: none; font-weight: bold; font-size: 11px; padding: 3px 4px; }
+    .net-row td { border-top: 1px solid #000; font-weight: bold; font-size: 12px; padding: 3px 4px; }
     .footer { text-align: center; font-size: 9px; color: #555; margin-top: 8px; border-top: 1px dashed #888; padding-top: 4px; }
   </style>
 </head>
@@ -5247,17 +5252,17 @@ window.printCashierReport = function(start, end, cashierLabel) {
   <table>
     <thead>
       <tr style="border-bottom:1px solid #000;">
-        <th style="text-align:left;padding:2px 4px;font-size:10px;">RCPT #</th>
-        <th style="text-align:right;padding:2px 4px;font-size:10px;">Amount</th>
+        <th>RCPT #</th>
+        <th style="text-align:right;">Amount</th>
       </tr>
     </thead>
     <tbody>${rows || '<tr><td colspan="2" style="text-align:center;padding:6px;">No transactions.</td></tr>'}</tbody>
-  </table>
-  <div class="divider-solid"></div>
-  <table>
-    <tr class="total-row"><td>Total Income:</td><td style="text-align:right;color:#000;">+UGX ${totalIncome.toLocaleString()}</td></tr>
-    <tr class="total-row"><td>Total Expense:</td><td style="text-align:right;">-UGX ${totalExpense.toLocaleString()}</td></tr>
-    <tr style="font-weight:bold;font-size:12px;border-top:1px solid #000;"><td>NET:</td><td style="text-align:right;">UGX ${grandNet.toLocaleString()}</td></tr>
+    <tbody>
+      <tr><td colspan="2" style="padding:0;border:none;"><div class="divider-solid" style="margin:4px 0;"></div></td></tr>
+      <tr class="total-row"><td>Total Income:</td><td>+UGX ${totalIncome.toLocaleString()}</td></tr>
+      <tr class="total-row"><td>Total Expense:</td><td>-UGX ${totalExpense.toLocaleString()}</td></tr>
+      <tr class="net-row"><td>NET:</td><td>UGX ${grandNet.toLocaleString()}</td></tr>
+    </tbody>
   </table>
   <div class="footer">
     <div>Printed: ${new Date().toLocaleString("en-UG", {timeZone:"Africa/Kampala"})}</div>
