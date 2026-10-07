@@ -248,8 +248,9 @@ app.use((req, res, next) => {
     }
   }
 
+  const safePrefix = prefix.toLowerCase();
   const schemaName =
-    prefix === "public" ? "public" : "t_" + prefix.toLowerCase();
+    (safePrefix === "public" || safePrefix === "demo") ? safePrefix : "t_" + safePrefix;
 
   db.asyncLocalStorage.run(schemaName, () => {
     next();
@@ -3878,7 +3879,8 @@ app.get("/api/devices", authenticateToken, (req, res) => {
     return res.status(403).json({ error: "Access denied. HR only." });
   }
   const userPrefix = req.user.prefix;
-  const companySchema = userPrefix ? "t_" + userPrefix.toLowerCase() : "public";
+  const safeP = (userPrefix || "").toLowerCase();
+  const companySchema = (!safeP || safeP === "public" || safeP === "demo") ? safeP || "public" : "t_" + safeP;
   db.all(
     "SELECT * FROM devices WHERE company_schema = ? ORDER BY last_seen DESC",
     [companySchema],
@@ -3895,7 +3897,8 @@ app.post("/api/devices/logout", authenticateToken, (req, res) => {
   }
   const { device_id } = req.body;
   const userPrefix = req.user.prefix;
-  const companySchema = userPrefix ? "t_" + userPrefix.toLowerCase() : "public";
+  const safeP2 = (userPrefix || "").toLowerCase();
+  const companySchema = (!safeP2 || safeP2 === "public" || safeP2 === "demo") ? safeP2 || "public" : "t_" + safeP2;
   // Ensure device belongs to the same company before deleting
   db.run(
     `DELETE FROM devices WHERE device_id = ? AND company_schema = ?`,
