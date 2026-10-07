@@ -280,9 +280,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // If this is the global TECH user — show Tech Hub tab, redirect there, hide normal tabs
-  const _techUser = localStorage.getItem("jomish_prefix");
+  const _techUser = (localStorage.getItem("jomish_prefix") || "").toLowerCase();
   const _isTechUser =
-    (!_techUser || _techUser.toLowerCase() === "public") && (USER_ROLE || "").toUpperCase() === "TECH";
+    (!_techUser || _techUser === "public") && (USER_ROLE || "").toUpperCase() === "TECH";
   if (_isTechUser) {
     const techBtn = document.getElementById("pos-nav-tech");
     if (techBtn) {
@@ -1762,7 +1762,7 @@ function enforceRBAC() {
   const navTechHub = document.querySelector('[data-target="tech-hub"]');
 
   // Only the global TECH login (prefix = 'public') gets Tech Hub access — not company-level users
-  const _storedPrefix = localStorage.getItem("jomish_prefix");
+  const _storedPrefix = (localStorage.getItem("jomish_prefix") || "").toLowerCase();
   const isTech =
     (USER_ROLE || "").toUpperCase() === "TECH" && (!_storedPrefix || _storedPrefix === "public");
   const isDemo = localStorage.getItem("jomish_demo") === "true";
