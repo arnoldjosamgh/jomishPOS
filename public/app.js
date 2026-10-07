@@ -632,7 +632,7 @@ function initNavigation() {
             } else if (_role === "SUPERVISOR" || _role === "HR") {
               switchPOSView("expenses");   // Supervisor/HR → Expenses
             } else {
-              switchPOSView("register");   // Cashier / Tech → Register
+              switchPOSView("register");   // Cashier → Register
             }
           }
           if (targetId === "hr-mgmt") {
@@ -2126,7 +2126,7 @@ function enforceRBAC() {
 
   // Default POS landing view per role
   if (isTech) {
-    setTimeout(() => switchPOSView("register"), 150);   // Tech → Register (full access)
+    setTimeout(() => switchPOSView("tech"), 150);       // Tech → Tech Hub
   } else if (isAdminLike) {
     setTimeout(() => switchPOSView("finance"), 150);    // CEO/Admin/Manager → Finance Hub
   } else if (isSupervisor || isHRRole) {
