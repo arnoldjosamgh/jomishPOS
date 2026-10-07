@@ -1484,10 +1484,11 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
   db.all(
     `
         SELECT t.*, 
-               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name
+               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name,
+               ROW_NUMBER() OVER (ORDER BY t.transaction_date ASC, t.id ASC) AS row_num
         FROM transactions t 
         LEFT JOIN employees e ON t.recorded_by = e.id 
-        ORDER BY t.transaction_date DESC
+        ORDER BY t.transaction_date DESC, t.id DESC
     `,
     [],
     (err, rows) => {
@@ -2973,7 +2974,8 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   if (!start_date || !end_date)
     return res.status(400).json({ error: "Start and end dates required" });
 
-  let sql = `
+  const summaryParams = [start_date, end_date + " 23:59:59"];
+  let summarySql = `
         SELECT 
             t.recorded_by,
             CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
@@ -2985,18 +2987,28 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
         LEFT JOIN employees e ON t.recorded_by = e.id
         WHERE t.transaction_date >= ? AND t.transaction_date <= ?
     `;
-  const params = [start_date, end_date + " 23:59:59"];
+  if (cashier_id) { summarySql += ` AND t.recorded_by = ?`; summaryParams.push(cashier_id); }
+  summarySql += ` GROUP BY t.recorded_by, e.nickname, e.first_name, e.last_name ORDER BY total_income DESC`;
 
-  if (cashier_id) {
-    sql += ` AND t.recorded_by = ?`;
-    params.push(cashier_id);
-  }
+  const detailParams = [start_date, end_date + " 23:59:59"];
+  let detailSql = `
+        SELECT 
+            t.id, t.transaction_date, t.amount, t.type, t.description, t.payment_status,
+            ROW_NUMBER() OVER (ORDER BY t.transaction_date ASC, t.id ASC) AS row_num,
+            CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name
+        FROM transactions t
+        LEFT JOIN employees e ON t.recorded_by = e.id
+        WHERE t.transaction_date >= ? AND t.transaction_date <= ?
+    `;
+  if (cashier_id) { detailSql += ` AND t.recorded_by = ?`; detailParams.push(cashier_id); }
+  detailSql += ` ORDER BY t.transaction_date ASC, t.id ASC`;
 
-  sql += ` GROUP BY t.recorded_by, e.nickname, e.first_name, e.last_name ORDER BY total_income DESC`;
-
-  db.all(sql, params, (err, rows) => {
+  db.all(summarySql, summaryParams, (err, summaryRows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ reports: rows });
+    db.all(detailSql, detailParams, (err2, detailRows) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      res.json({ reports: summaryRows, transactions: detailRows || [] });
+    });
   });
 });
 

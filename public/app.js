@@ -4889,7 +4889,7 @@ async function loadTransactions(searchTerm = "") {
 
     filtered.forEach((tx) => {
       const color = tx.type === "INCOME" ? "var(--success)" : "var(--danger)";
-      const receiptNo = String(tx.id).padStart(4, "0");
+      const receiptNo = String(tx.row_num || tx.id).padStart(4, "0");
       const tr = document.createElement("tr");
 
       // Payment method badge based on type & description
@@ -5049,6 +5049,7 @@ async function loadCashierReport() {
   const start = document.getElementById("report-start-date").value;
   const end = document.getElementById("report-end-date").value;
   const cashierId = document.getElementById("report-cashier-select").value;
+  const cashierLabel = document.getElementById("report-cashier-select").options[document.getElementById("report-cashier-select").selectedIndex]?.text || "All Cashiers";
 
   if (!start || !end) {
     showToast("Please select both start and end dates.", "error");
@@ -5063,36 +5064,150 @@ async function loadCashierReport() {
     if (!res.ok) throw new Error("Failed to load report");
     const data = await res.json();
 
+    // ── SUMMARY TABLE ──
     const tbody = document.querySelector("#cashier-report-table tbody");
     tbody.innerHTML = "";
 
     if (!data.reports || data.reports.length === 0) {
       tbody.innerHTML =
         '<tr><td colspan="6" style="text-align:center; padding:20px; color:var(--text-muted);">No records found in this period.</td></tr>';
-      return;
+    } else {
+      data.reports.forEach((rep) => {
+        const tr = document.createElement("tr");
+        const inc = parseFloat(rep.total_income) || 0;
+        const exp = parseFloat(rep.total_expense) || 0;
+        const net = inc - exp;
+        const netColor = net >= 0 ? "var(--success)" : "var(--danger)";
+        tr.innerHTML = `
+                  <td style="font-weight:bold;">${rep.cashier_name || "System Technician"}</td>
+                  <td style="text-align:center;">${rep.income_count || 0}</td>
+                  <td style="text-align:center;">${rep.expense_count || 0}</td>
+                  <td style="text-align:right; color:var(--success);">UGX ${inc.toLocaleString()}</td>
+                  <td style="text-align:right; color:var(--danger);">UGX ${exp.toLocaleString()}</td>
+                  <td style="text-align:right; font-weight:bold; color:${netColor};">UGX ${net.toLocaleString()}</td>
+              `;
+        tbody.appendChild(tr);
+      });
     }
 
-    data.reports.forEach((rep) => {
-      const tr = document.createElement("tr");
-      const inc = rep.total_income || 0;
-      const exp = rep.total_expense || 0;
-      const net = inc - exp;
-      const netColor = net >= 0 ? "var(--success)" : "var(--danger)";
-      tr.innerHTML = `
-                <td style="font-weight:bold;">${rep.cashier_name || "System Technician"}</td>
-                <td style="text-align:center;">${rep.income_count || 0}</td>
-                <td style="text-align:center;">${rep.expense_count || 0}</td>
-                <td style="text-align:right; color:var(--success);">UGX ${inc.toLocaleString()}</td>
-                <td style="text-align:right; color:var(--danger);">UGX ${exp.toLocaleString()}</td>
-                <td style="text-align:right; font-weight:bold; color:${netColor};">UGX ${net.toLocaleString()}</td>
-            `;
-      tbody.appendChild(tr);
+    // ── DETAIL TRANSACTIONS ──
+    let detailContainer = document.getElementById("cashier-report-detail");
+    if (!detailContainer) {
+      detailContainer = document.createElement("div");
+      detailContainer.id = "cashier-report-detail";
+      document.getElementById("sme-view-reports").appendChild(detailContainer);
+    }
+
+    const txList = data.transactions || [];
+    const totalIncome = txList.filter(t => t.type === "INCOME").reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+    const totalExpense = txList.filter(t => t.type !== "INCOME").reduce((s, t) => s + parseFloat(t.amount || 0), 0);
+    const grandNet = totalIncome - totalExpense;
+
+    let txRows = "";
+    txList.forEach((tx) => {
+      const color = tx.type === "INCOME" ? "#10b981" : "#ef4444";
+      const sign = tx.type === "INCOME" ? "+" : "-";
+      const rn = String(tx.row_num || tx.id).padStart(4, "0");
+      txRows += `
+        <tr>
+          <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">RCPT-${rn}</td>
+          <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${formatDisplayDate(tx.transaction_date, true)}</td>
+          <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${tx.cashier_name || "—"}</td>
+          <td style="padding:6px 8px; border-bottom:1px solid var(--border);">${tx.description || "—"}</td>
+          <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-weight:bold; color:${color}; text-align:right;">${sign}UGX ${Number(tx.amount || 0).toLocaleString()}</td>
+        </tr>`;
     });
+
+    const netColor2 = grandNet >= 0 ? "#10b981" : "#ef4444";
+    detailContainer.innerHTML = `
+      <div style="margin-top:24px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <h3 style="margin:0; font-size:1rem; color:var(--text);">
+          <i class="fa-solid fa-list"></i> Transactions — ${start} to ${end} &nbsp;|&nbsp; ${cashierLabel}
+          <span style="font-size:0.8rem; color:var(--text-muted); margin-left:8px;">${txList.length} records</span>
+        </h3>
+        <button onclick="printCashierReport('${start}','${end}','${cashierLabel}')" class="primary-btn" style="padding:8px 18px; font-size:0.85rem;">
+          <i class="fa-solid fa-print"></i> Print Report
+        </button>
+      </div>
+      <div style="overflow-x:auto; margin-top:12px;">
+        <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+          <thead>
+            <tr style="background:var(--primary); color:white;">
+              <th style="padding:8px; text-align:left;">RCPT #</th>
+              <th style="padding:8px; text-align:left;">Date & Time</th>
+              <th style="padding:8px; text-align:left;">Cashier</th>
+              <th style="padding:8px; text-align:left;">Description</th>
+              <th style="padding:8px; text-align:right;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>${txRows || '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted);">No transactions in this period.</td></tr>'}</tbody>
+          <tfoot>
+            <tr style="background:var(--surface); font-weight:bold; border-top:2px solid var(--primary);">
+              <td colspan="3" style="padding:8px;"></td>
+              <td style="padding:8px; text-align:right;">TOTAL INCOME:</td>
+              <td style="padding:8px; text-align:right; color:#10b981;">+UGX ${totalIncome.toLocaleString()}</td>
+            </tr>
+            <tr style="background:var(--surface); font-weight:bold;">
+              <td colspan="3"></td>
+              <td style="padding:8px; text-align:right;">TOTAL EXPENSE:</td>
+              <td style="padding:8px; text-align:right; color:#ef4444;">-UGX ${totalExpense.toLocaleString()}</td>
+            </tr>
+            <tr style="background:var(--surface); font-weight:bold; font-size:1rem;">
+              <td colspan="3"></td>
+              <td style="padding:8px; text-align:right;">NET:</td>
+              <td style="padding:8px; text-align:right; color:${netColor2};">UGX ${grandNet.toLocaleString()}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    `;
   } catch (e) {
     console.error("Error fetching report:", e);
     showToast("Error fetching report data.", "error");
   }
 }
+
+window.printCashierReport = function(start, end, cashierLabel) {
+  const bizName = document.getElementById("business-name-display")?.innerText || "Jomish Business Suite";
+  const detailEl = document.getElementById("cashier-report-detail");
+  if (!detailEl) return;
+
+  const tableHtml = detailEl.querySelector("table")?.outerHTML || "";
+  const printWin = window.open("", "_blank", "width=420,height=800");
+  printWin.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Cashier Report</title>
+      <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family: 'Courier New', monospace; font-size: 11px; width: 80mm; padding: 6mm; color: #000; }
+        h2 { font-size: 14px; text-align:center; margin-bottom:2px; }
+        .sub { text-align:center; font-size:10px; margin-bottom:4px; color:#555; }
+        .divider { border-top: 1px dashed #000; margin: 6px 0; }
+        table { width: 100%; border-collapse: collapse; font-size: 10px; }
+        th { background: #000; color: #fff; padding: 4px 3px; text-align: left; }
+        th:last-child { text-align: right; }
+        td { padding: 3px; border-bottom: 1px solid #ccc; vertical-align: top; }
+        td:last-child { text-align: right; }
+        tfoot td { border-top: 1px solid #000; font-weight: bold; padding-top: 4px; }
+        @media print { @page { margin: 0; size: 80mm auto; } }
+      </style>
+    </head>
+    <body>
+      <h2>${bizName}</h2>
+      <div class="sub">Cashier Report</div>
+      <div class="sub">${cashierLabel} | ${start} to ${end}</div>
+      <div class="divider"></div>
+      ${tableHtml}
+      <div class="divider"></div>
+      <div style="text-align:center; font-size:9px; margin-top:4px;">Printed: ${new Date().toLocaleString('en-UG')}</div>
+    </body>
+    </html>
+  `);
+  printWin.document.close();
+  printWin.onload = () => { printWin.focus(); printWin.print(); };
+};
 
 async function handleAddTx(e) {
   e.preventDefault();
