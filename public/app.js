@@ -308,12 +308,11 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       const _role = (USER_ROLE || "").toUpperCase();
       if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
-        switchPOSView("finance");    // Admin-like → Finance Hub
-      } else if (_role === "SUPERVISOR" || _role === "HR") {
-        switchPOSView("expenses");   // Supervisor/HR → Expenses
+        switchPOSView("stock");      // Admin-like → Inventory
+      } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
+        switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
       } else {
-        switchPOSView("register");   // Cashier / Tech → Register
-        loadPOSProducts();
+        switchPOSView("stock");      // fallback
       }
     }, 300);
   }
@@ -628,11 +627,11 @@ function initNavigation() {
           if (targetId === "pos-terminal") {
             const _role = (USER_ROLE || "").toUpperCase();
             if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
-              switchPOSView("finance");    // Admin-like → Finance Hub
-            } else if (_role === "SUPERVISOR" || _role === "HR") {
-              switchPOSView("expenses");   // Supervisor/HR → Expenses
+              switchPOSView("stock");      // Admin-like → Inventory
+            } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
+              switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
             } else {
-              switchPOSView("register");   // Cashier → Register
+              switchPOSView("stock");      // fallback
             }
           }
           if (targetId === "hr-mgmt") {
@@ -2064,8 +2063,8 @@ function enforceRBAC() {
   const isFinanceMgr = role === "FINANCE MANAGER";
 
   const posNavMap = {
-    // Register — Cashier + Tech
-    "pos-nav-register": isCashier || isTech,
+    // Register — Tech only (per exact user request: "no cashier should see register")
+    "pos-nav-register": isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
     // Expenses — everyone
@@ -2126,13 +2125,11 @@ function enforceRBAC() {
 
   // Default POS landing view per role
   if (isTech) {
-    setTimeout(() => switchPOSView("tech"), 150);       // Tech → Tech Hub
+    setTimeout(() => switchPOSView("register"), 150);   // Tech → Register
   } else if (isAdminLike) {
-    setTimeout(() => switchPOSView("finance"), 150);    // CEO/Admin/Manager → Finance Hub
-  } else if (isSupervisor || isHRRole) {
-    setTimeout(() => switchPOSView("expenses"), 150);   // Supervisor/HR → Expenses
-  } else if (isCashier) {
-    setTimeout(() => switchPOSView("register"), 150);   // Cashier → Register
+    setTimeout(() => switchPOSView("stock"), 150);      // Admin-like → Inventory
+  } else if (isSupervisor || isHRRole || isCashier) {
+    setTimeout(() => switchPOSView("expenses"), 150);   // Supervisor/HR/Cashier → Expenses
   }
 }
 
@@ -4075,12 +4072,12 @@ function printReceipt(
       closePaymentPanel && closePaymentPanel();
       if (typeof switchPOSView === "function") {
         const role = (USER_ROLE || "").toUpperCase();
-        if (["CEO", "ADMIN", "MANAGER"].includes(role)) {
+        if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
           switchPOSView("stock");
-        } else if (role === "SUPERVISOR") {
+        } else if (role === "SUPERVISOR" || role === "HR" || role === "CASHIER") {
           switchPOSView("expenses");
         } else {
-          switchPOSView("register");
+          switchPOSView("stock");
         }
       }
     }, 800);
@@ -10568,12 +10565,12 @@ function toggleSmeFinanceMode() {
     sme.classList.remove("active");
     pos.classList.add("active");
     const role = (USER_ROLE || "").toUpperCase();
-    if (["CEO", "ADMIN", "MANAGER"].includes(role)) {
+    if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
       switchPOSView("stock");
-    } else if (role === "SUPERVISOR") {
+    } else if (role === "SUPERVISOR" || role === "HR" || role === "CASHIER") {
       switchPOSView("expenses");
     } else {
-      switchPOSView("register");
+      switchPOSView("stock");
     }
   } else {
     pos.classList.remove("active");
