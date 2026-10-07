@@ -4945,7 +4945,7 @@ async function loadTransactions(searchTerm = "") {
 
       const cashierName = tx.recorded_by_name || "—";
 
-      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">RCPT-${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${tx.type === "INCOME" ? "+" : "-"}UGX ${tx.amount.toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
+      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">RCPT-${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${tx.type === "INCOME" ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
       tr.dataset.txId = tx.id;
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function(e) {
