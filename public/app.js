@@ -1861,6 +1861,9 @@ function enforceRBAC() {
     }
   };
 
+  // Declare uRole here so it's in scope everywhere below (avoids ReferenceError)
+  const uRole = (USER_ROLE || "").toUpperCase();
+
   if (isTech || isDemo) {
     // System Technician and Demo mode sees all tabs
     [
@@ -1925,7 +1928,6 @@ function enforceRBAC() {
       .querySelectorAll(".tech-only")
       .forEach((el) => el.classList.add("hidden"));
     // Admin UI elements (add employee button, role matrix) — HR, CEO, Manager can see these
-    const uRole = (USER_ROLE || "").toUpperCase();
     if (["HR", "CEO", "MANAGER", "ADMIN"].includes(uRole)) {
       document
         .querySelectorAll(".admin-only")
@@ -2016,13 +2018,15 @@ function enforceRBAC() {
   const isSupervisor = role === "SUPERVISOR";
   const isCashier = role === "CASHIER";
 
+  const isPureTech = uRole === "TECH" && isTech; // global system technician only
   const posNavMap = {
-    "pos-nav-register": isCashier,                               // Cashier ONLY
-    "pos-nav-stock":    isAdminLike || isHRRole,               // CEO/Manager/Admin/HR only (Inventory)
-    "pos-nav-expenses": isAdminLike || isHRRole || isSupervisor, // CEO/Manager/Admin/HR + Supervisor
-    "pos-nav-credits":  isAdminLike || isHRRole,               // CEO/Manager/Admin/HR only
-    "pos-nav-finance":  isAdminLike || isHRRole || isSupervisor || isCashier, // all non-tech
-    "pos-nav-hr":       isAdminLike || isHRRole,               // CEO/Manager/Admin/HR only (Staff/HR)
+    "pos-nav-register": isCashier && !isPureTech,                               // Cashier ONLY
+    "pos-nav-stock":    (isAdminLike || isHRRole) && !isPureTech,               // CEO/Manager/Admin/HR only
+    "pos-nav-expenses": (isAdminLike || isHRRole || isSupervisor) && !isPureTech,
+    "pos-nav-credits":  (isAdminLike || isHRRole) && !isPureTech,
+    "pos-nav-finance":  (isAdminLike || isHRRole || isSupervisor || isCashier) && !isPureTech,
+    "pos-nav-hr":       (isAdminLike || isHRRole) && !isPureTech,
+    "pos-nav-tech":     isPureTech,                                              // Tech ONLY
   };
 
   Object.entries(posNavMap).forEach(([id, visible]) => {
