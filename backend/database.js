@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 137;
+const CURRENT_VERSION = 138;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -393,7 +393,11 @@ const schema = [
         role TEXT, department TEXT, salary REAL, qr_hash TEXT,
         is_active INTEGER DEFAULT 1, employee_code TEXT, username TEXT UNIQUE,
         photo_base64 TEXT, profile_color TEXT DEFAULT '#4F46E5',
-        layout_type TEXT DEFAULT 'LANDSCAPE', next_pay_date TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        layout_type TEXT DEFAULT 'LANDSCAPE', next_pay_date TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        can_see_dashboard INTEGER DEFAULT 0, can_see_hr INTEGER DEFAULT 0, can_see_attendance INTEGER DEFAULT 0,
+        can_see_sme INTEGER DEFAULT 0, can_see_pos INTEGER DEFAULT 0, can_see_secretary INTEGER DEFAULT 0,
+        can_see_transport INTEGER DEFAULT 0, can_see_hardware INTEGER DEFAULT 0, can_see_system_users INTEGER DEFAULT 0,
+        can_see_schedules INTEGER DEFAULT 0, nickname TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS attendance_logs (
         id SERIAL PRIMARY KEY, employee_id INTEGER, 
@@ -1198,6 +1202,33 @@ function runMigrations(fromVersion) {
                 }
             );
         });
+    }
+
+    if (fromVersion < 138) {
+        // v138: Fix missing RBAC columns in Postgres due to race conditions during initial setup
+        const permCols = [
+            'can_see_dashboard', 'can_see_hr', 'can_see_attendance', 'can_see_sme',
+            'can_see_pos', 'can_see_secretary', 'can_see_transport',
+            'can_see_hardware', 'can_see_system_users', 'can_see_schedules', 'nickname'
+        ];
+        let i = 0;
+        function runNextV138() {
+            if (i >= permCols.length) {
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '138'], () => {
+                    console.log('Migration to v138 complete: Enforced RBAC columns exist on employees table.');
+                });
+                return;
+            }
+            const col = permCols[i++];
+            const defType = col === 'nickname' ? 'TEXT DEFAULT NULL' : 'INTEGER DEFAULT 0';
+            db.run(`ALTER TABLE employees ADD COLUMN ${col} ${defType}`, (err) => {
+                if (err && !err.message.includes('duplicate column') && !err.message.includes('already exists') && !err.message.includes('Duplicate column')) {
+                    console.error(`[Migration v138] Error adding ${col}:`, err.message);
+                }
+                runNextV138();
+            });
+        }
+        runNextV138();
     }
 }
 
