@@ -1767,17 +1767,20 @@ function enforceRBAC() {
     (USER_ROLE || "").toUpperCase() === "TECH" && (!_storedPrefix || _storedPrefix === "public");
   const isDemo = localStorage.getItem("jomish_demo") === "true";
 
-  // ── STRICT ROLE MAPS ─────────────────────────────────────────────────────
-  // Each role sees ONLY the tabs listed here.
-  // Tech (System Technician) sees everything.
+  // ── ROLE-BASED ACCESS CONTROL ─────────────────────────────────────────────
+  // uRole must be declared before ROLE_TAB_MAP so _roleKey can reference it
+  const uRole = (USER_ROLE || "").toUpperCase();
+
+  // pos:true = role can see "POS Terminal" sidebar tab
+  // POS sub-tab visibility controlled separately by posNavMap
   const ROLE_TAB_MAP = {
     HR: {
       dashboard: true,
       hr: true,
-      qr: false,
-      schedules: false,
-      sme: false,
-      pos: false,
+      qr: true,
+      schedules: true,
+      sme: true,
+      pos: true,
       transport: false,
       secretary: false,
       tech: false,
@@ -1788,19 +1791,19 @@ function enforceRBAC() {
       qr: true,
       schedules: true,
       sme: false,
-      pos: false,
+      pos: true,
       transport: false,
       secretary: false,
       tech: false,
     },
     CEO: {
       dashboard: true,
-      hr: false,
+      hr: true,
       qr: false,
-      schedules: false,
+      schedules: true,
       sme: true,
-      pos: false,
-      transport: false,
+      pos: true,
+      transport: true,
       secretary: false,
       tech: false,
     },
@@ -1811,7 +1814,7 @@ function enforceRBAC() {
       schedules: false,
       sme: false,
       pos: true,
-      transport: true,
+      transport: false,
       secretary: false,
       tech: false,
     },
@@ -1837,13 +1840,35 @@ function enforceRBAC() {
       secretary: true,
       tech: false,
     },
+    Receptionist: {
+      dashboard: false,
+      hr: false,
+      qr: true,
+      schedules: false,
+      sme: false,
+      pos: false,
+      transport: false,
+      secretary: true,
+      tech: false,
+    },
+    Security: {
+      dashboard: false,
+      hr: false,
+      qr: true,
+      schedules: false,
+      sme: false,
+      pos: false,
+      transport: false,
+      secretary: false,
+      tech: false,
+    },
     Admin: {
       dashboard: true,
-      hr: false,
+      hr: true,
       qr: false,
-      schedules: false,
+      schedules: true,
       sme: true,
-      pos: false,
+      pos: true,
       transport: false,
       secretary: false,
       tech: false,
@@ -1852,17 +1877,31 @@ function enforceRBAC() {
       dashboard: true,
       hr: false,
       qr: false,
-      schedules: false,
+      schedules: true,
       sme: true,
-      pos: false,
+      pos: true,
       transport: false,
       secretary: false,
       tech: false,
-    }
+    },
+    "Finance Manager": {
+      dashboard: true,
+      hr: false,
+      qr: false,
+      schedules: false,
+      sme: true,
+      pos: true,
+      transport: false,
+      secretary: false,
+      tech: false,
+    },
   };
 
-  // Declare uRole here so it's in scope everywhere below (avoids ReferenceError)
-  const uRole = (USER_ROLE || "").toUpperCase();
+  // Case-insensitive lookup so "CASHIER", "cashier", "Cashier" all resolve
+  const _roleKey = Object.keys(ROLE_TAB_MAP).find(
+    (k) => k.toUpperCase() === uRole
+  ) || USER_ROLE;
+
 
   if (isTech || isDemo) {
     // System Technician and Demo mode sees all tabs
@@ -1891,14 +1930,17 @@ function enforceRBAC() {
     document
       .querySelectorAll(".admin-only")
       .forEach((el) => el.classList.remove("hidden"));
-  } else if (ROLE_TAB_MAP[USER_ROLE]) {
-    // ── Use per-employee permissions from JWT (set at login from DB) ──────────
-    // Fall back to ROLE_TAB_MAP only if no granular permissions exist yet
+  } else if (ROLE_TAB_MAP[_roleKey]) {
+    // ── Use ROLE_TAB_MAP as primary source, override with DB permissions if meaningfully set ──
     const p = USER_PERMISSIONS;
-    const hasPerms = Object.values(p).some(
-      (v) => v !== 0 && v !== null && v !== undefined,
+    // Only use DB permissions if they have any non-attendance, non-zero value
+    // (attendance=1 alone is the default seeded value, not a meaningful override)
+    const hasRealPerms = (
+      p.can_see_dashboard || p.can_see_hr || p.can_see_sme ||
+      p.can_see_pos || p.can_see_secretary || p.can_see_transport
     );
-    const perms = hasPerms
+    const roleDefaults = ROLE_TAB_MAP[_roleKey];
+    const perms = hasRealPerms
       ? {
           dashboard: p.can_see_dashboard,
           hr: p.can_see_hr,
@@ -1909,7 +1951,7 @@ function enforceRBAC() {
           transport: p.can_see_transport,
           secretary: p.can_see_secretary,
         }
-      : ROLE_TAB_MAP[USER_ROLE]; // fallback to hardcoded map
+      : roleDefaults; // fallback to hardcoded map when DB has only defaults
 
     if (navDashboard)
       navDashboard.style.display = perms.dashboard ? "block" : "none";
@@ -2012,23 +2054,29 @@ function enforceRBAC() {
   // Cashier               : Register + Finance Hub only
   // Tech (global)         : everything hidden except Tech Hub (handled above)
 
-  const role = (USER_ROLE || "").toUpperCase();
-  const isAdminLike = ["CEO", "ADMIN", "MANAGER"].includes(role) || isTech;
-  const isHRRole   = role === "HR";
-  const isSupervisor = role === "SUPERVISOR";
-  const isCashier = role === "CASHIER";
-
-  const isPureTech = uRole === "TECH" && isTech; // global system technician only
-  const isManager = role === "MANAGER";
+  // uRole already computed above (line 1772) — reuse it here
+  const role = uRole;
+  const isAdminLike = ["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role) || isTech;
+  const isHRRole      = role === "HR";
+  const isSupervisor  = role === "SUPERVISOR";
+  const isCashier     = role === "CASHIER";
+  const isFinanceMgr  = role === "FINANCE MANAGER";
 
   const posNavMap = {
-    "pos-nav-register": (isAdminLike || isCashier) && !isManager && !isPureTech,
-    "pos-nav-stock":    (isAdminLike || isHRRole) && !isPureTech,
-    "pos-nav-expenses": (isAdminLike || isHRRole || isSupervisor) && !isPureTech,
-    "pos-nav-credits":  (isAdminLike || isHRRole || isCashier) && !isPureTech,
-    "pos-nav-finance":  (isAdminLike || isHRRole || isSupervisor || isCashier) && !isPureTech,
-    "pos-nav-hr":       (isAdminLike || isHRRole) && !isPureTech,
-    "pos-nav-tech":     isPureTech,                                              // Tech ONLY
+    // Register: Cashier + CEO/Admin (not Manager/Finance Manager — they oversee, don't ring sales)
+    "pos-nav-register": (isCashier || role === "CEO" || role === "ADMIN") && !isTech,
+    // Stock/Inventory: Admin-like + HR
+    "pos-nav-stock":    (isAdminLike || isHRRole) && !isTech,
+    // Expenses: Admin-like + HR + Supervisor + Finance Manager
+    "pos-nav-expenses": (isAdminLike || isHRRole || isSupervisor || isFinanceMgr) && !isTech,
+    // Credits: Admin-like + HR + Cashier
+    "pos-nav-credits":  (isAdminLike || isHRRole || isCashier) && !isTech,
+    // Finance Hub: Admin-like + HR + Supervisor + Cashier + Finance Manager
+    "pos-nav-finance":  (isAdminLike || isHRRole || isSupervisor || isCashier || isFinanceMgr) && !isTech,
+    // Staff/HR tab: Admin-like + HR
+    "pos-nav-hr":       (isAdminLike || isHRRole) && !isTech,
+    // Tech sub-tab: Tech ONLY
+    "pos-nav-tech":     isTech,
   };
 
   Object.entries(posNavMap).forEach(([id, visible]) => {
@@ -2059,6 +2107,7 @@ function enforceRBAC() {
         "pos-stock-view":    "pos-nav-stock",
         "pos-expenses-view": "pos-nav-expenses",
         "pos-credits-view":  "pos-nav-credits",
+        "pos-finance-view":  "pos-nav-finance",
         "pos-hr-view":       "pos-nav-hr",
       };
       const navId = viewToNav[currentView.id];
@@ -2077,8 +2126,11 @@ function enforceRBAC() {
   // Trigger correct default POS view on first load based on role
   if (isCashier && !isTech) {
     setTimeout(() => switchPOSView("register"), 150);
-  } else if (isSupervisor && !isTech) {
+  } else if ((isSupervisor || isFinanceMgr) && !isTech) {
     setTimeout(() => switchPOSView("expenses"), 150);
+  } else if (isAdminLike && !isTech) {
+    // Managers/CEO/Admin land on Finance Hub as their default POS view
+    setTimeout(() => switchPOSView("finance"), 150);
   }
 }
 
