@@ -5651,7 +5651,7 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
   res.json({ syncedIds, errors });
 });
 
-const { spawn } = require("child_process");
+
 app.post("/api/tech/kiosk", authenticateToken, (req, res) => {
   const _role = (req.user.role || "").toLowerCase();
   if (_role !== "tech" && req.user.name !== "System Technician") {
