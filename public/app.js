@@ -282,7 +282,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // If this is the global TECH user — show Tech Hub tab, redirect there, hide normal tabs
   const _techUser = localStorage.getItem("jomish_prefix");
   const _isTechUser =
-    (!_techUser || _techUser.toLowerCase() === "public") && USER_ROLE === "TECH";
+    (!_techUser || _techUser.toLowerCase() === "public") && (USER_ROLE || "").toUpperCase() === "TECH";
   if (_isTechUser) {
     const techBtn = document.getElementById("pos-nav-tech");
     if (techBtn) {
@@ -1764,7 +1764,7 @@ function enforceRBAC() {
   // Only the global TECH login (prefix = 'public') gets Tech Hub access — not company-level users
   const _storedPrefix = localStorage.getItem("jomish_prefix");
   const isTech =
-    USER_ROLE === "TECH" && (!_storedPrefix || _storedPrefix === "public");
+    (USER_ROLE || "").toUpperCase() === "TECH" && (!_storedPrefix || _storedPrefix === "public");
   const isDemo = localStorage.getItem("jomish_demo") === "true";
 
   // ── STRICT ROLE MAPS ─────────────────────────────────────────────────────
