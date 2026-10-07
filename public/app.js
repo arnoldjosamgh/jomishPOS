@@ -3952,9 +3952,24 @@ function printReceipt(
     logo.style.display = "";
   }
 
-  // Show the modal
-  const overlay = document.getElementById("receipt-overlay");
-  if (overlay) overlay.classList.add("receipt-modal-visible");
+  // Skip the preview modal — go straight to print, then return to POS
+  const html = _buildReceiptHTML(_currentReceiptData);
+  const iframe = document.createElement("iframe");
+  iframe.id = "print-iframe-receipt";
+  iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  iframe.onload = () => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => {
+      iframe.remove();
+      // Navigate back to POS register after print dialog
+      closePaymentPanel && closePaymentPanel();
+      switchPOSView && switchPOSView("register");
+    }, 800);
+  };
 }
 
 /**
@@ -4152,17 +4167,11 @@ function doPrint() {
 
   // Remove old iframe if it exists
   let oldFrame = document.getElementById("print-iframe");
-  if (oldFrame) {
-    oldFrame.remove();
-  }
+  if (oldFrame) oldFrame.remove();
 
-  // Create a hidden iframe
   const iframe = document.createElement("iframe");
   iframe.id = "print-iframe";
-  iframe.style.position = "absolute";
-  iframe.style.width = "0px";
-  iframe.style.height = "0px";
-  iframe.style.border = "none";
+  iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
   document.body.appendChild(iframe);
 
   const doc = iframe.contentWindow.document;
@@ -4170,19 +4179,12 @@ function doPrint() {
   doc.write(html);
   doc.close();
 
-  // Trigger print once the iframe content loads
+  // Only trigger print ONCE via onload — no fallback setTimeout to avoid double-print
   iframe.onload = () => {
     iframe.contentWindow.focus();
     iframe.contentWindow.print();
+    setTimeout(() => iframe.remove(), 2000);
   };
-
-  // Fallback: trigger print after 500ms if onload doesn't fire
-  setTimeout(() => {
-    try {
-      iframe.contentWindow.focus();
-      iframe.contentWindow.print();
-    } catch (e) {}
-  }, 500);
 }
 
 // ==== HARDWARE TEST PRINT FUNCTIONS ====
@@ -5099,9 +5101,14 @@ async function loadCashierReport() {
     }
 
     const txList = data.transactions || [];
+    // Store for print function
+    window._lastReportData = { txList, start, end, cashierLabel };
     const totalIncome = txList.filter(t => t.type === "INCOME").reduce((s, t) => s + parseFloat(t.amount || 0), 0);
     const totalExpense = txList.filter(t => t.type !== "INCOME").reduce((s, t) => s + parseFloat(t.amount || 0), 0);
     const grandNet = totalIncome - totalExpense;
+    window._lastReportData.totalIncome = totalIncome;
+    window._lastReportData.totalExpense = totalExpense;
+    window._lastReportData.grandNet = grandNet;
 
     let txRows = "";
     txList.forEach((tx) => {
@@ -5168,45 +5175,111 @@ async function loadCashierReport() {
 }
 
 window.printCashierReport = function(start, end, cashierLabel) {
-  const bizName = document.getElementById("business-name-display")?.innerText || "Jomish Business Suite";
-  const detailEl = document.getElementById("cashier-report-detail");
-  if (!detailEl) return;
+  const rpt = window._lastReportData || {};
+  const txList = rpt.txList || [];
+  const totalIncome = rpt.totalIncome || 0;
+  const totalExpense = rpt.totalExpense || 0;
+  const grandNet = rpt.grandNet || 0;
 
-  const tableHtml = detailEl.querySelector("table")?.outerHTML || "";
-  const printWin = window.open("", "_blank", "width=420,height=800");
-  printWin.document.write(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Cashier Report</title>
-      <style>
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body { font-family: 'Courier New', monospace; font-size: 11px; width: 80mm; padding: 6mm; color: #000; }
-        h2 { font-size: 14px; text-align:center; margin-bottom:2px; }
-        .sub { text-align:center; font-size:10px; margin-bottom:4px; color:#555; }
-        .divider { border-top: 1px dashed #000; margin: 6px 0; }
-        table { width: 100%; border-collapse: collapse; font-size: 10px; }
-        th { background: #000; color: #fff; padding: 4px 3px; text-align: left; }
-        th:last-child { text-align: right; }
-        td { padding: 3px; border-bottom: 1px solid #ccc; vertical-align: top; }
-        td:last-child { text-align: right; }
-        tfoot td { border-top: 1px solid #000; font-weight: bold; padding-top: 4px; }
-        @media print { @page { margin: 0; size: 80mm auto; } }
-      </style>
-    </head>
-    <body>
-      <h2>${bizName}</h2>
-      <div class="sub">Cashier Report</div>
-      <div class="sub">${cashierLabel} | ${start} to ${end}</div>
-      <div class="divider"></div>
-      ${tableHtml}
-      <div class="divider"></div>
-      <div style="text-align:center; font-size:9px; margin-top:4px;">Printed: ${new Date().toLocaleString('en-UG')}</div>
-    </body>
-    </html>
-  `);
-  printWin.document.close();
-  printWin.onload = () => { printWin.focus(); printWin.print(); };
+  const bizName = (document.getElementById("business-name-display")?.innerText ||
+    localStorage.getItem("jomish_biz_name") || "Jomish Business Suite").toUpperCase();
+  const bizLoc = localStorage.getItem("jomish_biz_location") || "";
+  const bizTel = localStorage.getItem("jomish_biz_contact") || "";
+
+  // First and last transaction times
+  const firstTx = txList[0];
+  const lastTx = txList[txList.length - 1];
+  const fmtTime = (iso) => {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleTimeString("en-UG", { timeZone: "Africa/Kampala", hour: "2-digit", minute: "2-digit" }); }
+    catch(e) { return iso; }
+  };
+  const startTime = fmtTime(firstTx?.transaction_date);
+  const endTime = fmtTime(lastTx?.transaction_date);
+
+  // Build 2-column rows: RCPT# | Amount
+  let rows = "";
+  txList.forEach(tx => {
+    const rn = String(tx.row_num || tx.id).padStart(4, "0");
+    const sign = tx.type === "INCOME" ? "+" : "-";
+    const amt = Number(tx.amount || 0).toLocaleString();
+    rows += `<tr>
+      <td style="padding:2px 4px; border-bottom:1px solid #ddd;">RCPT-${rn}</td>
+      <td style="padding:2px 4px; border-bottom:1px solid #ddd; text-align:right; font-weight:bold;">${sign}UGX ${amt}</td>
+    </tr>`;
+  });
+
+  const printHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Cashier Report</title>
+  <style>
+    @page { size: 80mm auto; margin: 3mm 2mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Courier New', monospace; font-size: 11px; width: 76mm; color: #000; background: #fff; }
+    .center { text-align: center; }
+    .biz { font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+    .sub { font-size: 10px; color: #444; margin-top: 1px; }
+    .divider { border-top: 1px dashed #888; margin: 5px 0; }
+    .divider-solid { border-top: 1px solid #000; margin: 5px 0; }
+    table { width: 100%; border-collapse: collapse; }
+    td { font-size: 10px; vertical-align: middle; }
+    .total-row { font-weight: bold; font-size: 11px; }
+    .footer { text-align: center; font-size: 9px; color: #555; margin-top: 8px; border-top: 1px dashed #888; padding-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="center">
+    <div class="biz">${bizName}</div>
+    ${bizLoc ? `<div class="sub">${bizLoc}</div>` : ""}
+    ${bizTel ? `<div class="sub">${bizTel}</div>` : ""}
+  </div>
+  <div class="divider"></div>
+  <div class="center" style="font-weight:bold;font-size:12px;">CASHIER REPORT</div>
+  <div style="font-size:10px; margin:3px 0;">
+    <div>Cashier: <strong>${cashierLabel}</strong></div>
+    <div>Date: ${start} to ${end}</div>
+    <div>Time: ${startTime} &ndash; ${endTime}</div>
+    <div>Records: ${txList.length}</div>
+  </div>
+  <div class="divider"></div>
+  <table>
+    <thead>
+      <tr style="border-bottom:1px solid #000;">
+        <th style="text-align:left;padding:2px 4px;font-size:10px;">RCPT #</th>
+        <th style="text-align:right;padding:2px 4px;font-size:10px;">Amount</th>
+      </tr>
+    </thead>
+    <tbody>${rows || '<tr><td colspan="2" style="text-align:center;padding:6px;">No transactions.</td></tr>'}</tbody>
+  </table>
+  <div class="divider-solid"></div>
+  <table>
+    <tr class="total-row"><td>Total Income:</td><td style="text-align:right;color:#000;">+UGX ${totalIncome.toLocaleString()}</td></tr>
+    <tr class="total-row"><td>Total Expense:</td><td style="text-align:right;">-UGX ${totalExpense.toLocaleString()}</td></tr>
+    <tr style="font-weight:bold;font-size:12px;border-top:1px solid #000;"><td>NET:</td><td style="text-align:right;">UGX ${grandNet.toLocaleString()}</td></tr>
+  </table>
+  <div class="footer">
+    <div>Printed: ${new Date().toLocaleString("en-UG", {timeZone:"Africa/Kampala"})}</div>
+    <div style="font-size:8px;font-style:italic;">Powered by Jomish Business Suite</div>
+  </div>
+</body>
+</html>`;
+
+  // Use iframe to avoid double-print and popup blockers
+  let oldFrame = document.getElementById("print-iframe-report");
+  if (oldFrame) oldFrame.remove();
+  const iframe = document.createElement("iframe");
+  iframe.id = "print-iframe-report";
+  iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow.document;
+  doc.open(); doc.write(printHtml); doc.close();
+  iframe.onload = () => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => iframe.remove(), 2000);
+  };
 };
 
 async function handleAddTx(e) {
