@@ -5699,22 +5699,38 @@ server
       });
     }
 
-    // Initialize global tech_users table
+    // Initialize global tech_users and companies tables
     asyncLocalStorage.run("public", () => {
-      let execSql = `CREATE TABLE IF NOT EXISTS tech_users (
+      let execSqlTech = `CREATE TABLE IF NOT EXISTS tech_users (
             id SERIAL PRIMARY KEY,
             username TEXT UNIQUE,
             password TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`;
+      let execSqlComp = `CREATE TABLE IF NOT EXISTS companies (
+            id SERIAL PRIMARY KEY,
+            prefix TEXT UNIQUE,
+            name TEXT,
+            status TEXT DEFAULT 'ACTIVE',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`;
       // Handle SQLite syntax if not postgres
       if (require("./database").dbPath) {
         // simple check if SQLite
-        execSql = execSql
+        execSqlTech = execSqlTech
+          .replace(/SERIAL PRIMARY KEY/g, "INTEGER PRIMARY KEY AUTOINCREMENT")
+          .replace(/TIMESTAMP/g, "DATETIME");
+        execSqlComp = execSqlComp
           .replace(/SERIAL PRIMARY KEY/g, "INTEGER PRIMARY KEY AUTOINCREMENT")
           .replace(/TIMESTAMP/g, "DATETIME");
       }
-      db.run(execSql, [], (err) => {
+      db.run(execSqlComp, [], (err) => {
+        if (err) console.error("Error creating companies table:", err.message);
+        else {
+          db.run("ALTER TABLE companies ADD COLUMN status TEXT DEFAULT 'ACTIVE'", () => {});
+        }
+      });
+      db.run(execSqlTech, [], (err) => {
         if (err) console.error("Error creating tech_users table:", err.message);
         else {
           db.get(
