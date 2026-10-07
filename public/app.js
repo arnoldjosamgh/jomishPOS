@@ -306,8 +306,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 300);
   } else {
     setTimeout(() => {
-      switchPOSView("register");
-      loadPOSProducts();
+      const role = (USER_ROLE || "").toUpperCase();
+      const isAdminLike = ["CEO", "ADMIN", "MANAGER"].includes(role);
+      const isSupervisor = role === "SUPERVISOR";
+      
+      if (isAdminLike) {
+        switchPOSView("stock"); // CEO/Manager defaults to Inventory
+      } else if (isSupervisor) {
+        switchPOSView("expenses"); // Supervisor defaults to Expenses
+      } else {
+        switchPOSView("register"); // Cashiers default to Register
+        loadPOSProducts();
+      }
     }, 300);
   }
 
