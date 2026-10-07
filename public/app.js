@@ -9613,7 +9613,7 @@ window.loadPendingCOD = async function () {
       if (listContainer) {
         if (deliveries.length === 0) {
           listContainer.innerHTML =
-            '<p style="text-align:center;color:var(--text-muted);padding:20px;">No pending Cash on Delivery orders.</p>';
+            '<p style="text-align:center;color:var(--text-muted);padding:20px;">No pending sales / transactions.</p>';
           return;
         }
 
@@ -9626,7 +9626,7 @@ window.loadPendingCOD = async function () {
                                 <p style="margin:0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || "No address"}</p>
                                 <p style="margin:4px 0 0 0; font-weight:bold; color:var(--primary);">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                             </div>
-                            <button onclick="markCODReceived(${d.pos_order_id})" style="background:var(--success); color:white; border:none; padding:10px 15px; border-radius:6px; cursor:pointer; font-weight:600;"><i class="fa-solid fa-check"></i> Cash Received</button>
+                            <button onclick="markCODReceived(${d.pos_order_id})" style="background:var(--success); color:white; border:none; padding:10px 15px; border-radius:6px; cursor:pointer; font-weight:600;"><i class="fa-solid fa-check"></i> Payment Received</button>
                         </div>
                     `;
         });
@@ -9650,7 +9650,7 @@ window.markCODReceived = async function (posOrderId) {
     const data = await res.json();
 
     if (res.ok) {
-      showToast("COD Marked as Received", "success");
+      showToast("Payment Marked as Received", "success");
       loadPendingCOD();
 
       // Generate a receipt for the received COD
