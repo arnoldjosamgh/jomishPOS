@@ -306,16 +306,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 300);
   } else {
     setTimeout(() => {
-      const role = (USER_ROLE || "").toUpperCase();
-      const isAdminLike = ["CEO", "ADMIN", "MANAGER"].includes(role);
-      const isSupervisor = role === "SUPERVISOR";
-      
-      if (isAdminLike) {
-        switchPOSView("stock"); // CEO/Manager defaults to Inventory
-      } else if (isSupervisor) {
-        switchPOSView("expenses"); // Supervisor defaults to Expenses
+      const _role = (USER_ROLE || "").toUpperCase();
+      if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
+        switchPOSView("finance");
+      } else if (_role === "SUPERVISOR" || _role === "HR") {
+        switchPOSView("expenses");
       } else {
-        switchPOSView("register"); // Cashiers default to Register
+        switchPOSView("register");
         loadPOSProducts();
       }
     }, 300);
@@ -629,11 +626,13 @@ function initNavigation() {
             loadTransactions();
           }
           if (targetId === "pos-terminal") {
-            const role = (USER_ROLE || "").toUpperCase();
-            if (["CEO", "ADMIN", "MANAGER"].includes(role)) {
-              switchPOSView("stock");
-            } else if (role === "SUPERVISOR") {
+            const _role = (USER_ROLE || "").toUpperCase();
+            if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
               switchPOSView("finance");
+            } else if (_role === "SUPERVISOR" || _role === "FINANCE MANAGER") {
+              switchPOSView("expenses");
+            } else if (_role === "HR") {
+              switchPOSView("expenses");
             } else {
               switchPOSView("register");
             }
