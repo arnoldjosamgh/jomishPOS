@@ -5966,7 +5966,7 @@ async function loadInventory() {
                             <input type="number" id="restock-qty-${p.id}" value="10" min="1" style="width:55px; background:#fff; border:1px solid #ccc; border-radius:6px; color:#111 !important; font-size:0.8rem; padding:4px 4px; text-align:center; font-weight:700;">
                             <button class="sm-btn primary" onclick="const val = parseInt(document.getElementById('restock-qty-${p.id}').value); if(val > 0) restockProduct(${p.id}, val);" title="Add Stock & Print Labels">+</button>
                             <button class='sm-btn warning' onclick='printProductLabels(${JSON.stringify(p).replace(/'/g, "&apos;")})' title="Reprint All Labels"><i class="fa-solid fa-tag"></i></button>
-                            <button class='sm-btn success' onclick="openEditProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, "&quot;")}, '${p.category}', ${p.price}, '${p.barcode || ""}', '${p.barcode_end || ""}', ${p.buying_price || 0})" title="Edit"><i class="fa-solid fa-pencil"></i></button>
+                            <button class='sm-btn success' onclick="openEditProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, "&quot;")}, ${JSON.stringify(p.category || 'General').replace(/"/g, "&quot;")}, ${p.price}, ${JSON.stringify(p.barcode || '').replace(/"/g, "&quot;")}, ${JSON.stringify(p.barcode_end || '').replace(/"/g, "&quot;")}, ${p.buying_price || 0})" title="Edit"><i class="fa-solid fa-pencil"></i></button>
                             <button class='sm-btn danger' onclick="deleteProduct(${p.id})" title="Delete"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>

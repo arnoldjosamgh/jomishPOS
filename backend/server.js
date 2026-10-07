@@ -2697,7 +2697,7 @@ app.put("/api/products/:id", authenticateToken, (req, res) => {
   if (photo_base64 && photo_base64.length > 50) {
     sql =
       "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, photo_base64 = ? WHERE id = ?";
-    params.splice(5, 0, photo_base64);
+    params.splice(6, 0, photo_base64); // index 6 corresponds to photo_base64, pushing id to index 7
   }
 
   db.run(sql, params, function (err) {
