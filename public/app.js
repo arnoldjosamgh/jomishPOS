@@ -2772,6 +2772,12 @@ async function handleAddEmployee(e) {
     password:      document.getElementById("emp-password").value,
   };
 
+  const submitBtn = e.target.querySelector("button[type='submit']");
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+  }
+
   try {
     const res = await fetchAuth(`${API_URL}/employees`, {
       method: "POST",
@@ -2795,11 +2801,16 @@ async function handleAddEmployee(e) {
             "Check if email is already in use or photo is too large."),
       );
     }
-  } catch (e) {
-    console.error(e);
+  } catch (err) {
+    console.error(err);
     alert(
       "Network Error: Please ensure you have launched the server using Launch_Jomish_Suite.bat.",
     );
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Save Employee';
+    }
   }
 }
 

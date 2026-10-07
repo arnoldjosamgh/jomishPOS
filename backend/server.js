@@ -885,74 +885,82 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
     (prefixErr, prefixRow) => {
       const prefix = prefixRow ? prefixRow.setting_value : "EMP";
 
-      // Dynamically find the highest existing employee ID to guarantee no duplicates
-      db.all(
-        `SELECT employee_code FROM employees WHERE employee_code LIKE ?`,
-        [prefix + "%"],
-        (empErr, rows) => {
-          let num = 0; // The very first employee in a company is 000
+      // Wrap generation in a retryable function to handle race conditions gracefully
+      function generateAndInsert(retryCount = 0) {
+        if (retryCount > 5) {
+          return res.status(500).json({ error: "System too busy, could not generate unique ID after multiple attempts. Please try again." });
+        }
+        
+        // Dynamically find the highest existing employee ID to guarantee no duplicates
+        db.all(
+          `SELECT employee_code FROM employees WHERE employee_code LIKE ?`,
+          [prefix + "%"],
+          (empErr, rows) => {
+            let num = 0; // The very first employee in a company is 000
 
-          if (rows && rows.length > 0) {
-            const maxNum = rows.reduce((max, row) => {
-              if (!row.employee_code) return max;
-              const match = row.employee_code.match(/\d+/);
-              if (match) {
-                const val = parseInt(match[0]);
-                return val > max ? val : max;
-              }
-              return max;
-            }, -1);
-            if (maxNum >= 0) num = maxNum + 1;
-          }
-
-          const auto_employee_code = `${prefix}${String(num).padStart(3, "0")}`;
-          // Username IS the employee_code — no manual username needed
-          const auto_username = auto_employee_code;
-
-          // Force the first user to be the Admin (CEO)
-          const finalRole = num === 0 ? "CEO" : role;
-
-          // Helper: do the actual INSERT and call done(err, ctx)
-          function doInsert(emailVal, done) {
-            db.run(
-              "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-              [first_name, last_name, emailVal, auto_username, finalRole, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
-              function(err) { done(err, this); }
-            );
-          }
-
-          doInsert(safeEmail, function(err, ctx) {
-            // If email caused a unique conflict, silently retry with NULL email
-            if (err) {
-              const msg = err.message || "";
-              const isEmailConflict =
-                (msg.includes("UNIQUE constraint failed") || msg.includes("duplicate key value violates unique constraint")) &&
-                !msg.includes("username") && !msg.includes("employee_code");
-
-              if (isEmailConflict) {
-                console.warn("[ADD EMP] Email conflict on", safeEmail, "— retrying without email.");
-                return doInsert(null, function(err2, ctx2) {
-                  if (err2) {
-                    const m2 = err2.message || "";
-                    if (m2.includes("username") || m2.includes("employee_code")) {
-                      return res.status(400).json({ error: "System error: Employee ID counter out of sync. Please try again." });
-                    }
-                    return res.status(500).json({ error: err2.message });
-                  }
-                  finishInsert(ctx2);
-                });
-              }
-
-              console.error("[ADD EMP ERROR] schema:", getSchema(), "| err:", msg);
-              if (msg.includes("username") || msg.includes("employee_code")) {
-                return res.status(400).json({ error: "System error: Employee ID counter out of sync. Please try adding the employee again." });
-              }
-              return res.status(500).json({ error: msg });
+            if (rows && rows.length > 0) {
+              const maxNum = rows.reduce((max, row) => {
+                if (!row.employee_code) return max;
+                const match = row.employee_code.match(/\d+/);
+                if (match) {
+                  const val = parseInt(match[0]);
+                  return val > max ? val : max;
+                }
+                return max;
+              }, -1);
+              if (maxNum >= 0) num = maxNum + 1;
             }
-            finishInsert(ctx);
-          });
 
-          function finishInsert(ctx) {
+            const auto_employee_code = `${prefix}${String(num).padStart(3, "0")}`;
+            // Username IS the employee_code — no manual username needed
+            const auto_username = auto_employee_code;
+
+            // Force the first user to be the Admin (CEO)
+            const finalRole = num === 0 ? "CEO" : role;
+
+            // Helper: do the actual INSERT and call done(err, ctx)
+            function doInsert(emailVal, done) {
+              db.run(
+                "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [first_name, last_name, emailVal, auto_username, finalRole, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
+                function(err) { done(err, this); }
+              );
+            }
+
+            doInsert(safeEmail, function(err, ctx) {
+              // If email caused a unique conflict, silently retry with NULL email
+              if (err) {
+                const msg = err.message || "";
+                const isEmailConflict =
+                  (msg.includes("UNIQUE constraint failed") || msg.includes("duplicate key value violates unique constraint")) &&
+                  !msg.includes("username") && !msg.includes("employee_code");
+
+                if (isEmailConflict) {
+                  console.warn("[ADD EMP] Email conflict on", safeEmail, "— retrying without email.");
+                  return doInsert(null, function(err2, ctx2) {
+                    if (err2) {
+                      const m2 = err2.message || "";
+                      if (m2.includes("username") || m2.includes("employee_code")) {
+                        console.warn("[ADD EMP] ID Race condition on fallback. Retrying generation...");
+                        return generateAndInsert(retryCount + 1);
+                      }
+                      return res.status(500).json({ error: err2.message });
+                    }
+                    finishInsert(ctx2);
+                  });
+                }
+
+                console.error("[ADD EMP ERROR] schema:", getSchema(), "| err:", msg);
+                if (msg.includes("username") || msg.includes("employee_code")) {
+                  console.warn("[ADD EMP] ID Race condition detected. Retrying generation...");
+                  return generateAndInsert(retryCount + 1);
+                }
+                return res.status(500).json({ error: msg });
+              }
+              finishInsert(ctx);
+            });
+
+            function finishInsert(ctx) {
               if (role) {
                 db.run(
                   "INSERT INTO roles_config (role_name) VALUES (?) ON CONFLICT DO NOTHING",
@@ -997,9 +1005,12 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
                 profile_color,
                 layout_type,
               });
-          }
+          } // end finishInsert
         },
       );
+    } // end generateAndInsert
+
+    generateAndInsert(0); // Initial call
     },
   );
 });
