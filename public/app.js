@@ -5197,16 +5197,13 @@ window.printCashierReport = function(start, end, cashierLabel) {
   const startTime = fmtTime(firstTx?.transaction_date);
   const endTime = fmtTime(lastTx?.transaction_date);
 
-  // Build 2-column rows: RCPT# | Amount
+  // Build 2-column rows using flex (no table = no gap issue)
   let rows = "";
   txList.forEach(tx => {
     const rn = String(tx.row_num || tx.id).padStart(4, "0");
     const sign = tx.type === "INCOME" ? "+" : "-";
     const amt = Number(tx.amount || 0).toLocaleString();
-    rows += `<tr>
-      <td style="padding:2px 4px; border-bottom:1px solid #ddd;">RCPT-${rn}</td>
-      <td style="padding:2px 4px; border-bottom:1px solid #ddd; text-align:right; font-weight:bold;">${sign}UGX ${amt}</td>
-    </tr>`;
+    rows += `<div class="row"><span>RCPT-${rn}</span><span>${sign}UGX ${amt}</span></div>`;
   });
 
   const printHtml = `<!DOCTYPE html>
@@ -5223,14 +5220,44 @@ window.printCashierReport = function(start, end, cashierLabel) {
     .sub { font-size: 10px; color: #444; margin-top: 1px; }
     .divider { border-top: 1px dashed #888; margin: 5px 0; }
     .divider-solid { border-top: 1px solid #000; margin: 5px 0; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    td, th { font-size: 10px; vertical-align: middle; width: 50%; }
-    th { text-align: left; padding: 2px 4px; }
-    th:last-child { text-align: right; }
-    td { padding: 2px 4px; border-bottom: 1px solid #ddd; }
-    td:last-child { text-align: right; font-weight: bold; }
-    .total-row td { border-bottom: none; font-weight: bold; font-size: 11px; padding: 3px 4px; }
-    .net-row td { border-top: 1px solid #000; font-weight: bold; font-size: 12px; padding: 3px 4px; }
+    /* Flex row: left 50%, right 50% right-aligned — NO gap in middle */
+    .row {
+      display: flex;
+      align-items: baseline;
+      border-bottom: 1px solid #ddd;
+      padding: 2px 0;
+      font-size: 10px;
+    }
+    .row span:first-child { flex: 0 0 50%; width: 50%; overflow: hidden; }
+    .row span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; font-weight: bold; }
+    .row-head {
+      display: flex;
+      border-bottom: 1px solid #000;
+      padding: 2px 0;
+      font-weight: bold;
+      font-size: 10px;
+    }
+    .row-head span:first-child { flex: 0 0 50%; width: 50%; }
+    .row-head span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; }
+    .total-row {
+      display: flex;
+      align-items: baseline;
+      padding: 3px 0;
+      font-size: 11px;
+      font-weight: bold;
+    }
+    .total-row span:first-child { flex: 0 0 50%; width: 50%; }
+    .total-row span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; }
+    .net-row {
+      display: flex;
+      align-items: baseline;
+      border-top: 1px solid #000;
+      padding: 3px 0;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .net-row span:first-child { flex: 0 0 50%; width: 50%; }
+    .net-row span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; }
     .footer { text-align: center; font-size: 9px; color: #555; margin-top: 8px; border-top: 1px dashed #888; padding-top: 4px; }
   </style>
 </head>
@@ -5249,21 +5276,12 @@ window.printCashierReport = function(start, end, cashierLabel) {
     <div>Records: ${txList.length}</div>
   </div>
   <div class="divider"></div>
-  <table>
-    <thead>
-      <tr style="border-bottom:1px solid #000;">
-        <th>RCPT #</th>
-        <th style="text-align:right;">Amount</th>
-      </tr>
-    </thead>
-    <tbody>${rows || '<tr><td colspan="2" style="text-align:center;padding:6px;">No transactions.</td></tr>'}</tbody>
-    <tbody>
-      <tr><td colspan="2" style="padding:0;border:none;"><div class="divider-solid" style="margin:4px 0;"></div></td></tr>
-      <tr class="total-row"><td>Total Income:</td><td>+UGX ${totalIncome.toLocaleString()}</td></tr>
-      <tr class="total-row"><td>Total Expense:</td><td>-UGX ${totalExpense.toLocaleString()}</td></tr>
-      <tr class="net-row"><td>NET:</td><td>UGX ${grandNet.toLocaleString()}</td></tr>
-    </tbody>
-  </table>
+  <div class="row-head"><span>RCPT #</span><span>Amount</span></div>
+  ${rows || '<div style="text-align:center;padding:6px;font-size:10px;">No transactions.</div>'}
+  <div class="divider-solid"></div>
+  <div class="total-row"><span>Total Income:</span><span>+UGX ${totalIncome.toLocaleString()}</span></div>
+  <div class="total-row"><span>Total Expense:</span><span>-UGX ${totalExpense.toLocaleString()}</span></div>
+  <div class="net-row"><span>NET:</span><span>UGX ${grandNet.toLocaleString()}</span></div>
   <div class="footer">
     <div>Printed: ${new Date().toLocaleString("en-UG", {timeZone:"Africa/Kampala"})}</div>
     <div style="font-size:8px;font-style:italic;">Powered by Jomish Business Suite</div>
