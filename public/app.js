@@ -309,6 +309,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const _role = (USER_ROLE || "").toUpperCase();
       if (_role === "TECH") {
         switchPOSView("tech");       // Tech → Tech Hub
+      } else if (_role === "CASHIER") {
+        switchPOSView("register");   // Cashier → Register
       } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
         switchPOSView("stock");      // Admin-like → Inventory
       } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
@@ -630,6 +632,8 @@ function initNavigation() {
             const _role = (USER_ROLE || "").toUpperCase();
             if (_role === "TECH") {
               switchPOSView("tech");       // Tech → Tech Hub
+            } else if (_role === "CASHIER") {
+              switchPOSView("register");   // Cashier → Register
             } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
               switchPOSView("stock");      // Admin-like → Inventory
             } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
@@ -2067,8 +2071,8 @@ function enforceRBAC() {
   const isFinanceMgr = role === "FINANCE MANAGER";
 
   const posNavMap = {
-    // Register — Tech ONLY
-    "pos-nav-register": isTech,
+    // Register — Cashier + Tech
+    "pos-nav-register": isCashier || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
     // Expenses — everyone
@@ -2130,10 +2134,12 @@ function enforceRBAC() {
   // Default POS landing view per role
   if (isTech) {
     setTimeout(() => switchPOSView("tech"), 150);       // Tech → Tech Hub
+  } else if (isCashier) {
+    setTimeout(() => switchPOSView("register"), 150);   // Cashier → Register
   } else if (isAdminLike) {
     setTimeout(() => switchPOSView("stock"), 150);      // Admin-like → Inventory
-  } else if (isSupervisor || isHRRole || isCashier) {
-    setTimeout(() => switchPOSView("expenses"), 150);   // Supervisor/HR/Cashier → Expenses
+  } else if (isSupervisor || isHRRole) {
+    setTimeout(() => switchPOSView("expenses"), 150);   // Supervisor/HR → Expenses
   }
 }
 
@@ -4079,6 +4085,8 @@ function printReceipt(
         const role = (USER_ROLE || "").toUpperCase();
         if (role === "TECH") {
           switchPOSView("tech");       // Tech → Tech Hub
+        } else if (role === "CASHIER") {
+          switchPOSView("register");   // Cashier → Register
         } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
           switchPOSView("stock");      // Admin-like → Inventory
         } else if (role === "SUPERVISOR" || role === "HR" || role === "CASHIER") {
@@ -10574,10 +10582,12 @@ function toggleSmeFinanceMode() {
     const role = (USER_ROLE || "").toUpperCase();
     if (role === "TECH") {
       switchPOSView("tech");       // Tech → Tech Hub
+    } else if (role === "CASHIER") {
+      switchPOSView("register");   // Cashier → Register
     } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
       switchPOSView("stock");      // Admin-like → Inventory
-    } else if (role === "SUPERVISOR" || role === "HR" || role === "CASHIER") {
-      switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
+    } else if (role === "SUPERVISOR" || role === "HR") {
+      switchPOSView("expenses");   // Supervisor/HR → Expenses
     } else {
       switchPOSView("stock");      // fallback
     }

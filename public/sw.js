@@ -3,7 +3,7 @@
 // Handles: Offline caching + Push Notifications
 // ============================================================
 
-const CACHE_NAME = 'jomish-v8';
+const CACHE_NAME = 'jomish-v9';
 const STATIC_ASSETS = [
     '/login.html',
     '/index.html',
