@@ -629,7 +629,14 @@ function initNavigation() {
             loadTransactions();
           }
           if (targetId === "pos-terminal") {
-            switchPOSView("register");
+            const role = (USER_ROLE || "").toUpperCase();
+            if (["CEO", "ADMIN", "MANAGER"].includes(role)) {
+              switchPOSView("stock");
+            } else if (role === "SUPERVISOR") {
+              switchPOSView("finance");
+            } else {
+              switchPOSView("register");
+            }
           }
           if (targetId === "hr-mgmt") {
             loadEmployees();
@@ -1830,6 +1837,28 @@ function enforceRBAC() {
       secretary: true,
       tech: false,
     },
+    Admin: {
+      dashboard: true,
+      hr: false,
+      qr: false,
+      schedules: false,
+      sme: true,
+      pos: false,
+      transport: false,
+      secretary: false,
+      tech: false,
+    },
+    Manager: {
+      dashboard: true,
+      hr: false,
+      qr: false,
+      schedules: false,
+      sme: true,
+      pos: false,
+      transport: false,
+      secretary: false,
+      tech: false,
+    }
   };
 
   if (isTech || isDemo) {
@@ -3977,7 +4006,16 @@ function printReceipt(
       iframe.remove();
       // Navigate back to POS register after print dialog
       closePaymentPanel && closePaymentPanel();
-      switchPOSView && switchPOSView("register");
+      if (typeof switchPOSView === "function") {
+        const role = (USER_ROLE || "").toUpperCase();
+        if (["CEO", "ADMIN", "MANAGER"].includes(role)) {
+          switchPOSView("stock");
+        } else if (role === "SUPERVISOR") {
+          switchPOSView("expenses");
+        } else {
+          switchPOSView("register");
+        }
+      }
     }, 800);
   };
 }
@@ -10437,7 +10475,14 @@ function toggleSmeFinanceMode() {
   if (sme.classList.contains("active")) {
     sme.classList.remove("active");
     pos.classList.add("active");
-    switchPOSView("register");
+    const role = (USER_ROLE || "").toUpperCase();
+    if (["CEO", "ADMIN", "MANAGER"].includes(role)) {
+      switchPOSView("stock");
+    } else if (role === "SUPERVISOR") {
+      switchPOSView("expenses");
+    } else {
+      switchPOSView("register");
+    }
   } else {
     pos.classList.remove("active");
     sme.classList.add("active");
