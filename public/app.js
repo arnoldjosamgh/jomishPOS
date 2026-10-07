@@ -5220,44 +5220,28 @@ window.printCashierReport = function(start, end, cashierLabel) {
     .sub { font-size: 10px; color: #444; margin-top: 1px; }
     .divider { border-top: 1px dashed #888; margin: 5px 0; }
     .divider-solid { border-top: 1px solid #000; margin: 5px 0; }
-    /* Flex row: left 50%, right 50% right-aligned — NO gap in middle */
-    .row {
+    /* Flex row: left 40%, gap 20%, right 40% — space-between creates the 20% middle gap */
+    .row, .row-head, .total-row, .net-row {
       display: flex;
+      justify-content: space-between;
       align-items: baseline;
-      border-bottom: 1px solid #ddd;
       padding: 2px 0;
       font-size: 10px;
     }
-    .row span:first-child { flex: 0 0 50%; width: 50%; overflow: hidden; }
-    .row span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; font-weight: bold; }
-    .row-head {
-      display: flex;
-      border-bottom: 1px solid #000;
-      padding: 2px 0;
-      font-weight: bold;
-      font-size: 10px;
-    }
-    .row-head span:first-child { flex: 0 0 50%; width: 50%; }
-    .row-head span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; }
-    .total-row {
-      display: flex;
-      align-items: baseline;
-      padding: 3px 0;
-      font-size: 11px;
-      font-weight: bold;
-    }
-    .total-row span:first-child { flex: 0 0 50%; width: 50%; }
-    .total-row span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; }
-    .net-row {
-      display: flex;
-      align-items: baseline;
-      border-top: 1px solid #000;
-      padding: 3px 0;
-      font-size: 12px;
-      font-weight: bold;
-    }
-    .net-row span:first-child { flex: 0 0 50%; width: 50%; }
-    .net-row span:last-child  { flex: 0 0 50%; width: 50%; text-align: right; }
+    .row { border-bottom: 1px solid #ddd; }
+    .row-head { border-bottom: 1px solid #000; font-weight: bold; }
+    .total-row { font-size: 11px; font-weight: bold; }
+    .net-row { border-top: 1px solid #000; font-size: 12px; font-weight: bold; }
+    /* All left spans: 40% */
+    .row span:first-child,
+    .row-head span:first-child,
+    .total-row span:first-child,
+    .net-row span:first-child { flex: 0 0 40%; width: 40%; overflow: hidden; }
+    /* All right spans: 40%, right-aligned */
+    .row span:last-child,
+    .row-head span:last-child,
+    .total-row span:last-child,
+    .net-row span:last-child { flex: 0 0 40%; width: 40%; text-align: right; font-weight: bold; }
     .footer { text-align: center; font-size: 9px; color: #555; margin-top: 8px; border-top: 1px dashed #888; padding-top: 4px; }
   </style>
 </head>
