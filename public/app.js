@@ -307,10 +307,12 @@ document.addEventListener("DOMContentLoaded", () => {
   } else {
     setTimeout(() => {
       const _role = (USER_ROLE || "").toUpperCase();
-      if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
+      if (_role === "CASHIER" || _role === "TECH") {
+        switchPOSView("register");   // Cashier/Tech → Register
+      } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
         switchPOSView("stock");      // Admin-like → Inventory
-      } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
-        switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
+      } else if (_role === "SUPERVISOR" || _role === "HR") {
+        switchPOSView("expenses");   // Supervisor/HR → Expenses
       } else {
         switchPOSView("stock");      // fallback
       }
@@ -626,10 +628,12 @@ function initNavigation() {
           }
           if (targetId === "pos-terminal") {
             const _role = (USER_ROLE || "").toUpperCase();
-            if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
+            if (_role === "CASHIER" || _role === "TECH") {
+              switchPOSView("register");   // Cashier/Tech → Register
+            } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
               switchPOSView("stock");      // Admin-like → Inventory
-            } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
-              switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
+            } else if (_role === "SUPERVISOR" || _role === "HR") {
+              switchPOSView("expenses");   // Supervisor/HR → Expenses
             } else {
               switchPOSView("stock");      // fallback
             }
@@ -4072,12 +4076,14 @@ function printReceipt(
       closePaymentPanel && closePaymentPanel();
       if (typeof switchPOSView === "function") {
         const role = (USER_ROLE || "").toUpperCase();
-        if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
-          switchPOSView("stock");
-        } else if (role === "SUPERVISOR" || role === "HR" || role === "CASHIER") {
-          switchPOSView("expenses");
+        if (role === "CASHIER" || role === "TECH") {
+          switchPOSView("register");   // Cashier/Tech → Register
+        } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
+          switchPOSView("stock");      // Admin-like → Inventory
+        } else if (role === "SUPERVISOR" || role === "HR") {
+          switchPOSView("expenses");   // Supervisor/HR → Expenses
         } else {
-          switchPOSView("stock");
+          switchPOSView("stock");      // fallback
         }
       }
     }, 800);
@@ -10565,12 +10571,14 @@ function toggleSmeFinanceMode() {
     sme.classList.remove("active");
     pos.classList.add("active");
     const role = (USER_ROLE || "").toUpperCase();
-    if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
-      switchPOSView("stock");
-    } else if (role === "SUPERVISOR" || role === "HR" || role === "CASHIER") {
-      switchPOSView("expenses");
+    if (role === "CASHIER" || role === "TECH") {
+      switchPOSView("register");   // Cashier/Tech → Register
+    } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
+      switchPOSView("stock");      // Admin-like → Inventory
+    } else if (role === "SUPERVISOR" || role === "HR") {
+      switchPOSView("expenses");   // Supervisor/HR → Expenses
     } else {
-      switchPOSView("stock");
+      switchPOSView("stock");      // fallback
     }
   } else {
     pos.classList.remove("active");
