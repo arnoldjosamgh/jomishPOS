@@ -308,12 +308,11 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       const _role = (USER_ROLE || "").toUpperCase();
       if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
-        switchPOSView("finance");
+        switchPOSView("finance");    // Admin-like → Finance Hub
       } else if (_role === "SUPERVISOR" || _role === "HR") {
-        switchPOSView("expenses");
+        switchPOSView("expenses");   // Supervisor/HR → Expenses
       } else {
-        switchPOSView("register");
-        loadPOSProducts();
+        switchPOSView("finance");    // Cashier / others → Finance Hub
       }
     }, 300);
   }
@@ -628,13 +627,11 @@ function initNavigation() {
           if (targetId === "pos-terminal") {
             const _role = (USER_ROLE || "").toUpperCase();
             if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
-              switchPOSView("finance");
-            } else if (_role === "SUPERVISOR" || _role === "FINANCE MANAGER") {
-              switchPOSView("expenses");
-            } else if (_role === "HR") {
-              switchPOSView("expenses");
+              switchPOSView("finance");    // Admin-like → Finance Hub
+            } else if (_role === "SUPERVISOR" || _role === "HR") {
+              switchPOSView("expenses");   // Supervisor/HR → Expenses
             } else {
-              switchPOSView("register");
+              switchPOSView("finance");    // Cashier / others → Finance Hub
             }
           }
           if (targetId === "hr-mgmt") {
@@ -2048,33 +2045,35 @@ function enforceRBAC() {
   }
 
   // ── POS NAV TAB VISIBILITY BY ROLE ───────────────────────────────────
-  // CEO / Manager / Admin : Register, Inventory, Expenses, Credits, Finance Hub, Staff/HR
-  // Supervisor            : Finance Hub + Expenses only
-  // Cashier               : Register + Finance Hub only
-  // Tech (global)         : everything hidden except Tech Hub (handled above)
+  // ── POS NAV TAB MATRIX (exact per user spec) ─────────────────────────────
+  // CEO / Admin / Manager  : Inventory, Expenses, Credits, Finance Hub, Staff/HR
+  // Supervisor / HR        : Expenses, Finance Hub
+  // Cashier                : Expenses, Credits, Finance Hub
+  // Register               : hidden for all (no role rings sales from this menu)
+  // Tech (global)          : Tech Hub only (handled above)
 
-  // uRole already computed above (line 1772) — reuse it here
-  const role = uRole;
-  const isAdminLike = ["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role) || isTech;
-  const isHRRole      = role === "HR";
-  const isSupervisor  = role === "SUPERVISOR";
-  const isCashier     = role === "CASHIER";
-  const isFinanceMgr  = role === "FINANCE MANAGER";
+  // uRole already computed above — reuse it here
+  const role        = uRole;
+  const isAdminLike = ["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role);
+  const isHRRole    = role === "HR";
+  const isSupervisor = role === "SUPERVISOR";
+  const isCashier   = role === "CASHIER";
+  const isFinanceMgr = role === "FINANCE MANAGER";
 
   const posNavMap = {
-    // Register: Cashier + CEO/Admin (not Manager/Finance Manager — they oversee, don't ring sales)
-    "pos-nav-register": (isCashier || role === "CEO" || role === "ADMIN") && !isTech,
-    // Stock/Inventory: Admin-like + HR
-    "pos-nav-stock":    (isAdminLike || isHRRole) && !isTech,
-    // Expenses: Admin-like + HR + Supervisor + Finance Manager
-    "pos-nav-expenses": (isAdminLike || isHRRole || isSupervisor || isFinanceMgr) && !isTech,
-    // Credits: Admin-like + HR + Cashier
-    "pos-nav-credits":  (isAdminLike || isHRRole || isCashier) && !isTech,
-    // Finance Hub: Admin-like + HR + Supervisor + Cashier + Finance Manager
-    "pos-nav-finance":  (isAdminLike || isHRRole || isSupervisor || isCashier || isFinanceMgr) && !isTech,
-    // Staff/HR tab: Admin-like + HR
-    "pos-nav-hr":       (isAdminLike || isHRRole) && !isTech,
-    // Tech sub-tab: Tech ONLY
+    // Register — hidden for everyone (no role listed)
+    "pos-nav-register": false,
+    // Inventory — CEO / Admin / Manager / Finance Manager only
+    "pos-nav-stock":    isAdminLike && !isTech,
+    // Expenses — everyone except Tech
+    "pos-nav-expenses": (isAdminLike || isHRRole || isSupervisor || isCashier) && !isTech,
+    // Credits — CEO/Admin/Manager/FinanceMgr + Cashier  (NOT Supervisor/HR)
+    "pos-nav-credits":  (isAdminLike || isCashier) && !isTech,
+    // Finance Hub — everyone except Tech
+    "pos-nav-finance":  (isAdminLike || isHRRole || isSupervisor || isCashier) && !isTech,
+    // Staff / HR — CEO / Admin / Manager / Finance Manager only
+    "pos-nav-hr":       isAdminLike && !isTech,
+    // Tech sub-tab — Tech ONLY
     "pos-nav-tech":     isTech,
   };
 
@@ -2122,14 +2121,15 @@ function enforceRBAC() {
     }
   }, 100);
 
-  // Trigger correct default POS view on first load based on role
-  if (isCashier && !isTech) {
-    setTimeout(() => switchPOSView("register"), 150);
-  } else if ((isSupervisor || isFinanceMgr) && !isTech) {
-    setTimeout(() => switchPOSView("expenses"), 150);
-  } else if (isAdminLike && !isTech) {
-    // Managers/CEO/Admin land on Finance Hub as their default POS view
-    setTimeout(() => switchPOSView("finance"), 150);
+  // Default POS landing view per role
+  if (!isTech) {
+    if (isAdminLike) {
+      setTimeout(() => switchPOSView("finance"), 150);   // CEO/Admin/Manager → Finance Hub
+    } else if (isSupervisor || isHRRole) {
+      setTimeout(() => switchPOSView("expenses"), 150);  // Supervisor/HR → Expenses
+    } else if (isCashier) {
+      setTimeout(() => switchPOSView("finance"), 150);   // Cashier → Finance Hub
+    }
   }
 }
 
