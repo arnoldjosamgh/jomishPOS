@@ -178,7 +178,7 @@
             <span id="live-clock" style="font-size:0.85rem; color:var(--primary); font-weight:bold; font-family:'Courier New',monospace;">00:00:00</span>
             <button onclick="toggleTheme()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;" title="Toggle Theme"><i class="fa-solid fa-circle-half-stroke"></i></button>
             <button onclick="openChangePinModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;" title="Change PIN"><i class="fa-solid fa-key"></i></button>
-            <button id="btn-logout" class="sm-btn danger">Logout</button>
+            <button id="btn-logout" class="sm-btn danger" onclick="handleLogout()">Logout</button>
         </div>
     </div>
     <div class="mobile-topbar" id="mobile-topbar">
@@ -1320,6 +1320,6 @@
     </div>
 
     <script src="offline-db.js?v=2"></script>
-    <script src="app.js?v=30"></script>
+    <script src="app.js?v=32"></script>
 </body>
 </html>
