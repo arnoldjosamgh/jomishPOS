@@ -176,7 +176,8 @@
         <div style="display:flex; align-items:center; gap:12px;">
             <span id="pos-topbar-user" style="font-size:0.8rem; color:var(--text-muted);"><i class="fa-solid fa-user"></i> <span id="pos-topbar-username"></span></span>
             <span id="live-clock" style="font-size:0.85rem; color:var(--primary); font-weight:bold; font-family:'Courier New',monospace;">00:00:00</span>
-            <button onclick="toggleTheme()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;"><i class="fa-solid fa-circle-half-stroke"></i></button>
+            <button onclick="toggleTheme()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;" title="Toggle Theme"><i class="fa-solid fa-circle-half-stroke"></i></button>
+            <button onclick="openChangePinModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;" title="Change PIN"><i class="fa-solid fa-key"></i></button>
             <button id="btn-logout" class="sm-btn danger">Logout</button>
         </div>
     </div>
@@ -1271,6 +1272,34 @@
                     </div>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Change PIN Modal -->
+    <div id="change-pin-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:400px;">
+            <div class="modal-header">
+                <h2>Change My PIN</h2>
+                <span class="close-modal" onclick="closeChangePinModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="form-change-pin" onsubmit="event.preventDefault(); submitChangePin();">
+                    <div class="form-group">
+                        <label>Current PIN / Password</label>
+                        <input type="password" id="change-pin-current" required>
+                    </div>
+                    <div class="form-group">
+                        <label>New PIN (4 digits recommended)</label>
+                        <input type="password" id="change-pin-new" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm New PIN</label>
+                        <input type="password" id="change-pin-confirm" required>
+                    </div>
+                    <div id="change-pin-error" style="color:#ef4444; margin-bottom:10px; font-size:0.85rem; display:none;"></div>
+                    <button type="submit" class="primary-btn" style="width:100%; margin-top:10px;">Save New PIN</button>
+                </form>
+            </div>
         </div>
     </div>
 

@@ -1129,6 +1129,30 @@ app.patch("/api/employees/:id/unsuspend", authenticateToken, (req, res) => {
   );
 });
 
+app.post("/api/employees/me/pin", authenticateToken, (req, res) => {
+  const { currentPin, newPin } = req.body;
+  const userId = req.user.user_id; // From JWT
+  if (!currentPin || !newPin) return res.status(400).json({ error: "Missing pins" });
+
+  db.get("SELECT password FROM employees WHERE id = ?", [userId], (err, row) => {
+    if (err) return res.status(500).json({ error: "Database error" });
+    if (!row) return res.status(404).json({ error: "User not found" });
+
+    bcrypt.compare(currentPin, row.password, (err, isMatch) => {
+      if (err) return res.status(500).json({ error: "Comparison error" });
+      if (!isMatch) return res.status(400).json({ error: "Incorrect current PIN" });
+
+      bcrypt.hash(newPin, 10, (err, hash) => {
+        if (err) return res.status(500).json({ error: "Hashing error" });
+        db.run("UPDATE employees SET password = ? WHERE id = ?", [hash, userId], (err) => {
+          if (err) return res.status(500).json({ error: "Failed to update PIN" });
+          res.json({ message: "PIN changed successfully" });
+        });
+      });
+    });
+  });
+});
+
 app.put("/api/employees/:id/role", authenticateToken, (req, res) => {
   const _role = (req.user.role || "").toLowerCase();
   if (_role !== "ceo" && _role !== "hr" && _role !== "admin" && _role !== "tech" && _role !== "manager")
@@ -1478,18 +1502,16 @@ app.post("/api/transactions", authenticateToken, (req, res) => {
 });
 
 app.delete("/api/transactions/:id", authenticateToken, (req, res) => {
-  // Only admins with prefix ending in '000' (like KEN000) or the System Technician can delete
-  const isTech =
-    req.user.role === "TECH" || req.user.name === "System Technician";
+  // Allowed roles for deletion: Tech, 000 Admins, and Cashiers (via F8)
+  const isTech = req.user.role === "TECH" || req.user.name === "System Technician";
   const is000Admin = req.user.prefix && String(req.user.prefix).endsWith("000");
+  const isCashier = req.user.role === "Cashier" || req.user.role === "CASHIER";
+  const isManagerOrSupervisor = ["MANAGER", "SUPERVISOR", "HR", "CEO"].includes((req.user.role || "").toUpperCase());
 
-  if (!isTech && !is000Admin) {
-    return res
-      .status(403)
-      .json({
-        error:
-          "Forbidden: Only primary Administrators (000) can delete transactions.",
-      });
+  if (!isTech && !is000Admin && !isCashier && !isManagerOrSupervisor) {
+    return res.status(403).json({
+      error: "Forbidden: You do not have permission to delete transactions.",
+    });
   }
   const { id } = req.params;
   db.run("DELETE FROM transactions WHERE id = ?", [id], function (err) {

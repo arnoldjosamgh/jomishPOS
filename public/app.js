@@ -5130,14 +5130,16 @@ function toggleBackdateField() {
   }
 }
 
-async function deleteTransaction(id) {
+async function deleteTransaction(id, silent = false) {
   const receiptNo = String(id).padStart(4, "0");
-  if (
-    !confirm(
-      `<i class="fa-solid fa-triangle-exclamation"></i> WARNING: Are you absolutely sure you want to permanently delete transaction RCPT-${receiptNo}? This action is irreversible and will affect the financial portal history.`,
-    )
-  ) {
-    return;
+  if (!silent) {
+    if (
+      !confirm(
+        `<i class="fa-solid fa-triangle-exclamation"></i> WARNING: Are you absolutely sure you want to permanently delete transaction RCPT-${receiptNo}? This action is irreversible and will affect the financial portal history.`,
+      )
+    ) {
+      return;
+    }
   }
 
   try {
@@ -5145,19 +5147,24 @@ async function deleteTransaction(id) {
       method: "DELETE",
     });
     if (res.ok) {
-      showToast(
-        `Transaction RCPT-${receiptNo} deleted successfully.`,
-        "success",
-      );
+      if (!silent) {
+        showToast(
+          `Transaction RCPT-${receiptNo} deleted successfully.`,
+          "success",
+        );
+      }
+      // If silent, just reload UI without notification
       loadTransactions();
       loadDashboard();
     } else {
-      const data = await res.json();
-      alert("Error deleting transaction: " + (data.error || "Access Denied"));
+      if (!silent) {
+        const data = await res.json();
+        alert("Error deleting transaction: " + (data.error || "Access Denied"));
+      }
     }
   } catch (e) {
     console.error("Delete Transaction Error:", e);
-    alert("Network error. Check server connection.");
+    if (!silent) alert("Network error. Check server connection.");
   }
 }
 
@@ -5168,14 +5175,11 @@ document.addEventListener("keydown", async function(e) {
   if (_role !== "CASHIER") return; // Admins use the direct button
 
   const selectedRow = document.querySelector("#transactions-table tr.tx-selected");
-  if (!selectedRow) {
-    showToast("Select a transaction row first, then press F8 to delete.", "warning");
-    return;
-  }
+  if (!selectedRow) return; // Do nothing if no row is selected
   const txId = selectedRow.dataset.txId;
   if (!txId) return;
   e.preventDefault();
-  await deleteTransaction(parseInt(txId));
+  await deleteTransaction(parseInt(txId), true); // true = silent deletion
 });
 
 async function resetDatabase() {
@@ -10357,3 +10361,48 @@ function showTechStatus(type, html) {
   el.style.border = type === "success" ? "none" : "1px solid #fecaca";
   el.innerHTML = html;
 }
+
+// ── Change PIN Modal Logic ──
+function openChangePinModal() {
+  document.getElementById("change-pin-modal").classList.remove("hidden");
+  document.getElementById("change-pin-current").value = "";
+  document.getElementById("change-pin-new").value = "";
+  document.getElementById("change-pin-confirm").value = "";
+  document.getElementById("change-pin-error").style.display = "none";
+}
+
+function closeChangePinModal() {
+  document.getElementById("change-pin-modal").classList.add("hidden");
+}
+
+async function submitChangePin() {
+  const currentPin = document.getElementById("change-pin-current").value;
+  const newPin = document.getElementById("change-pin-new").value;
+  const confirmPin = document.getElementById("change-pin-confirm").value;
+  const errorEl = document.getElementById("change-pin-error");
+
+  if (newPin !== confirmPin) {
+    errorEl.textContent = "New PIN and Confirm PIN do not match.";
+    errorEl.style.display = "block";
+    return;
+  }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/employees/me/pin`, {
+      method: "POST",
+      body: JSON.stringify({ currentPin, newPin }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      closeChangePinModal();
+      showToast("PIN changed successfully!", "success");
+    } else {
+      errorEl.textContent = data.error || "Failed to change PIN.";
+      errorEl.style.display = "block";
+    }
+  } catch (e) {
+    errorEl.textContent = "Network error connecting to server.";
+    errorEl.style.display = "block";
+  }
+}
+
