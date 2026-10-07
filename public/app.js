@@ -312,7 +312,8 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (_role === "SUPERVISOR" || _role === "HR") {
         switchPOSView("expenses");   // Supervisor/HR → Expenses
       } else {
-        switchPOSView("finance");    // Cashier / others → Finance Hub
+        switchPOSView("register");   // Cashier / Tech → Register
+        loadPOSProducts();
       }
     }, 300);
   }
@@ -631,7 +632,7 @@ function initNavigation() {
             } else if (_role === "SUPERVISOR" || _role === "HR") {
               switchPOSView("expenses");   // Supervisor/HR → Expenses
             } else {
-              switchPOSView("finance");    // Cashier / others → Finance Hub
+              switchPOSView("register");   // Cashier / Tech → Register
             }
           }
           if (targetId === "hr-mgmt") {
@@ -2048,9 +2049,11 @@ function enforceRBAC() {
   // ── POS NAV TAB MATRIX (exact per user spec) ─────────────────────────────
   // CEO / Admin / Manager  : Inventory, Expenses, Credits, Finance Hub, Staff/HR
   // Supervisor / HR        : Expenses, Finance Hub
-  // Cashier                : Expenses, Credits, Finance Hub
-  // Register               : hidden for all (no role rings sales from this menu)
-  // Tech (global)          : Tech Hub only (handled above)
+  // ── POS NAV TAB MATRIX ────────────────────────────────────────────────
+  // CEO / Admin / Manager  : Inventory, Expenses, Credits, Finance Hub, Staff/HR
+  // Supervisor / HR        : Expenses, Finance Hub
+  // Cashier                : Register, Expenses, Credits, Finance Hub
+  // Tech (global)          : ALL tabs
 
   // uRole already computed above — reuse it here
   const role        = uRole;
@@ -2061,18 +2064,18 @@ function enforceRBAC() {
   const isFinanceMgr = role === "FINANCE MANAGER";
 
   const posNavMap = {
-    // Register — hidden for everyone (no role listed)
-    "pos-nav-register": false,
-    // Inventory — CEO / Admin / Manager / Finance Manager only
-    "pos-nav-stock":    isAdminLike && !isTech,
-    // Expenses — everyone except Tech
-    "pos-nav-expenses": (isAdminLike || isHRRole || isSupervisor || isCashier) && !isTech,
-    // Credits — CEO/Admin/Manager/FinanceMgr + Cashier  (NOT Supervisor/HR)
-    "pos-nav-credits":  (isAdminLike || isCashier) && !isTech,
-    // Finance Hub — everyone except Tech
-    "pos-nav-finance":  (isAdminLike || isHRRole || isSupervisor || isCashier) && !isTech,
-    // Staff / HR — CEO / Admin / Manager / Finance Manager only
-    "pos-nav-hr":       isAdminLike && !isTech,
+    // Register — Cashier + Tech
+    "pos-nav-register": isCashier || isTech,
+    // Inventory — Admin-like + Tech
+    "pos-nav-stock":    isAdminLike || isTech,
+    // Expenses — everyone
+    "pos-nav-expenses": isAdminLike || isHRRole || isSupervisor || isCashier || isTech,
+    // Credits — Admin-like + Cashier + Tech
+    "pos-nav-credits":  isAdminLike || isCashier || isTech,
+    // Finance Hub — everyone
+    "pos-nav-finance":  isAdminLike || isHRRole || isSupervisor || isCashier || isTech,
+    // Staff / HR — Admin-like + Tech
+    "pos-nav-hr":       isAdminLike || isTech,
     // Tech sub-tab — Tech ONLY
     "pos-nav-tech":     isTech,
   };
@@ -2122,14 +2125,14 @@ function enforceRBAC() {
   }, 100);
 
   // Default POS landing view per role
-  if (!isTech) {
-    if (isAdminLike) {
-      setTimeout(() => switchPOSView("finance"), 150);   // CEO/Admin/Manager → Finance Hub
-    } else if (isSupervisor || isHRRole) {
-      setTimeout(() => switchPOSView("expenses"), 150);  // Supervisor/HR → Expenses
-    } else if (isCashier) {
-      setTimeout(() => switchPOSView("finance"), 150);   // Cashier → Finance Hub
-    }
+  if (isTech) {
+    setTimeout(() => switchPOSView("register"), 150);   // Tech → Register (full access)
+  } else if (isAdminLike) {
+    setTimeout(() => switchPOSView("finance"), 150);    // CEO/Admin/Manager → Finance Hub
+  } else if (isSupervisor || isHRRole) {
+    setTimeout(() => switchPOSView("expenses"), 150);   // Supervisor/HR → Expenses
+  } else if (isCashier) {
+    setTimeout(() => switchPOSView("register"), 150);   // Cashier → Register
   }
 }
 
