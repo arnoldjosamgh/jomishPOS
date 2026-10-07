@@ -1925,7 +1925,8 @@ function enforceRBAC() {
       .querySelectorAll(".tech-only")
       .forEach((el) => el.classList.add("hidden"));
     // Admin UI elements (add employee button, role matrix) — HR, CEO, Manager can see these
-    if (["HR", "CEO", "Manager"].includes(USER_ROLE)) {
+    const uRole = (USER_ROLE || "").toUpperCase();
+    if (["HR", "CEO", "MANAGER", "ADMIN"].includes(uRole)) {
       document
         .querySelectorAll(".admin-only")
         .forEach((el) => el.classList.remove("hidden"));
@@ -1962,7 +1963,7 @@ function enforceRBAC() {
   // (Handled above in the isTech || isDemo block)
 
   // Hide admin UI for non-HR/CEO/Manager roles
-  if (!["CEO", "HR", "Manager"].includes(USER_ROLE) && !isTech) {
+  if (!["HR", "CEO", "MANAGER", "ADMIN"].includes(uRole) && !isTech) {
     const roleMatrix = document.getElementById("role-matrix-container");
     const brandMatrix = document.getElementById("brand-settings-container");
     if (roleMatrix) roleMatrix.style.display = "none";
@@ -2282,15 +2283,15 @@ async function loadEmployees() {
                         <button class="sm-btn success" onclick="generateIDCard(${JSON.stringify(emp).replace(/"/g, "&quot;")})">ID Card</button>
                         <button class="sm-btn secondary" onclick="openEmployeeNotes(${emp.id}, '${emp.first_name}')">Notes</button>
                         ${
-                          ["CEO", "HR", "Supervisor", "Manager"].includes(
-                            USER_ROLE,
+                          ["CEO", "HR", "SUPERVISOR", "MANAGER", "ADMIN"].includes(
+                            (USER_ROLE || "").toUpperCase()
                           )
                             ? `
                             <button class="sm-btn ${emp.is_sick ? "success" : "danger"}" onclick="toggleSick(${emp.id}, ${emp.is_sick ? 0 : 1})">
                                 ${emp.is_sick ? "Mark Healthy" : "Report Sick"}
                             </button>
                             ${
-                              ["CEO", "HR"].includes(USER_ROLE)
+                              ["CEO", "HR", "MANAGER", "ADMIN"].includes((USER_ROLE || "").toUpperCase())
                                 ? `
                                 <button class='sm-btn primary' onclick="openPassModal(${JSON.stringify(emp).replace(/"/g, "&quot;")})" title="Edit Access, Role, and Termination"><i class="fa-solid fa-key"></i> Edit Access</button>
                             `
