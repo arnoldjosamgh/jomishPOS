@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 136;
+const CURRENT_VERSION = 137;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -1140,6 +1140,64 @@ function runMigrations(fromVersion) {
                 console.log('Migration to v136 complete (SQLite: email uniqueness skipped, handled in app layer).');
             });
         }
+    }
+
+    if (fromVersion < 137) {
+        // v137: Enforce correct role permissions:
+        //   Manager  = same as CEO (full access)
+        //   Cashier  = POS Register + Finance Hub (can_see_pos + can_see_sme) only
+        //   Supervisor = Finance Hub + Expenses (can_see_sme only) + Schedules
+        // Column order: role_name, dashboard, hr, attendance, sme, pos, secretary, transport, hardware, system_users, schedules
+        const v137Roles = [
+            ['CEO',        1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['Manager',    1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['Admin',      1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['HR',         1, 1, 1, 0, 0, 0, 0, 0, 1, 1],
+            ['Cashier',    0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+            ['Supervisor', 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+        ];
+        let pending137 = v137Roles.length;
+        v137Roles.forEach(r => {
+            db.run(
+                `INSERT INTO roles_config
+                     (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos,
+                      can_see_secretary, can_see_transport, can_see_hardware, can_see_system_users, can_see_schedules)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 ON CONFLICT(role_name) DO UPDATE SET
+                     can_see_dashboard    = excluded.can_see_dashboard,
+                     can_see_hr           = excluded.can_see_hr,
+                     can_see_attendance   = excluded.can_see_attendance,
+                     can_see_sme          = excluded.can_see_sme,
+                     can_see_pos          = excluded.can_see_pos,
+                     can_see_secretary    = excluded.can_see_secretary,
+                     can_see_transport    = excluded.can_see_transport,
+                     can_see_hardware     = excluded.can_see_hardware,
+                     can_see_system_users = excluded.can_see_system_users,
+                     can_see_schedules    = excluded.can_see_schedules`,
+                r,
+                () => {
+                    pending137--;
+                    if (pending137 === 0) {
+                        // Also update existing employees who have these roles
+                        db.run(`UPDATE employees SET
+                            can_see_dashboard    = (SELECT can_see_dashboard    FROM roles_config WHERE role_name = employees.role),
+                            can_see_hr           = (SELECT can_see_hr           FROM roles_config WHERE role_name = employees.role),
+                            can_see_attendance   = (SELECT can_see_attendance   FROM roles_config WHERE role_name = employees.role),
+                            can_see_sme          = (SELECT can_see_sme          FROM roles_config WHERE role_name = employees.role),
+                            can_see_pos          = (SELECT can_see_pos          FROM roles_config WHERE role_name = employees.role),
+                            can_see_secretary    = (SELECT can_see_secretary    FROM roles_config WHERE role_name = employees.role),
+                            can_see_transport    = (SELECT can_see_transport    FROM roles_config WHERE role_name = employees.role),
+                            can_see_hardware     = (SELECT can_see_hardware     FROM roles_config WHERE role_name = employees.role),
+                            can_see_system_users = (SELECT can_see_system_users FROM roles_config WHERE role_name = employees.role),
+                            can_see_schedules    = (SELECT can_see_schedules    FROM roles_config WHERE role_name = employees.role)
+                            WHERE role IN ('CEO','Manager','Admin','HR','Cashier','Supervisor')`);
+                        db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '137'], () => {
+                            console.log('Migration to v137 complete: Role permissions reset for Manager/Cashier/Supervisor.');
+                        });
+                    }
+                }
+            );
+        });
     }
 }
 

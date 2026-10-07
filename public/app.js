@@ -1885,8 +1885,8 @@ function enforceRBAC() {
     document
       .querySelectorAll(".tech-only")
       .forEach((el) => el.classList.add("hidden"));
-    // Admin UI elements (add employee button, role matrix) — only HR role can see these
-    if (USER_ROLE === "HR") {
+    // Admin UI elements (add employee button, role matrix) — HR, CEO, Manager can see these
+    if (["HR", "CEO", "Manager"].includes(USER_ROLE)) {
       document
         .querySelectorAll(".admin-only")
         .forEach((el) => el.classList.remove("hidden"));
@@ -1922,8 +1922,8 @@ function enforceRBAC() {
   // Demo Mode override — always hide Tech Hub
   // (Handled above in the isTech || isDemo block)
 
-  // Hide admin UI for non-HR/CEO roles
-  if (!["CEO", "HR"].includes(USER_ROLE) && !isTech) {
+  // Hide admin UI for non-HR/CEO/Manager roles
+  if (!["CEO", "HR", "Manager"].includes(USER_ROLE) && !isTech) {
     const roleMatrix = document.getElementById("role-matrix-container");
     const brandMatrix = document.getElementById("brand-settings-container");
     if (roleMatrix) roleMatrix.style.display = "none";
@@ -1965,23 +1965,24 @@ function enforceRBAC() {
   }
 
   // ── POS NAV TAB VISIBILITY BY ROLE ───────────────────────────────────
-  // Admin / Manager / HR : Inventory, Expenses, Credits, Finance Hub, Staff/HR
-  // Supervisor            : Expenses, Credits, Finance Hub
-  // Cashier               : Register, Finance Hub
+  // CEO / Manager / Admin : Register, Inventory, Expenses, Credits, Finance Hub, Staff/HR
+  // Supervisor            : Finance Hub + Expenses only
+  // Cashier               : Register + Finance Hub only
   // Tech (global)         : everything hidden except Tech Hub (handled above)
 
   const role = (USER_ROLE || "").toUpperCase();
-  const isAdminLike = ["CEO", "ADMIN", "HR", "MANAGER"].includes(role) || isTech;
+  const isAdminLike = ["CEO", "ADMIN", "MANAGER"].includes(role) || isTech;
+  const isHRRole   = role === "HR";
   const isSupervisor = role === "SUPERVISOR";
   const isCashier = role === "CASHIER";
 
   const posNavMap = {
-    "pos-nav-register": isCashier,                         // cashier only
-    "pos-nav-stock":    isAdminLike,                        // admin only (Inventory)
-    "pos-nav-expenses": isAdminLike || isSupervisor,        // admin + supervisor
-    "pos-nav-credits":  isAdminLike || isSupervisor,        // admin + supervisor
-    "pos-nav-finance":  isAdminLike || isSupervisor || isCashier, // all non-tech
-    "pos-nav-hr":       isAdminLike,                        // admin only (Staff/HR)
+    "pos-nav-register": isAdminLike || isHRRole || isCashier,  // CEO/Manager/Admin/HR + Cashier
+    "pos-nav-stock":    isAdminLike || isHRRole,               // CEO/Manager/Admin/HR only (Inventory)
+    "pos-nav-expenses": isAdminLike || isHRRole || isSupervisor, // CEO/Manager/Admin/HR + Supervisor
+    "pos-nav-credits":  isAdminLike || isHRRole,               // CEO/Manager/Admin/HR only
+    "pos-nav-finance":  isAdminLike || isHRRole || isSupervisor || isCashier, // all non-tech
+    "pos-nav-hr":       isAdminLike || isHRRole,               // CEO/Manager/Admin/HR only (Staff/HR)
   };
 
   Object.entries(posNavMap).forEach(([id, visible]) => {
@@ -1989,31 +1990,46 @@ function enforceRBAC() {
     if (btn) btn.style.display = visible ? "" : "none";
   });
 
-  // Show/Hide buying price inputs (Admin/HR only)
-  const canSeeAdminStuff = isAdminLike;
-  const addBuyingPriceGroup =
-    document.getElementById("prod-buying-price")?.parentElement;
-  if (addBuyingPriceGroup)
-    addBuyingPriceGroup.style.display = canSeeAdminStuff ? "block" : "none";
-  const editBuyingPriceGroup = document.getElementById(
-    "edit-prod-buying-price",
-  )?.parentElement;
-  if (editBuyingPriceGroup)
-    editBuyingPriceGroup.style.display = canSeeAdminStuff ? "block" : "none";
+  // Show/Hide buying price inputs (Admin/CEO/Manager/HR only)
+  const canSeeAdminStuff = isAdminLike || isHRRole;
+  const addBuyingPriceGroup = document.getElementById("prod-buying-price")?.parentElement;
+  if (addBuyingPriceGroup) addBuyingPriceGroup.style.display = canSeeAdminStuff ? "block" : "none";
+  const editBuyingPriceGroup = document.getElementById("edit-prod-buying-price")?.parentElement;
+  if (editBuyingPriceGroup) editBuyingPriceGroup.style.display = canSeeAdminStuff ? "block" : "none";
 
-  // Auto-switch to first visible POS tab if current tab is now hidden
-  const posNavOrder = [
-    "pos-nav-register", "pos-nav-stock", "pos-nav-expenses",
-    "pos-nav-credits", "pos-nav-finance", "pos-nav-hr"
-  ];
-  const activeTab = document.querySelector(".pos-tab.active");
-  if (activeTab && activeTab.style.display === "none") {
-    const firstVisibleTab = posNavOrder
-      .map(id => document.getElementById(id))
-      .find(btn => btn && btn.style.display !== "none");
-    if (firstVisibleTab) firstVisibleTab.click();
+  // Auto-switch to first visible POS tab if currently on a hidden tab
+  setTimeout(() => {
+    const currentView = document.querySelector(".pos-sub-view:not(.hidden)[style*='display: block'], .pos-sub-view:not(.hidden):not([style*='display: none'])");
+    if (currentView) {
+      // Check if the nav button for this view is visible
+      const viewToNav = {
+        "pos-register-view": "pos-nav-register",
+        "pos-stock-view":    "pos-nav-stock",
+        "pos-expenses-view": "pos-nav-expenses",
+        "pos-credits-view":  "pos-nav-credits",
+        "pos-hr-view":       "pos-nav-hr",
+      };
+      const navId = viewToNav[currentView.id];
+      const navBtn = navId ? document.getElementById(navId) : null;
+      if (navBtn && navBtn.style.display === "none") {
+        // Current tab is now hidden — switch to first visible
+        const posNavOrder = ["pos-nav-register", "pos-nav-finance", "pos-nav-expenses", "pos-nav-stock", "pos-nav-credits", "pos-nav-hr"];
+        const firstVisibleTab = posNavOrder
+          .map(id => document.getElementById(id))
+          .find(btn => btn && btn.style.display !== "none");
+        if (firstVisibleTab) firstVisibleTab.click();
+      }
+    }
+  }, 100);
+
+  // Trigger correct default POS view on first load based on role
+  if (isCashier && !isTech) {
+    setTimeout(() => switchPOSView("register"), 150);
+  } else if (isSupervisor && !isTech) {
+    setTimeout(() => switchPOSView("finance"), 150);
   }
 }
+
 
 async function fetchAuth(url, options = {}) {
   const token = localStorage.getItem("jomish_token");
