@@ -608,3 +608,24 @@ body.dark-theme #pos-search-wrap input {
 #pos-register-view, #pos-stock-view, #pos-expenses-view, #pos-credits-view {
   padding: 14px 16px !important;
 }
+
+/* ── RBAC CRITICAL FIX ──────────────────────────────────────────────────────
+   .pos-tab uses display:inline-flex !important which blocks JS display:none.
+   These attribute selectors beat class-level !important by specificity and
+   ensure that when enforceRBAC() hides a tab via JS, it stays hidden.      */
+#pos-nav-register[style*="display: none"],
+#pos-nav-register[style*="display:none"],
+#pos-nav-stock[style*="display: none"],
+#pos-nav-stock[style*="display:none"],
+#pos-nav-expenses[style*="display: none"],
+#pos-nav-expenses[style*="display:none"],
+#pos-nav-credits[style*="display: none"],
+#pos-nav-credits[style*="display:none"],
+#pos-nav-finance[style*="display: none"],
+#pos-nav-finance[style*="display:none"],
+#pos-nav-hr[style*="display: none"],
+#pos-nav-hr[style*="display:none"],
+#pos-nav-tech[style*="display: none"],
+#pos-nav-tech[style*="display:none"] {
+  display: none !important;
+}

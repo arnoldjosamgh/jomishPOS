@@ -506,6 +506,27 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
   display: flex !important;
 }
 
+/* ── RBAC CRITICAL FIX ──────────────────────────────────────────────────────
+   .pos-tab uses display:inline-flex !important which blocks JS display:none.
+   These attribute selectors have higher specificity than class rules and
+   ensure that when enforceRBAC() hides a tab via JS, it stays hidden.      */
+#pos-nav-register[style*="display: none"],
+#pos-nav-register[style*="display:none"],
+#pos-nav-stock[style*="display: none"],
+#pos-nav-stock[style*="display:none"],
+#pos-nav-expenses[style*="display: none"],
+#pos-nav-expenses[style*="display:none"],
+#pos-nav-credits[style*="display: none"],
+#pos-nav-credits[style*="display:none"],
+#pos-nav-finance[style*="display: none"],
+#pos-nav-finance[style*="display:none"],
+#pos-nav-hr[style*="display: none"],
+#pos-nav-hr[style*="display:none"],
+#pos-nav-tech[style*="display: none"],
+#pos-nav-tech[style*="display:none"] {
+  display: none !important;
+}
+
 /* Finance Hub tab — gold */
 .pos-tab-finance {
   background: linear-gradient(145deg, #f5b942, #c07b0a) !important;
