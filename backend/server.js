@@ -2788,13 +2788,15 @@ app.post("/api/checkout", authenticateToken, (req, res) => {
         const transaction_id = this.lastID;
 
         db.run(
-          "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid) VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
           [
             cashier_id,
             total_amount,
             transaction_id,
             effectivePaymentMethod,
             paid,
+            buyer_name || null,
+            buyer_phone || null,
           ],
           function (err2) {
             if (err2) {
@@ -5314,13 +5316,15 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
         SELECT 
             p.id as pos_order_id,
             d.id as delivery_id,
-            COALESCE(d.client_name, 'In-Store / Invoice') as client_name, 
-            d.client_phone, 
-            COALESCE(d.client_location, 'POS') as client_location,
+            COALESCE(d.client_name, p.buyer_name, 'Walk-in / Invoice') as client_name, 
+            COALESCE(d.client_phone, p.buyer_phone, '') as client_phone, 
+            COALESCE(d.client_location, 'In-Store') as client_location,
             p.id as order_id, 
             p.total_amount, 
             p.transaction_id, 
-            t.payment_status
+            t.payment_status,
+            p.buyer_name,
+            p.buyer_phone
         FROM pos_orders p
         JOIN transactions t ON p.transaction_id = t.id
         LEFT JOIN deliveries d ON d.order_id = p.id
@@ -5797,6 +5801,8 @@ server
     const migrations = [
       `ALTER TABLE pos_orders ADD COLUMN payment_method TEXT DEFAULT 'CASH'`,
       `ALTER TABLE pos_orders ADD COLUMN amount_paid REAL DEFAULT 0`,
+      `ALTER TABLE pos_orders ADD COLUMN buyer_name TEXT`,
+      `ALTER TABLE pos_orders ADD COLUMN buyer_phone TEXT`,
       `ALTER TABLE deliveries ADD COLUMN driver_id INTEGER`,
       `ALTER TABLE deliveries ADD COLUMN driver_name TEXT`,
     ];

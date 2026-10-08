@@ -5050,8 +5050,8 @@ async function loadTransactions(searchTerm = "") {
       } else if (_desc.includes("bank") || _desc.includes("transfer")) {
         _badge = "🏦 Bank Transfer";
         _bColor = "#3b82f6";
-      } else if (_desc.includes("invoice")) {
-        _badge = "🧾 Invoice";
+      } else if (_desc.includes("invoice") || _desc.includes("pending invoice")) {
+        _badge = "⏳ Pending Payment";
         _bColor = "#8b5cf6";
       } else if (tx.type === "EXPENSE") {
         _badge = "💸 Expense";
