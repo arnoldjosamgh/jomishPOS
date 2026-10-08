@@ -415,7 +415,9 @@ const schema = [
     )`,
     `CREATE TABLE IF NOT EXISTS pos_orders (
         id SERIAL PRIMARY KEY, cashier_id INTEGER, total_amount REAL,
-        order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, transaction_id INTEGER
+        order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, transaction_id INTEGER,
+        payment_method TEXT DEFAULT 'CASH', amount_paid REAL DEFAULT 0,
+        buyer_name TEXT, buyer_phone TEXT
     )`,
     `CREATE TABLE IF NOT EXISTS schedules (
         id SERIAL PRIMARY KEY, employee_id INTEGER, shift_date TEXT,
@@ -1226,9 +1228,33 @@ function runMigrations(fromVersion) {
                     console.error(`[Migration v138] Error adding ${col}:`, err.message);
                 }
                 runNextV138();
-            });
         }
         runNextV138();
+    }
+
+    if (fromVersion < 139) {
+        // v139: Add buyer_name and buyer_phone to pos_orders for COD/Invoices
+        const posCols = [
+            { name: 'buyer_name', type: 'TEXT' },
+            { name: 'buyer_phone', type: 'TEXT' }
+        ];
+        let i = 0;
+        function runNextV139() {
+            if (i >= posCols.length) {
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '139'], () => {
+                    console.log('Migration to v139 complete: Added buyer info to pos_orders.');
+                });
+                return;
+            }
+            const col = posCols[i++];
+            db.run(`ALTER TABLE pos_orders ADD COLUMN ${col.name} ${col.type}`, (err) => {
+                if (err && !err.message.includes('duplicate column') && !err.message.includes('already exists') && !err.message.includes('Duplicate column')) {
+                    console.error(`[Migration v139] Error adding ${col.name}:`, err.message);
+                }
+                runNextV139();
+            });
+        }
+        runNextV139();
     }
 }
 

@@ -5797,10 +5797,6 @@ server
 
     // Migrations for POS and Deliveries features
     const migrations = [
-      `ALTER TABLE pos_orders ADD COLUMN payment_method TEXT DEFAULT 'CASH'`,
-      `ALTER TABLE pos_orders ADD COLUMN amount_paid REAL DEFAULT 0`,
-      `ALTER TABLE pos_orders ADD COLUMN buyer_name TEXT`,
-      `ALTER TABLE pos_orders ADD COLUMN buyer_phone TEXT`,
       `ALTER TABLE deliveries ADD COLUMN driver_id INTEGER`,
       `ALTER TABLE deliveries ADD COLUMN driver_name TEXT`,
     ];
