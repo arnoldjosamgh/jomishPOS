@@ -10146,10 +10146,29 @@ window.loadPendingCOD = async function () {
 };
 
 // Opens the standard payment panel pre-filled for a pending order
-window.openPendingOrderCheckout = function (posOrderId, totalAmount, clientName) {
+window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName) {
   // Close the COD modal first
   const codModal = document.getElementById("cod-modal");
   if (codModal) codModal.classList.add("hidden");
+
+  // Fetch the actual order items and populate the cart
+  try {
+    const itemsRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`);
+    if (itemsRes.ok) {
+      const items = await itemsRes.json();
+      if (items && items.length > 0) {
+        posCart = items.map(i => ({
+          id: i.id || Math.random(),
+          name: i.name,
+          price: i.price,
+          qty: i.qty,
+        }));
+        renderCart();
+      }
+    }
+  } catch (e) {
+    console.warn("Could not load order items:", e);
+  }
 
   // Store which pending order we're collecting for
   window._pendingOrderId = posOrderId;
@@ -10205,6 +10224,10 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
       closePaymentPanel();
       showToast("Payment collected!", "success");
       loadPendingCOD();
+
+      // Clear the cart so the cashier starts fresh for the next sale
+      posCart = [];
+      renderCart();
 
       if (data.transaction_id && data.total_amount) {
         printReceipt(

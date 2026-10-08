@@ -2822,6 +2822,19 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   }
 });
 
+// Get order items by pos_order_id (used when cashier collects payment for a pending invoice)
+app.get("/api/pos_orders/:id/items", authenticateToken, (req, res) => {
+  db.all(
+    `SELECT oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
+     FROM order_items oi WHERE oi.pos_order_id = ?`,
+    [req.params.id],
+    (err, items) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(items || []);
+    }
+  );
+});
+
 app.get("/api/pos_orders/tx/:transaction_id", authenticateToken, (req, res) => {
   const txId = req.params.transaction_id;
   db.get(
