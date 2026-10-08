@@ -2254,6 +2254,42 @@ async function fetchAuth(url, options = {}) {
         .catch(() => {}); // Ignore parse errors for caching
     }
 
+    // After a successful mutation, bust the relevant cache so data reflects immediately
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && res.ok && window.OfflineDB) {
+      // Map URL patterns to the cache keys they affect
+      const CACHE_BUST_MAP = [
+        { pattern: "/products",       busts: ["/api/products", "/api/categories"] },
+        { pattern: "/employees",      busts: ["/api/employees"] },
+        { pattern: "/users/",         busts: ["/api/employees"] },
+        { pattern: "/roles",          busts: ["/api/roles"] },
+        { pattern: "/transactions",   busts: ["/api/transactions", "/api/finance"] },
+        { pattern: "/pos_orders",     busts: ["/api/pos_orders", "/api/transactions"] },
+        { pattern: "/checkout",       busts: ["/api/products", "/api/pos_orders", "/api/transactions"] },
+        { pattern: "/attendance",     busts: ["/api/attendance"] },
+        { pattern: "/schedules",      busts: ["/api/schedules"] },
+        { pattern: "/shift",          busts: ["/api/shifts", "/api/shift-assignments"] },
+        { pattern: "/notices",        busts: ["/api/notices"] },
+        { pattern: "/notes",          busts: ["/api/notes"] },
+        { pattern: "/messages",       busts: ["/api/messages"] },
+        { pattern: "/calendar",       busts: ["/api/calendar"] },
+        { pattern: "/credits",        busts: ["/api/credits"] },
+        { pattern: "/deliveries",     busts: ["/api/deliveries"] },
+        { pattern: "/settings",       busts: ["/api/settings"] },
+        { pattern: "/buyers",         busts: ["/api/buyers"] },
+        { pattern: "/expense",        busts: ["/api/expense"] },
+        { pattern: "/barcodes",       busts: ["/api/barcodes"] },
+      ];
+
+      for (const rule of CACHE_BUST_MAP) {
+        if (url.includes(rule.pattern)) {
+          for (const key of rule.busts) {
+            window.OfflineDB.bustCache(key).catch(() => {});
+          }
+          break;
+        }
+      }
+    }
+
     return res;
   } catch (e) {
     console.error("[Offline/Network Error]", e.message, url);

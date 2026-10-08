@@ -279,6 +279,36 @@ async function clearOfflineCredentials(username) {
     }
 }
 
+// ─── CACHE BUSTING ──────────────────────────────────────────────
+
+/**
+ * Deletes all cache entries whose URL contains the given pattern.
+ * Call this after any successful mutation so the next GET fetches fresh data.
+ * @param {string} urlPattern  e.g. '/api/products', '/api/employees'
+ */
+async function bustCache(urlPattern) {
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx    = db.transaction(STORE_CACHE, 'readwrite');
+            const store = tx.objectStore(STORE_CACHE);
+            const req   = store.openCursor();
+            req.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) return; // done iterating
+                if (cursor.value && cursor.value.url && cursor.value.url.includes(urlPattern)) {
+                    cursor.delete();
+                }
+                cursor.continue();
+            };
+            tx.oncomplete = () => resolve();
+            tx.onerror    = () => reject(tx.error);
+        });
+    } catch (e) {
+        console.warn('[OfflineDB] Failed to bust cache for:', urlPattern, e);
+    }
+}
+
 // Expose globally for app.js and login.html
 window.OfflineDB = {
     cacheApiResponse,
@@ -293,5 +323,6 @@ window.OfflineDB = {
     queueOfflineSale,
     getPendingOfflineSales,
     removeSyncedSales,
-    getPendingCount
+    getPendingCount,
+    bustCache
 };
