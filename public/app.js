@@ -4201,6 +4201,55 @@ function closeReceipt() {
   _currentReceiptData = null;
 }
 
+function _buildKitchenTokenHTML(d) {
+  let tokenItems = "";
+  d.items.forEach((i) => {
+    const qty = i.qty || 1;
+    tokenItems += `
+      <tr>
+          <td style="padding:3px 0; word-break:break-word; white-space:normal; font-size:12pt; font-weight:bold;">${i.name}</td>
+          <td style="padding:3px 0; text-align:right; font-size:14pt; font-weight:bold;">${qty}</td>
+      </tr>`;
+  });
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KITCHEN TOKEN #${d.orderId}</title>
+<style>
+/* ─── 80mm thermal roll paper ─── */
+@page { size: 80mm auto; margin: 3mm 2mm; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Courier New', Courier, monospace; font-size: 11pt; line-height: 1.4; width: 76mm; color: #000; background: #fff; }
+.center { text-align: center; }
+.heading { font-size: 16pt; font-weight: bold; text-align: center; margin: 4px 0; }
+.row { display: flex; margin: 2px 0; font-size: 12pt; font-weight:bold; }
+.divider { border-top: 1px dashed #888; margin: 6px 0; }
+table { width: 100%; border-collapse: collapse; }
+.meta { font-size: 9pt; color: #444; }
+</style>
+</head>
+<body>
+    <div class="center heading" style="font-size:16pt;">KITCHEN TOKEN</div>
+    <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: #${d.orderId}</span></div>
+    <div class="row"><span>Date: ${d.dateStr}</span></div>
+    <div class="divider"></div>
+    <table>
+        <thead>
+            <tr>
+                <th style="text-align:left; width:80%;">Item</th>
+                <th style="text-align:right; width:20%;">Qty</th>
+            </tr>
+        </thead>
+        <tbody>${tokenItems}</tbody>
+    </table>
+    <div class="divider"></div>
+    <div class="center meta" style="margin-top:10px;">End of Token</div>
+</body>
+</html>`;
+}
+
 /**
  * Build the receipt HTML string for printing.
  * Used by doPrint() to create the print window.
@@ -4254,38 +4303,6 @@ function _buildReceiptHTML(d) {
 
   const logoSrc =
     localStorage.getItem("jomish_logo_base64") || "assets/default-logo.png";
-
-  let kitchenTokenHtml = "";
-  if (d.isInvoice) {
-    let tokenItems = "";
-    d.items.forEach((i) => {
-      const qty = i.qty || 1;
-      tokenItems += `
-        <tr>
-            <td style="padding:3px 0; word-break:break-word; white-space:normal; font-size:12pt; font-weight:bold;">${i.name}</td>
-            <td style="padding:3px 0; text-align:right; font-size:14pt; font-weight:bold;">${qty}</td>
-        </tr>`;
-    });
-
-    kitchenTokenHtml = `
-      <div class="center heading" style="font-size:16pt;">KITCHEN TOKEN</div>
-      <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: #${d.orderId}</span></div>
-      <div class="row"><span>Date: ${d.dateStr}</span></div>
-      <div class="divider"></div>
-      <table>
-          <thead>
-              <tr>
-                  <th style="text-align:left; width:80%;">Item</th>
-                  <th style="text-align:right; width:20%;">Qty</th>
-              </tr>
-          </thead>
-          <tbody>${tokenItems}</tbody>
-      </table>
-      <div class="divider"></div>
-      <div class="center meta" style="margin-top:10px;">End of Token</div>
-      <div style="page-break-after: always; display: block; margin-bottom: 20px;"></div>
-    `;
-  }
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -4341,8 +4358,6 @@ th         { border-bottom: 1px dashed #888; padding: 3px 0; }
 </style>
 </head>
 <body>
-
-${kitchenTokenHtml}
 
 <!-- Logo -->
 <div class="center" style="margin-bottom:6px;">
@@ -4406,6 +4421,49 @@ ${deliveryBlock}
 </html>`;
 }
 
+function _printHTMLQueue(htmlArray) {
+  if (htmlArray.length === 0) return;
+  const html = htmlArray.shift();
+
+  // Remove old iframe if it exists to keep DOM clean
+  let oldFrame = document.getElementById("print-iframe");
+  if (oldFrame) oldFrame.remove();
+
+  const iframe = document.createElement("iframe");
+  iframe.id = "print-iframe";
+  iframe.className = "print-iframe-queue";
+  iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  iframe.onload = () => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    
+    let nextFired = false;
+    const triggerNext = () => {
+      if (nextFired) return;
+      nextFired = true;
+      setTimeout(() => {
+        if (document.body.contains(iframe)) iframe.remove();
+      }, 2000);
+      _printHTMLQueue(htmlArray); // recursively print the next
+    };
+
+    // If browser supports afterprint, trigger next job when dialog closes
+    if ('onafterprint' in iframe.contentWindow) {
+      iframe.contentWindow.addEventListener('afterprint', triggerNext);
+    }
+    
+    // Fallback timer: in case afterprint isn't fired, wait 3 seconds before next print
+    setTimeout(triggerNext, 3000);
+  };
+}
+
 /**
  * Trigger window.print() via a hidden iframe to avoid popup blockers and freezing.
  * This is the ONLY print path — clean, reliable, works on every device.
@@ -4417,28 +4475,14 @@ function doPrint() {
     return;
   }
 
-  const html = _buildReceiptHTML(d);
-
-  // Remove old iframe if it exists
-  let oldFrame = document.getElementById("print-iframe");
-  if (oldFrame) oldFrame.remove();
-
-  const iframe = document.createElement("iframe");
-  iframe.id = "print-iframe";
-  iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
-  document.body.appendChild(iframe);
-
-  const doc = iframe.contentWindow.document;
-  doc.open();
-  doc.write(html);
-  doc.close();
-
-  // Only trigger print ONCE via onload — no fallback setTimeout to avoid double-print
-  iframe.onload = () => {
-    iframe.contentWindow.focus();
-    iframe.contentWindow.print();
-    setTimeout(() => iframe.remove(), 2000);
-  };
+  const queue = [];
+  
+  if (d.isInvoice) {
+    queue.push(_buildKitchenTokenHTML(d));
+  }
+  queue.push(_buildReceiptHTML(d));
+  
+  _printHTMLQueue(queue);
 }
 
 // ==== HARDWARE TEST PRINT FUNCTIONS ====
