@@ -67,7 +67,7 @@ async function getCachedApiResponse(url) {
             const tx      = db.transaction(STORE_CACHE, 'readonly');
             const store   = tx.objectStore(STORE_CACHE);
             const request = store.get(url);
-            request.onsuccess = () => resolve(request.result ? request.result.data : null);
+            request.onsuccess = () => resolve(request.result || null);
             request.onerror   = () => reject(request.error);
         });
     } catch (e) {

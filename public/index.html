@@ -1268,7 +1268,7 @@
                 <div class="form-group">
                     <label>Password</label>
                     <div style="display:flex; gap:10px;">
-                        <input type="text" id="pass-new-pwd" placeholder="Type or generate a secure password" style="flex:1;">
+                        <input type="text" id="pass-new-pwd" placeholder="4-digit PIN (e.g. 1234)" maxlength="4" inputmode="numeric" pattern="[0-9]{4}" style="flex:1; letter-spacing:4px;">
                         <button type="button" class="secondary-btn" onclick="generateAutoPassword()"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto</button>
                     </div>
                     <p id="pass-pwd-hint" style="font-size:0.8rem; color:var(--text-muted); margin-top:5px; display:none;">
@@ -1302,15 +1302,15 @@
                 <form id="form-change-pin" onsubmit="event.preventDefault(); submitChangePin();">
                     <div class="form-group">
                         <label>Current PIN / Password</label>
-                        <input type="password" id="change-pin-current" required>
+                        <input type="password" id="change-pin-current" required maxlength="4" inputmode="numeric" pattern="[0-9]{4}" placeholder="4-digit PIN" autocomplete="current-password">
                     </div>
                     <div class="form-group">
                         <label>New PIN (4 digits recommended)</label>
-                        <input type="password" id="change-pin-new" required>
+                        <input type="password" id="change-pin-new" required maxlength="4" inputmode="numeric" pattern="[0-9]{4}" placeholder="4-digit PIN" autocomplete="new-password">
                     </div>
                     <div class="form-group">
                         <label>Confirm New PIN</label>
-                        <input type="password" id="change-pin-confirm" required>
+                        <input type="password" id="change-pin-confirm" required maxlength="4" inputmode="numeric" pattern="[0-9]{4}" placeholder="4-digit PIN" autocomplete="new-password">
                     </div>
                     <div id="change-pin-error" style="color:#ef4444; margin-bottom:10px; font-size:0.85rem; display:none;"></div>
                     <button type="submit" class="primary-btn" style="width:100%; margin-top:10px;">Save New PIN</button>

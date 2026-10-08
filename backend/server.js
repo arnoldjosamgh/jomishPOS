@@ -1140,7 +1140,7 @@ app.patch("/api/employees/:id/unsuspend", authenticateToken, (req, res) => {
 
 app.post("/api/employees/me/pin", authenticateToken, (req, res) => {
   const { currentPin, newPin } = req.body;
-  const userId = req.user.user_id; // From JWT
+  const userId = req.user.id; // From JWT
   if (!currentPin || !newPin) return res.status(400).json({ error: "Missing pins" });
 
   db.get("SELECT password FROM employees WHERE id = ?", [userId], (err, row) => {

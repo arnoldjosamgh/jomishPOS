@@ -475,7 +475,7 @@ body.dark-theme input[type="text"], body.dark-theme input[type="number"] {
   background: var(--surface) !important;
   box-shadow: 0 3px 10px rgba(0,0,0,0.1), 0 -1px 0 rgba(255,255,255,0.8) inset !important;
   flex-wrap: nowrap !important;
-  overflow-x: auto !important;
+  overflow: hidden !important;
 }
 
 #pos-toolbar-title {
@@ -491,7 +491,8 @@ body.dark-theme input[type="text"], body.dark-theme input[type="number"] {
   display: flex !important;
   align-items: center !important;
   gap: 6px !important;
-  flex-shrink: 0 !important;
+  flex: 1 !important;
+  min-width: 0 !important;
   flex-wrap: nowrap !important;
   overflow-x: auto !important;
   -webkit-overflow-scrolling: touch !important;

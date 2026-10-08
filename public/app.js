@@ -2183,37 +2183,54 @@ async function fetchAuth(url, options = {}) {
 
   const method = (options.method || "GET").toUpperCase();
 
-  // --- OFFLINE LOGIC ---
-  if (!navigator.onLine && window.OfflineDB) {
-    if (method === "GET") {
-      const cachedData = await window.OfflineDB.getCachedApiResponse(url);
-      if (cachedData) {
-        return new Response(JSON.stringify(cachedData), {
+  // --- OFFLINE & CACHE LOGIC ---
+  if (method === "GET" && window.OfflineDB) {
+    const cachedObj = await window.OfflineDB.getCachedApiResponse(url);
+    const CACHE_TTL = 5 * 60 * 1000; // 5 minutes TTL for online caching
+
+    // If offline, return cache if available
+    if (!navigator.onLine) {
+      if (cachedObj && cachedObj.data) {
+        return new Response(JSON.stringify(cachedObj.data), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
       throw new Error("Offline and no cached data available for " + url);
-    } else if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-      await window.OfflineDB.queueMutation(url, method, options);
-      showToast(
-        "Offline Mode: Action queued and will sync when online.",
-        "info",
-      );
-      if (typeof window.updateAppOnlineStatus === "function") window.updateAppOnlineStatus();
-      return new Response(
-        JSON.stringify({
-          success: true,
-          message: "Offline queued action",
-          offlineQueued: true,
-          id: Date.now(),
-        }),
-        {
+    }
+
+    // If online, use cache if it's fresh (less than 5 mins old) to save DB hits
+    // (Bypass cache if url contains ?force=true or similar if needed in future)
+    if (cachedObj && cachedObj.data && cachedObj.timestamp) {
+      const age = Date.now() - cachedObj.timestamp;
+      if (age < CACHE_TTL && !url.includes("force_refresh")) {
+        console.log("[Cache Hit] Skipping network request for:", url);
+        return new Response(JSON.stringify(cachedObj.data), {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        },
-      );
+        });
+      }
     }
+  } else if (!navigator.onLine && window.OfflineDB && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    // Queue offline mutations
+    await window.OfflineDB.queueMutation(url, method, options);
+    showToast(
+      "Offline Mode: Action queued and will sync when online.",
+      "info",
+    );
+    if (typeof window.updateAppOnlineStatus === "function") window.updateAppOnlineStatus();
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: "Offline queued action",
+        offlineQueued: true,
+        id: Date.now(),
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
 
   try {
@@ -2242,9 +2259,9 @@ async function fetchAuth(url, options = {}) {
     console.error("[Offline/Network Error]", e.message, url);
     // Fallback for fetch failure even if navigator.onLine was technically true
     if (method === "GET" && window.OfflineDB) {
-      const cachedData = await window.OfflineDB.getCachedApiResponse(url);
-      if (cachedData) {
-        return new Response(JSON.stringify(cachedData), {
+      const cachedObj = await window.OfflineDB.getCachedApiResponse(url);
+      if (cachedObj && cachedObj.data) {
+        return new Response(JSON.stringify(cachedObj.data), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -6946,13 +6963,8 @@ async function openPassModal(emp) {
 }
 
 function generateAutoPassword() {
-  const chars =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-  let password = "";
-  for (let i = 0; i < 10; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  document.getElementById("pass-new-pwd").value = password;
+  const pin = String(Math.floor(1000 + Math.random() * 9000)); // Always 4-digit numeric PIN
+  document.getElementById("pass-new-pwd").value = pin;
 }
 
 async function handleUpdateAccess(e) {
@@ -10791,11 +10803,18 @@ function closeChangePinModal() {
 }
 
 async function submitChangePin() {
-  const currentPin = document.getElementById("change-pin-current").value;
-  const newPin = document.getElementById("change-pin-new").value;
-  const confirmPin = document.getElementById("change-pin-confirm").value;
+  const currentPin = document.getElementById("change-pin-current").value.trim();
+  const newPin = document.getElementById("change-pin-new").value.trim();
+  const confirmPin = document.getElementById("change-pin-confirm").value.trim();
   const errorEl = document.getElementById("change-pin-error");
 
+  // Validate 4-digit numeric PIN
+  const pinRegex = /^[0-9]{4}$/;
+  if (!pinRegex.test(newPin)) {
+    errorEl.textContent = "New PIN must be exactly 4 digits (numbers only).";
+    errorEl.style.display = "block";
+    return;
+  }
   if (newPin !== confirmPin) {
     errorEl.textContent = "New PIN and Confirm PIN do not match.";
     errorEl.style.display = "block";

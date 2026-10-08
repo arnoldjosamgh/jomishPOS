@@ -3,8 +3,9 @@ const path = require('path');
 async function seedDemoTenant(db, asyncLocalStorage) {
     console.log('[SEED] Checking demo tenant data...');
     
-    // For SQLite: there's only one database, so we just need to seed once.
-    // We use a marker in app_settings to track if demo data has been inserted.
+    // For SQLite: there's only one database, but we use asyncLocalStorage to
+    // confine seeding to the 'demo' context so demo data doesn't bleed into
+    // real tenant schemas.
     // For Postgres: we run inside the t_demo schema context.
     
     const isPostgres = !!db.createCompanySchema;
@@ -19,14 +20,15 @@ async function seedDemoTenant(db, asyncLocalStorage) {
         }
     }
     
-    const schemaName = isPostgres ? 't_demo' : 'public';
+    // Always run the seed inside the 'demo' schema context regardless of DB type
+    const schemaName = isPostgres ? 't_demo' : 'demo';
     
     await new Promise((resolve) => {
         const runSeed = () => {
-            // Check if already seeded by counting products
-            db.get(`SELECT COUNT(*) as cnt FROM products WHERE name LIKE 'Demo%'`, [], (err, row) => {
+            // Check if already seeded by looking for demo employees
+            db.get(`SELECT COUNT(*) as cnt FROM employees WHERE first_name LIKE 'Demo%'`, [], (err, row) => {
                 if (err) {
-                    console.error('[SEED] Error checking products:', err.message);
+                    console.error('[SEED] Error checking demo employees:', err.message);
                     return resolve();
                 }
                 if (row && row.cnt > 0) {
@@ -102,10 +104,11 @@ async function seedDemoTenant(db, asyncLocalStorage) {
                 }
 
                 // 5. Insert Demo Calendar Events
+                const now2 = new Date();
                 const events = [
-                    { title: 'Team Standup Meeting', event_date: new Date().toISOString().split('T')[0], event_type: 'Meeting', start_time: '09:00', end_time: '09:30' },
-                    { title: 'Q3 Performance Review', event_date: new Date(now.getTime() + 2*24*60*60*1000).toISOString().split('T')[0], event_type: 'Review', start_time: '14:00', end_time: '16:00' },
-                    { title: 'Office Supplies Restocking', event_date: new Date(now.getTime() + 5*24*60*60*1000).toISOString().split('T')[0], event_type: 'Task', start_time: '10:00', end_time: '11:00' },
+                    { title: 'Team Standup Meeting', event_date: now2.toISOString().split('T')[0], event_type: 'Meeting', start_time: '09:00', end_time: '09:30' },
+                    { title: 'Q3 Performance Review', event_date: new Date(now2.getTime() + 2*24*60*60*1000).toISOString().split('T')[0], event_type: 'Review', start_time: '14:00', end_time: '16:00' },
+                    { title: 'Office Supplies Restocking', event_date: new Date(now2.getTime() + 5*24*60*60*1000).toISOString().split('T')[0], event_type: 'Task', start_time: '10:00', end_time: '11:00' },
                 ];
                 events.forEach(e => {
                     db.run(`INSERT INTO calendar_events (title, event_date, event_type, start_time, end_time) VALUES (?, ?, ?, ?, ?)`,
@@ -117,11 +120,8 @@ async function seedDemoTenant(db, asyncLocalStorage) {
             });
         };
 
-        if (isPostgres) {
-            asyncLocalStorage.run(schemaName, runSeed);
-        } else {
-            runSeed();
-        }
+        // Always run inside the demo schema context to prevent data leaking into real tenant schemas
+        asyncLocalStorage.run(schemaName, runSeed);
     });
 }
 
