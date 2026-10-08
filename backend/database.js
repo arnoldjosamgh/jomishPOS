@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 138;
+const CURRENT_VERSION = 140;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -1317,6 +1317,18 @@ function runMigrations(fromVersion) {
             });
         }
         runNextV139();
+    }
+
+    if (fromVersion < 140) {
+        // v140: Create recycled_transaction_ids table for receipt number recycling
+        db.run(`CREATE TABLE IF NOT EXISTS recycled_transaction_ids (id INTEGER PRIMARY KEY)`, (err) => {
+            if (err && !err.message.includes('already exists')) {
+                console.error('[Migration v140] Error creating recycled_transaction_ids:', err.message);
+            }
+            db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '140'], () => {
+                console.log('Migration to v140 complete: Created recycled_transaction_ids table.');
+            });
+        });
     }
 }
 
