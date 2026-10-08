@@ -5322,7 +5322,7 @@ async function loadTransactions(searchTerm = "") {
       // Delete button: only visible for Admin/HR/CEO/Manager
       // Cashiers can delete ONLY by selecting the row and pressing F8
       const _role = (USER_ROLE || "").toUpperCase();
-      const canDeleteDirectly = ["CEO", "ADMIN", "HR", "MANAGER"].includes(_role) || USER_NAME === "System Technician" || _role === "TECH";
+      const canDeleteDirectly = ["CEO", "ADMIN", "HR", "MANAGER", "SUPERVISOR"].includes(_role) || USER_NAME === "System Technician" || _role === "TECH";
       const _delBtn = canDeleteDirectly
         ? `<button class='sm-btn danger' onclick="deleteTransaction(${tx.id})" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" title="Delete"><i class="fa-solid fa-trash"></i></button>`
         : "";
