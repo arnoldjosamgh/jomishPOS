@@ -1665,48 +1665,67 @@ app.get(
   async (req, res) => {
     try {
       const client = await db.pool.connect();
-      let schemas = [];
+      let tenants = [];
       try {
-        const result = await client.query(
-          `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\' ORDER BY schema_name`,
+        // Primary source: read the master companies registry in the public schema
+        const regResult = await client.query(
+          `SET search_path TO public; SELECT prefix, name, status, created_at FROM companies ORDER BY created_at DESC`
         );
-        schemas = result.rows.map((r) => r.schema_name);
-      } finally {
-        client.release();
-      }
+        // pg returns array of results for multi-statement — take the last one (SELECT)
+        const regRows = (Array.isArray(regResult) ? regResult[regResult.length - 1] : regResult).rows || [];
 
-      // For each schema, pull the company name from their app_settings
-      const tenants = await Promise.all(
-        schemas.map(async (schema) => {
-          const prefix = schema.replace(/^t_/, "").toUpperCase();
-          try {
-            const client2 = await db.pool.connect();
-            try {
-              const r = await client2.query(
-                `SET search_path TO "${schema}", public; SELECT setting_value FROM app_settings WHERE setting_key = 'business_name' LIMIT 1`,
-              );
-              // pg returns results for the last query in a multi-statement only if using simple query protocol
-              const nameRow = r.rows && r.rows[0];
-              return {
-                prefix,
-                schema,
-                company_name: nameRow ? nameRow.setting_value : prefix,
-              };
-            } finally {
-              client2.release();
-            }
-          } catch (e) {
-            return { prefix, schema, company_name: prefix };
-          }
-        }),
-      );
+        if (regRows.length > 0) {
+          tenants = regRows.map(row => ({
+            prefix: (row.prefix || "").toUpperCase(),
+            schema: `t_${(row.prefix || "").toLowerCase()}`,
+            company_name: row.name || (row.prefix || "").toUpperCase(),
+            status: row.status || "ACTIVE",
+            created_at: row.created_at,
+          }));
+        } else {
+          // Fallback: scan pg schemas directly (for legacy setups without companies table)
+          const schemaResult = await client.query(
+            `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\' ORDER BY schema_name`
+          );
+          const schemas = schemaResult.rows.map(r => r.schema_name);
+          client.release();
+
+          tenants = await Promise.all(
+            schemas.map(async (schema) => {
+              const prefix = schema.replace(/^t_/, "").toUpperCase();
+              try {
+                const c = await db.pool.connect();
+                try {
+                  await c.query(`SET search_path TO "${schema}", public`);
+                  const r = await c.query(
+                    `SELECT setting_value FROM app_settings WHERE setting_key = 'business_name' LIMIT 1`
+                  );
+                  const nameRow = r.rows && r.rows[0];
+                  return { prefix, schema, company_name: nameRow ? nameRow.setting_value : prefix, status: "ACTIVE" };
+                } finally {
+                  c.release();
+                }
+              } catch (e) {
+                return { prefix, schema, company_name: prefix, status: "ACTIVE" };
+              }
+            })
+          );
+          res.json({ tenants });
+          return;
+        }
+      } finally {
+        // Only release if not already released in fallback path
+        try { client.release(); } catch (_) {}
+      }
 
       res.json({ tenants });
     } catch (e) {
+      console.error("[GET /tech/tenants] Error:", e.message);
       res.status(500).json({ error: e.message });
     }
   },
 );
+
 
 // POST /api/tech/tenant — provision a new company portal
 app.post(
@@ -1737,6 +1756,7 @@ app.post(
       // 2. Save company settings and create admin in the new schema
       const client = await db.pool.connect();
       try {
+        await client.query(`BEGIN`);
         await client.query(`SET search_path TO "${schemaName}", public`);
         await client.query(
           `INSERT INTO app_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2`,
