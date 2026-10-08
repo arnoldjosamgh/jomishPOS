@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 141;
+const CURRENT_VERSION = 142;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -1345,7 +1345,12 @@ function runMigrations(fromVersion) {
     }
 
     if (fromVersion < 142) {
-        db.run("ALTER TABLE products ADD COLUMN track_stock INTEGER DEFAULT 1", (err) => {
+        // Use IF NOT EXISTS for Postgres; SQLite ignores err if column already exists
+        const alterSql = config.dbType === 'postgres'
+            ? "ALTER TABLE products ADD COLUMN IF NOT EXISTS track_stock INTEGER DEFAULT 1"
+            : "ALTER TABLE products ADD COLUMN track_stock INTEGER DEFAULT 1";
+        db.run(alterSql, (err) => {
+            // Ignore "column already exists" errors (SQLite: SQLITE_ERROR, Postgres: 42701)
             db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '142'], () => {
                 console.log('Migration to v142 complete: Added track_stock to products.');
             });
