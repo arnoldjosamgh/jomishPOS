@@ -573,6 +573,8 @@ document.addEventListener("DOMContentLoaded", () => {
       banner.style.display = "none";
     }
   }
+  window.updateAppOnlineStatus = updateAppOnlineStatus;
+
   window.addEventListener("online", () => {
     updateAppOnlineStatus();
     if (typeof syncQueuedMutations === "function") syncQueuedMutations();
@@ -582,6 +584,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function initNavigation() {
+
   const navBtns = document.querySelectorAll(".sidebar nav .nav-btn");
 
   // Only wire sidebar nav if buttons exist (not in POS-only mode)
@@ -2197,6 +2200,7 @@ async function fetchAuth(url, options = {}) {
         "Offline Mode: Action queued and will sync when online.",
         "info",
       );
+      if (typeof window.updateAppOnlineStatus === "function") window.updateAppOnlineStatus();
       return new Response(
         JSON.stringify({
           success: true,
@@ -3900,9 +3904,9 @@ async function updateSyncBadge() {
       const countEl = document.getElementById("offline-sync-count");
       if (countEl) countEl.textContent = count;
     }
-  } else {
     if (badge) badge.remove();
   }
+  if (typeof window.updateAppOnlineStatus === "function") window.updateAppOnlineStatus();
 }
 
 // ============================================================
