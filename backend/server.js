@@ -631,36 +631,57 @@ app.patch(
   },
 );
 
-app.delete("/api/system/companies/:prefix", authenticateToken, (req, res) => {
+app.delete("/api/system/companies/:prefix", authenticateToken, async (req, res) => {
   if (req.user.name !== "System Technician")
     return res.status(403).json({ error: "Forbidden" });
+  
   const prefix = req.params.prefix.toUpperCase();
-  asyncLocalStorage.run("public", () => {
-    db.run("DELETE FROM companies WHERE prefix = ?", [prefix], function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      
-      if (db.pool) {
-        // Postgres: drop schema completely
-        const schemaName = `t_${prefix.toLowerCase()}`;
-        db.pool.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`)
-          .then(() => res.json({ message: `Company ${prefix} deleted.` }))
-          .catch(e => res.status(500).json({ error: "Failed to drop schema: " + e.message }));
-      } else {
-        // SQLite: delete database file
-        const fs = require('fs');
-        const path = require('path');
-        const dbPath = path.join(process.cwd(), 'data', `jomish_t${prefix.toLowerCase()}.db`);
-        try {
-          if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-          if (fs.existsSync(dbPath + '-wal')) fs.unlinkSync(dbPath + '-wal');
-          if (fs.existsSync(dbPath + '-shm')) fs.unlinkSync(dbPath + '-shm');
-        } catch (e) {
-          console.error(`Failed to delete SQLite file for ${prefix}:`, e.message);
-        }
+  const schemaName = `t_${prefix.toLowerCase()}`;
+
+  try {
+    if (db.pool) {
+      // Postgres: use a single client to avoid leaving an aborted transaction on a pooled connection
+      const client = await db.pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(`SET search_path TO public`);
+        await client.query("DELETE FROM companies WHERE prefix = $1", [prefix]);
+        await client.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
+        await client.query("COMMIT");
         res.json({ message: `Company ${prefix} deleted.` });
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        console.error("[DELETE COMPANY] Failed:", e.message);
+        res.status(500).json({ error: "Failed to delete company: " + e.message });
+      } finally {
+        client.release();
       }
-    });
-  });
+    } else {
+      // SQLite: delete database file
+      await new Promise((resolve, reject) => {
+        asyncLocalStorage.run("public", () => {
+          db.run("DELETE FROM companies WHERE prefix = ?", [prefix], (err) => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+      });
+      const fs = require('fs');
+      const path = require('path');
+      const dbPath = path.join(process.cwd(), 'data', `jomish_t${prefix.toLowerCase()}.db`);
+      try {
+        if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+        if (fs.existsSync(dbPath + '-wal')) fs.unlinkSync(dbPath + '-wal');
+        if (fs.existsSync(dbPath + '-shm')) fs.unlinkSync(dbPath + '-shm');
+      } catch (e) {
+        console.error(`Failed to delete SQLite file for ${prefix}:`, e.message);
+      }
+      res.json({ message: `Company ${prefix} deleted.` });
+    }
+  } catch (err) {
+    console.error("[DELETE COMPANY] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/api/system/init-status", (req, res) => {
@@ -1772,8 +1793,11 @@ app.post(
         if (!insertResult.rows || insertResult.rows.length === 0) {
           throw new Error("Admin user was not created in the new schema. Please try again.");
         }
-
+        await client.query(`COMMIT`);
         console.log(`[TECH] Created company ${normalPrefix}, admin user id=${insertResult.rows[0].id}, email=${email}`);
+      } catch (err) {
+        await client.query(`ROLLBACK`);
+        throw err;
       } finally {
         client.release();
       }
@@ -2032,151 +2056,60 @@ app.post("/api/system/print-network", authenticateToken, async (req, res) => {
   }
 });
 
-app.post("/api/system/reset", authenticateToken, (req, res) => {
+app.post("/api/system/reset", authenticateToken, async (req, res) => {
   if (req.user.name !== "System Technician") {
-    return res
-      .status(403)
-      .json({
-        error:
-          "Access Denied: Only the System Technician can perform a system reset.",
-      });
+    return res.status(403).json({
+      error: "Access Denied: Only the System Technician can perform a system reset.",
+    });
   }
 
-  db.serialize(() => {
-    db.run("BEGIN TRANSACTION");
+  try {
+    const [ceoHash, hrHash] = await Promise.all([
+      bcrypt.hash("ceo123", 10),
+      bcrypt.hash("admin123", 10),
+    ]);
 
     const tablesToClear = [
-      "transactions",
-      "pos_orders",
-      "sold_barcodes",
-      "attendance_logs",
-      "schedules",
-      "employee_notes",
-      "internal_messages",
-      "email_messages",
-      "notices",
-      "calendar_events",
-      "shifts",
-      "devices",
-      "products",
-      "employees",
-      "credit_records",
-      "expense_categories",
+      "order_items", "pos_orders", "transactions", "sold_barcodes",
+      "attendance_logs", "schedules", "employee_notes", "internal_messages",
+      "email_messages", "notices", "calendar_events", "shifts", "devices",
+      "products", "employees", "credit_records", "expense_categories",
     ];
 
-    let errorOccurred = false;
-    let completedQueries = 0;
-
-    const checkCompletion = () => {
-      if (errorOccurred) return;
-      if (completedQueries === tablesToClear.length) {
-        // Seed new default accounts for client
-        const saltRounds = 10;
-        bcrypt.hash("ceo123", saltRounds, (err, ceoHash) => {
-          if (err) {
-            db.run("ROLLBACK");
-            return res
-              .status(500)
-              .json({ error: "Failed to hash CEO password: " + err.message });
-          }
-          bcrypt.hash("admin123", saltRounds, (err, hrHash) => {
-            if (err) {
-              db.run("ROLLBACK");
-              return res
-                .status(500)
-                .json({ error: "Failed to hash HR password: " + err.message });
-            }
-
-            // Insert default CEO
-            db.run(
-              "INSERT INTO employees (first_name, last_name, email, username, password, role, department, salary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-              [
-                "Default",
-                "CEO",
-                "ceo@jomish.com",
-                "ceo",
-                ceoHash,
-                "CEO",
-                "Executive",
-                0,
-              ],
-              function (err) {
-                if (err) {
-                  db.run("ROLLBACK");
-                  return res
-                    .status(500)
-                    .json({ error: "Failed to seed CEO: " + err.message });
-                }
-
-                // Insert default HR
-                db.run(
-                  "INSERT INTO employees (first_name, last_name, email, username, password, role, department, salary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                  [
-                    "Master",
-                    "HR",
-                    "admin@jomish.com",
-                    "admin",
-                    hrHash,
-                    "HR",
-                    "Administration",
-                    0,
-                  ],
-                  function (err) {
-                    if (err) {
-                      db.run("ROLLBACK");
-                      return res
-                        .status(500)
-                        .json({ error: "Failed to seed HR: " + err.message });
-                    }
-
-                    db.run("COMMIT", (err) => {
-                      if (err) {
-                        db.run("ROLLBACK");
-                        return res
-                          .status(500)
-                          .json({
-                            error: "Transaction commit failed: " + err.message,
-                          });
-                      }
-
-                      // Emit update messages
-                      emitAndBust("employees", "employees");
-                      emitAndBust("transactions", "finance_summary");
-                      emitAndBust("products", "products");
-                      emitAndBust("attendance", "attendance");
-                      io.emit("db_updated", { module: "schedules" });
-                      io.emit("db_updated", { module: "messages" });
-                      io.emit("db_updated", { module: "calendar" });
-
-                      res.json({
-                        success: true,
-                        message:
-                          "Database successfully cleared. Seed accounts created: CEO (ceo / ceo123) and HR (admin / admin123).",
-                      });
-                    });
-                  },
-                );
-              },
-            );
-          });
-        });
+    await db.withTransaction(async (q) => {
+      for (const table of tablesToClear) {
+        await q(`DELETE FROM ${table}`);
       }
-    };
 
-    tablesToClear.forEach((table) => {
-      db.run(`DELETE FROM ${table}`, [], function (err) {
-        if (err) {
-          errorOccurred = true;
-          db.run("ROLLBACK");
-          return res
-            .status(500)
-            .json({ error: `Failed to clear table ${table}: ` + err.message });
-        }
-        completedQueries++;
-        checkCompletion();
-      });
+      // Insert default CEO
+      await q(
+        "INSERT INTO employees (first_name, last_name, email, username, password, role, department, salary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ["Default", "CEO", "ceo@jomish.com", "ceo", ceoHash, "CEO", "Executive", 0]
+      );
+
+      // Insert default HR
+      await q(
+        "INSERT INTO employees (first_name, last_name, email, username, password, role, department, salary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ["Master", "HR", "admin@jomish.com", "admin", hrHash, "HR", "Administration", 0]
+      );
     });
-  });
+
+    emitAndBust("employees", "employees");
+    emitAndBust("transactions", "finance_summary");
+    emitAndBust("products", "products");
+    emitAndBust("attendance", "attendance");
+    io.emit("db_updated", { module: "schedules" });
+    io.emit("db_updated", { module: "messages" });
+    io.emit("db_updated", { module: "calendar" });
+
+    res.json({
+      success: true,
+      message: "Database successfully cleared. Seed accounts created: CEO (ceo / ceo123) and HR (admin / admin123).",
+    });
+  } catch (err) {
+    console.error("[RESET] System reset failed:", err);
+    res.status(500).json({ error: "Reset failed: " + err.message });
+  }
 });
 
 // BACKUP: Stream the SQLite .db file to the client
@@ -5268,73 +5201,41 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
 });
 
 // Use pos_order_id to mark COD/Invoice as received, since Invoices don't have delivery records
-app.post("/api/pos_orders/:id/cod-received", authenticateToken, (req, res) => {
-  db.serialize(() => {
-    db.run("BEGIN TRANSACTION");
+app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res) => {
+  try {
+    let transactionData = null;
+    await db.withTransaction(async (q) => {
+      const rowRes = await q(
+        "SELECT id as pos_order_id, transaction_id, total_amount FROM pos_orders WHERE id = ?",
+        [req.params.id]
+      );
+      if (!rowRes.rows || rowRes.rows.length === 0) {
+        throw new Error("Order not found");
+      }
+      const row = rowRes.rows[0];
 
-    db.get(
-      "SELECT id as pos_order_id, transaction_id, total_amount FROM pos_orders WHERE id = ?",
-      [req.params.id],
-      (err, row) => {
-        if (err || !row) {
-          db.run("ROLLBACK");
-          return res.status(404).json({ error: "Order not found" });
-        }
+      await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
+      await q("UPDATE transactions SET payment_status = ?, description = ? WHERE id = ?", ["PAID", "POS Sale (CASH)", row.transaction_id]);
+      await q("UPDATE pos_orders SET amount_paid = ? WHERE id = ?", [row.total_amount, row.pos_order_id]);
+      
+      transactionData = row;
+    });
 
-        // Mark delivery as Delivered IF it exists
-        db.run(
-          "UPDATE deliveries SET status = ? WHERE order_id = ?",
-          ["Delivered", row.pos_order_id],
-          function (err) {
-            if (err) {
-              db.run("ROLLBACK");
-              return res.status(500).json({ error: err.message });
-            }
+    emitAndBust("transactions", "finance_summary");
+    io.emit("db_updated", { module: "pos" });
+    io.emit("db_updated", { module: "deliveries" });
 
-            db.run(
-              "UPDATE transactions SET payment_status = ?, description = ? WHERE id = ?",
-              ["PAID", "POS Sale (CASH)", row.transaction_id],
-              function (err) {
-                if (err) {
-                  db.run("ROLLBACK");
-                  return res.status(500).json({ error: err.message });
-                }
-
-                db.run(
-                  "UPDATE pos_orders SET amount_paid = ? WHERE id = ?",
-                  [row.total_amount, row.pos_order_id],
-                  function (err) {
-                    if (err) {
-                      db.run("ROLLBACK");
-                      return res.status(500).json({ error: err.message });
-                    }
-
-                    db.run("COMMIT", (err) => {
-                      if (err) {
-                        db.run("ROLLBACK");
-                        return res.status(500).json({ error: "Commit failed" });
-                      }
-                      emitAndBust("transactions", "finance_summary");
-                      io.emit("db_updated", { module: "pos" });
-                      io.emit("db_updated", { module: "deliveries" });
-
-                      res.json({
-                        success: true,
-                        transaction_id: row.transaction_id,
-                        total_amount: row.total_amount,
-                        client_name: "Customer", // We could fetch this if needed, but receipt relies on this
-                        client_location: "",
-                      });
-                    });
-                  },
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  });
+    res.json({
+      success: true,
+      transaction_id: transactionData.transaction_id,
+      total_amount: transactionData.total_amount,
+      client_name: "Customer", // We could fetch this if needed, but receipt relies on this
+      client_location: "",
+    });
+  } catch (err) {
+    if (err.message === "Order not found") return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/api/deliveries", authenticateToken, (req, res) => {
@@ -5536,70 +5437,43 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
     const description = `POS Sale - Offline Sync (${payment_method})`;
     const now = new Date().toISOString();
 
-    const success = await new Promise((resolve) => {
-      db.serialize(() => {
-        db.run("BEGIN TRANSACTION");
-        db.run(
+    let success = false;
+    try {
+      let pos_order_id = null;
+      await db.withTransaction(async (q) => {
+        const txRes = await q(
           "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
-          [txAmount, "INCOME", description, cashier_id, now, payment_status],
-          function (err) {
-            if (err) {
-              db.run("ROLLBACK");
-              return resolve(false);
-            }
-            const transaction_id = this.lastID;
-            db.run(
-              "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, client_uuid) VALUES (?, ?, ?, ?, ?, ?)",
-              [
-                cashier_id,
-                total_amount,
-                transaction_id,
-                effectivePaymentMethod,
-                paid,
-                client_uuid,
-              ],
-              function (err2) {
-                if (err2) {
-                  db.run("ROLLBACK");
-                  return resolve(false);
-                }
-                const pos_order_id = this.lastID;
-                items.forEach((item) => {
-                  db.run(
-                    "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
-                    [item.qty, item.id, item.qty],
-                  );
-                });
-                db.run("COMMIT", (err3) => {
-                  if (err3) {
-                    db.run("ROLLBACK");
-                    return resolve(false);
-                  }
-                  items.forEach((item) => {
-                    db.run(
-                      "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
-                      [
-                        pos_order_id,
-                        item.id,
-                        item.name,
-                        item.qty,
-                        item.price,
-                        (item.price || 0) * (item.qty || 1),
-                      ],
-                    );
-                  });
-
-                  try {
-                    io.emit("db_updated", { module: "pos" });
-                  } catch (e) {}
-                  resolve(true);
-                });
-              },
-            );
-          },
+          [txAmount, "INCOME", description, cashier_id, now, payment_status]
         );
+        const transaction_id = txRes.lastID;
+
+        const orderRes = await q(
+          "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, client_uuid) VALUES (?, ?, ?, ?, ?, ?)",
+          [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, client_uuid]
+        );
+        pos_order_id = orderRes.lastID;
+
+        for (const item of items) {
+          await q(
+            "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
+            [item.qty, item.id, item.qty]
+          );
+        }
       });
-    });
+
+      // Insert order items AFTER commit (they're non-critical audit records)
+      for (const item of items) {
+        db.run(
+          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+          [pos_order_id, item.id, item.name, item.qty, item.price, (item.price || 0) * (item.qty || 1)]
+        );
+      }
+
+      try { io.emit("db_updated", { module: "pos" }); } catch (e) {}
+      success = true;
+    } catch (syncErr) {
+      console.error("[BATCH-SYNC] Failed to sync tx:", client_uuid, syncErr.message);
+    }
 
     if (success) syncedIds.push(client_uuid);
     else errors.push({ client_uuid, reason: "Server processing failed." });
