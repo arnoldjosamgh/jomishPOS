@@ -1531,8 +1531,8 @@ app.post("/api/transactions", authenticateToken, (req, res) => {
   );
 });
 
-app.delete("/api/transactions/:id", authenticateToken, (req, res) => {
-  // Allowed roles for deletion: Tech, 000 Admins, and Cashiers (via F8)
+app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
+  // Allowed roles for deletion: Tech, 000 Admins, Cashiers, Supervisors, Managers, HR, CEO
   const isTech = req.user.role === "TECH" || req.user.name === "System Technician";
   const is000Admin = req.user.prefix && String(req.user.prefix).endsWith("000");
   const isCashier = req.user.role === "Cashier" || req.user.role === "CASHIER";
@@ -1543,14 +1543,42 @@ app.delete("/api/transactions/:id", authenticateToken, (req, res) => {
       error: "Forbidden: You do not have permission to delete transactions.",
     });
   }
+  
   const { id } = req.params;
-  db.run("DELETE FROM transactions WHERE id = ?", [id], function (err) {
-    if (err) return res.status(500).json({ error: err.message });
-    // ── Recycle the freed receipt number so the next sale reuses it ──────────
-    db.run("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [id], () => {});
+  
+  try {
+    await db.withTransaction(async (q) => {
+      // 1. Find the pos_order linked to this transaction
+      const posOrderRes = await q("SELECT id FROM pos_orders WHERE transaction_id = ?", [id]);
+      if (posOrderRes.rows && posOrderRes.rows.length > 0) {
+        const posOrderId = posOrderRes.rows[0].id;
+        
+        // 2. Fetch order items to return stock
+        const itemsRes = await q("SELECT product_id, qty FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+        if (itemsRes.rows && itemsRes.rows.length > 0) {
+          for (let item of itemsRes.rows) {
+            await q("UPDATE products SET stock = stock + ? WHERE id = ?", [item.qty, item.product_id]);
+          }
+        }
+        
+        // 3. Delete from pos_orders and order_items (if not cascaded)
+        await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+        await q("DELETE FROM pos_orders WHERE id = ?", [posOrderId]);
+        // Note: also clear pending deliveries just in case
+        await q("DELETE FROM deliveries WHERE order_id = ?", [posOrderId]);
+      }
+      
+      // 4. Delete the transaction itself
+      await q("DELETE FROM transactions WHERE id = ?", [id]);
+      await q("INSERT INTO recycled_transaction_ids (id) VALUES (?) ON CONFLICT DO NOTHING", [id]);
+    });
+
     emitAndBust("transactions", "finance_summary");
-    res.json({ message: "Transaction successfully deleted." });
-  });
+    io.emit("db_updated", { module: "products" }); // update stock on clients
+    res.json({ message: "Transaction successfully deleted and stock returned." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/api/system/autostart", authenticateToken, (req, res) => {
@@ -2820,6 +2848,54 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     console.error("[CHECKOUT] Error:", err.message);
     res.status(500).json({ error: "Checkout failed: " + err.message });
   }
+});
+
+// End Shift API for Cashiers
+app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
+  const cashierId = req.user.id;
+  
+  // 1. Get last end_time and end_cash for this cashier (or any cashier if global drawer)
+  // For simplicity, we just look up the last end-shift time recorded in the system settings or just do it since today 00:00:00
+  // Since we don't have a settings table, we'll query the last shift in a new table `cashier_shifts`.
+  db.run(`CREATE TABLE IF NOT EXISTS cashier_shifts (
+      id SERIAL PRIMARY KEY, cashier_id INTEGER, end_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      start_cash REAL, end_cash REAL, cash_sales REAL, momo_sales REAL, total_sales REAL, expenses REAL
+  )`, () => {
+    db.get("SELECT end_time, end_cash FROM cashier_shifts ORDER BY id DESC LIMIT 1", [], (err, lastShift) => {
+      let startTime = lastShift ? lastShift.end_time : new Date(new Date().setHours(0,0,0,0)).toISOString();
+      let startCash = lastShift ? lastShift.end_cash : 0;
+      
+      const queries = {
+        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND payment_method = 'CASH' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
+        momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
+        totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
+        expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE recorded_by = ? AND type = 'EXPENSE' AND transaction_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0)))
+      };
+      
+      Promise.all(Object.values(queries)).then(results => {
+        const cashSales = results[0];
+        const momoSales = results[1];
+        const totalSales = results[2];
+        const expenses = results[3];
+        const endCash = startCash + cashSales - expenses;
+        
+        db.run("INSERT INTO cashier_shifts (cashier_id, start_cash, end_cash, cash_sales, momo_sales, total_sales, expenses) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [cashierId, startCash, endCash, cashSales, momoSales, totalSales, expenses], function(err) {
+            res.json({
+              start_time: startTime,
+              end_time: new Date().toISOString(),
+              start_cash: startCash,
+              end_cash: endCash,
+              cash_sales: cashSales,
+              momo_sales: momoSales,
+              total_sales: totalSales,
+              expenses: expenses,
+              cashier_name: req.user.name || "Cashier"
+            });
+        });
+      });
+    });
+  });
 });
 
 // Get order items by pos_order_id (used when cashier collects payment for a pending invoice)

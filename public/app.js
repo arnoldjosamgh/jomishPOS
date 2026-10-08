@@ -539,12 +539,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnCheckout = document.getElementById("btn-checkout");
   const btnWaiterInvoice = document.getElementById("btn-waiter-invoice");
 
+  const btnEndShift = document.getElementById("btn-end-shift");
+
   if (USER_ROLE && USER_ROLE.toUpperCase() === "WAITER") {
     if (btnCheckout) btnCheckout.style.display = "none";
     if (btnWaiterInvoice) btnWaiterInvoice.style.display = "block";
+    if (btnEndShift) btnEndShift.style.display = "none";
   } else {
     if (btnCheckout) btnCheckout.style.display = "block";
     if (btnWaiterInvoice) btnWaiterInvoice.style.display = "none";
+    if (USER_ROLE && USER_ROLE.toUpperCase() === "CASHIER") {
+      if (btnEndShift) btnEndShift.style.display = "block";
+    } else {
+      if (btnEndShift) btnEndShift.style.display = "none";
+    }
   }
 
   if (btnWaiterInvoice) {
@@ -4184,6 +4192,81 @@ function printReceipt(
   // Use doPrint() so kitchen token is always printed first for invoices
   doPrint();
 }
+
+/**
+ * End Shift and Print Report
+ */
+window.endCashierShift = async function() {
+  if (!confirm("Are you sure you want to end your shift? This will print your shift report.")) {
+    return;
+  }
+  
+  try {
+    const res = await fetchAuth(`${API_URL}/pos/end-shift`, { method: "POST" });
+    if (res.ok) {
+      const report = await res.json();
+      showToast("Shift ended successfully!", "success");
+      printEndShiftReport(report);
+    } else {
+      const err = await res.json();
+      alert("Error ending shift: " + err.error);
+    }
+  } catch (e) {
+    console.error("End shift error:", e);
+    alert("Network error while ending shift.");
+  }
+};
+
+window.printEndShiftReport = function(report) {
+  const bizName = localStorage.getItem("jomish_biz_name") || "Jomish Business";
+  
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          @page { size: 80mm auto; margin: 3mm 2mm; }
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body { font-family: 'Courier New', Courier, monospace; font-size: 11pt; line-height: 1.4; width: 76mm; color: #000; background: #fff; padding: 10px; }
+          .center { text-align: center; }
+          .bold { font-weight: bold; }
+          .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+          .divider { border-top: 1px dashed #000; margin: 6px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="center bold" style="font-size:16pt; margin-bottom: 5px;">${bizName}</div>
+        <div class="center bold" style="font-size:14pt; margin-bottom: 10px;">CASHIER SHIFT REPORT</div>
+        <div class="row"><span>Cashier:</span><span class="bold">${report.cashier_name}</span></div>
+        <div class="row"><span>Started:</span><span>${new Date(report.start_time).toLocaleString("en-UG")}</span></div>
+        <div class="row"><span>Ended:</span><span>${new Date(report.end_time).toLocaleString("en-UG")}</span></div>
+        <div class="divider"></div>
+        <div class="row"><span>Start Cash:</span><span>UGX ${report.start_cash.toLocaleString()}</span></div>
+        <div class="row"><span>Cash Sales:</span><span>UGX ${report.cash_sales.toLocaleString()}</span></div>
+        <div class="row"><span>Mobile Money:</span><span>UGX ${report.momo_sales.toLocaleString()}</span></div>
+        <div class="row"><span>Total Sales:</span><span>UGX ${report.total_sales.toLocaleString()}</span></div>
+        <div class="row"><span>Expenses Paid:</span><span>UGX ${report.expenses.toLocaleString()}</span></div>
+        <div class="divider"></div>
+        <div class="row bold" style="font-size:13pt;"><span>End Cash:</span><span>UGX ${report.end_cash.toLocaleString()}</span></div>
+        <div class="divider"></div>
+        <div class="center" style="margin-top: 20px;">Signature: __________________</div>
+      </body>
+    </html>
+  `;
+  
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  
+  iframe.onload = () => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => iframe.remove(), 1000);
+  };
+};
 
 /**
  * Close the on-screen receipt modal.
