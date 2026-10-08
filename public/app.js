@@ -2278,6 +2278,8 @@ async function fetchAuth(url, options = {}) {
         { pattern: "/buyers",         busts: ["/api/buyers"] },
         { pattern: "/expense",        busts: ["/api/expense"] },
         { pattern: "/barcodes",       busts: ["/api/barcodes"] },
+        { pattern: "/companies",      busts: ["/api/system/companies", "/api/tech/tenants"] },
+        { pattern: "/tech/tenant",    busts: ["/api/system/companies", "/api/tech/tenants"] },
       ];
 
       for (const rule of CACHE_BUST_MAP) {
@@ -10181,11 +10183,7 @@ async function deleteTechUser(id, username) {
 
 async function loadCompanies() {
   try {
-    const res = await fetch(`${API_URL}/system/companies`, {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem("jomish_token")}`,
-      },
-    });
+    const res = await fetchAuth(`${API_URL}/system/companies`);
     const data = await res.json();
     const tbody = document.getElementById("companies-table-body");
     if (!tbody) return;
@@ -10239,12 +10237,8 @@ async function toggleCompanyStatus(prefix, currentStatus) {
     return;
 
   try {
-    const res = await fetch(`${API_URL}/system/companies/${prefix}/status`, {
+    const res = await fetchAuth(`${API_URL}/system/companies/${prefix}/status`, {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("jomish_token")}`,
-      },
       body: JSON.stringify({ status: newStatus }),
     });
     const data = await res.json();
@@ -10264,11 +10258,8 @@ async function deleteCompany(prefix) {
     return;
 
   try {
-    const res = await fetch(`${API_URL}/system/companies/${prefix}`, {
+    const res = await fetchAuth(`${API_URL}/system/companies/${prefix}`, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem("jomish_token")}`,
-      },
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
@@ -10318,12 +10309,8 @@ async function submitNewCompany() {
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Provisioning...';
 
   try {
-    const res = await fetch(`${API_URL}/system/initialize`, {
+    const res = await fetchAuth(`${API_URL}/system/initialize`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("jomish_token")}`,
-      },
       body: JSON.stringify({
         company_name: name,
         company_prefix: prefix,
