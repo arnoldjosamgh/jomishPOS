@@ -4174,37 +4174,8 @@ function printReceipt(
     logo.style.display = "";
   }
 
-  // Skip the preview modal — go straight to print, then return to POS
-  const html = _buildReceiptHTML(_currentReceiptData);
-  const iframe = document.createElement("iframe");
-  iframe.id = "print-iframe-receipt";
-  iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
-  document.body.appendChild(iframe);
-  const doc = iframe.contentWindow.document;
-  doc.open(); doc.write(html); doc.close();
-  iframe.onload = () => {
-    iframe.contentWindow.focus();
-    iframe.contentWindow.print();
-    setTimeout(() => {
-      iframe.remove();
-      // Navigate back to POS register after print dialog
-      closePaymentPanel && closePaymentPanel();
-      if (typeof switchPOSView === "function") {
-        const role = (USER_ROLE || "").toUpperCase();
-        if (role === "TECH") {
-          switchPOSView("tech");       // Tech → Tech Hub
-        } else if (role === "CASHIER") {
-          switchPOSView("register");   // Cashier → Register
-        } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
-          switchPOSView("stock");      // Admin-like → Inventory
-        } else if (role === "SUPERVISOR" || role === "HR" || role === "CASHIER") {
-          switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
-        } else {
-          switchPOSView("stock");      // fallback
-        }
-      }
-    }, 800);
-  };
+  // Use doPrint() so kitchen token is always printed first for invoices
+  doPrint();
 }
 
 /**
