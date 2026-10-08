@@ -3596,6 +3596,8 @@ function numpadExact() {
     ) || 0;
   document.getElementById("pay-amount").value = Math.round(total).toString();
   updateChange();
+  // Exact cash = no change needed — confirm immediately without scrolling
+  confirmPayment();
 }
 
 function updateChange() {
@@ -10128,6 +10130,12 @@ window.loadPendingCOD = async function () {
 
       if (!bubble) return; // Not on POS view or not added yet
 
+      // Waiters should never see the pending sales bubble
+      if ((USER_ROLE || "").toUpperCase() === "WAITER") {
+        bubble.style.display = "none";
+        return;
+      }
+
       if (deliveries.length > 0) {
         bubble.style.display = "flex";
         badge.textContent = deliveries.length;
@@ -10145,13 +10153,16 @@ window.loadPendingCOD = async function () {
         let html = "";
         deliveries.forEach((d) => {
           html += `
-                        <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+                        <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${(d.client_name || '').replace(/'/g, "\\'")}')"> 
                             <div>
                                 <h4 style="margin:0 0 5px 0; color:var(--text);">Order #${d.order_id} - ${d.client_name}</h4>
                                 <p style="margin:0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || "No address"}</p>
                                 <p style="margin:4px 0 0 0; font-weight:bold; color:var(--primary);">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                             </div>
-                            <button onclick="markCODReceived(${d.pos_order_id})" style="background:var(--success); color:white; border:none; padding:10px 15px; border-radius:6px; cursor:pointer; font-weight:600;"><i class="fa-solid fa-check"></i> Payment Received</button>
+                            <button onclick="event.stopPropagation(); openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${(d.client_name || '').replace(/'/g, "\\'")}')"
+                              style="background:var(--primary); color:white; border:none; padding:10px 15px; border-radius:6px; cursor:pointer; font-weight:600;">
+                              <i class="fa-solid fa-cash-register"></i> Collect Payment
+                            </button>
                         </div>
                     `;
         });
@@ -10160,6 +10171,86 @@ window.loadPendingCOD = async function () {
     }
   } catch (e) {
     console.error("Failed to load pending COD:", e);
+  }
+};
+
+// Opens the standard payment panel pre-filled for a pending order
+window.openPendingOrderCheckout = function (posOrderId, totalAmount, clientName) {
+  // Close the COD modal first
+  const codModal = document.getElementById("cod-modal");
+  if (codModal) codModal.classList.add("hidden");
+
+  // Store which pending order we're collecting for
+  window._pendingOrderId = posOrderId;
+  window._pendingOrderTotal = totalAmount;
+
+  // Pre-fill the payment panel total display
+  document.getElementById("pay-total").textContent = "UGX " + Math.round(totalAmount).toLocaleString();
+  document.getElementById("pay-amount").value = "0";
+  document.getElementById("pay-change").textContent = "UGX 0";
+  document.getElementById("pay-change").style.color = "var(--text-muted)";
+
+  // Patch btn-checkout data-total so numpadExact works correctly
+  const btnCheckout = document.getElementById("btn-checkout");
+  if (btnCheckout) btnCheckout.setAttribute("data-total", Math.round(totalAmount));
+
+  // Pre-fill buyer name if available
+  const buyerInput = document.getElementById("buyer-name-input");
+  if (buyerInput) buyerInput.value = clientName || "";
+
+  // Show the panel
+  const panel = document.getElementById("payment-panel");
+  if (panel) panel.classList.remove("hidden");
+
+  // Swap confirm button to mark this as a pending order collection (not new checkout)
+  const btnConfirm = document.getElementById("btn-confirm-pay");
+  if (btnConfirm) {
+    btnConfirm.setAttribute("data-pending-id", posOrderId);
+    btnConfirm.onclick = () => collectPendingPayment(posOrderId, totalAmount);
+  }
+};
+
+// Called when cashier confirms payment for a pending order
+window.collectPendingPayment = async function (posOrderId, totalAmount) {
+  const paid = parseInt(document.getElementById("pay-amount").value) || 0;
+  if (paid < Math.round(totalAmount)) {
+    alert("Amount paid is less than total! Customer still owes UGX " + (Math.round(totalAmount) - paid).toLocaleString());
+    return;
+  }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/cod-received`, { method: "POST" });
+    const data = await res.json();
+    if (res.ok) {
+      // Reset confirm button back to normal checkout
+      const btnConfirm = document.getElementById("btn-confirm-pay");
+      if (btnConfirm) {
+        btnConfirm.removeAttribute("data-pending-id");
+        btnConfirm.onclick = () => confirmPayment();
+      }
+      window._pendingOrderId = null;
+      window._pendingOrderTotal = null;
+
+      closePaymentPanel();
+      showToast("Payment collected!", "success");
+      loadPendingCOD();
+
+      if (data.transaction_id && data.total_amount) {
+        printReceipt(
+          [{ name: "Invoice Payment", qty: 1, price: data.total_amount }],
+          data.total_amount,
+          data.transaction_id,
+          "CASH",
+          paid,
+          data.client_name || "",
+          null,
+        );
+      }
+    } else {
+      alert("Error: " + data.error);
+    }
+  } catch (e) {
+    console.error("Failed to collect pending payment:", e);
   }
 };
 
