@@ -3596,8 +3596,15 @@ function numpadExact() {
     ) || 0;
   document.getElementById("pay-amount").value = Math.round(total).toString();
   updateChange();
-  // Exact cash = no change needed — confirm immediately without scrolling
-  confirmPayment();
+  
+  // Exact cash = no change needed — confirm immediately
+  const btnConfirm = document.getElementById("btn-confirm-pay");
+  if (btnConfirm && btnConfirm.hasAttribute("data-pending-id")) {
+    const pendingId = btnConfirm.getAttribute("data-pending-id");
+    collectPendingPayment(pendingId, total);
+  } else {
+    confirmPayment();
+  }
 }
 
 function updateChange() {

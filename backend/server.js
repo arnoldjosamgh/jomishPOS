@@ -5224,7 +5224,7 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
         FROM pos_orders p
         JOIN transactions t ON p.transaction_id = t.id
         LEFT JOIN deliveries d ON d.order_id = p.id
-        WHERE p.payment_method = 'COD' AND t.payment_status = 'PENDING'
+        WHERE p.payment_method IN ('COD', 'INVOICE') AND t.payment_status = 'PENDING'
         ORDER BY p.order_date DESC, p.id DESC
     `;
   db.all(sql, [], (err, rows) => {
