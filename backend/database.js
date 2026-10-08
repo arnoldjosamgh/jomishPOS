@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 140;
+const CURRENT_VERSION = 141;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -1329,6 +1329,18 @@ function runMigrations(fromVersion) {
                 console.log('Migration to v140 complete: Created recycled_transaction_ids table.');
             });
         });
+    }
+
+    if (fromVersion < 141) {
+        db.run(
+            `INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos, can_see_secretary, can_see_transport)
+             VALUES ('Waiter', 0, 0, 0, 0, 1, 0, 0) ON CONFLICT DO NOTHING`,
+            () => {
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '141'], () => {
+                    console.log('Migration to v141 complete: Added Waiter role.');
+                });
+            }
+        );
     }
 }
 

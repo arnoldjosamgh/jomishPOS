@@ -524,6 +524,24 @@ document.addEventListener("DOMContentLoaded", () => {
   // Global barcode scanning is handled by initGlobalScanner() — no duplicate listener needed
   // POS Checkout Handler — opens payment panel with numpad
   const btnCheckout = document.getElementById("btn-checkout");
+  const btnWaiterInvoice = document.getElementById("btn-waiter-invoice");
+
+  if (USER_ROLE && USER_ROLE.toUpperCase() === "WAITER") {
+    if (btnCheckout) btnCheckout.style.display = "none";
+    if (btnWaiterInvoice) btnWaiterInvoice.style.display = "block";
+  } else {
+    if (btnCheckout) btnCheckout.style.display = "block";
+    if (btnWaiterInvoice) btnWaiterInvoice.style.display = "none";
+  }
+
+  if (btnWaiterInvoice) {
+    btnWaiterInvoice.addEventListener("click", () => {
+      if (typeof getInvoice === "function") {
+        getInvoice();
+      }
+    });
+  }
+
   if (btnCheckout) {
     btnCheckout.addEventListener("click", () => {
       if (posCart.length === 0) return alert("Cart is empty!");
@@ -1815,6 +1833,17 @@ function enforceRBAC() {
       tech: false,
     },
     Cashier: {
+      dashboard: false,
+      hr: false,
+      qr: false,
+      schedules: false,
+      sme: false,
+      pos: true,
+      transport: false,
+      secretary: false,
+      tech: false,
+    },
+    Waiter: {
       dashboard: false,
       hr: false,
       qr: false,
@@ -4226,6 +4255,38 @@ function _buildReceiptHTML(d) {
   const logoSrc =
     localStorage.getItem("jomish_logo_base64") || "assets/default-logo.png";
 
+  let kitchenTokenHtml = "";
+  if (d.isInvoice) {
+    let tokenItems = "";
+    d.items.forEach((i) => {
+      const qty = i.qty || 1;
+      tokenItems += `
+        <tr>
+            <td style="padding:3px 0; word-break:break-word; white-space:normal; font-size:12pt; font-weight:bold;">${i.name}</td>
+            <td style="padding:3px 0; text-align:right; font-size:14pt; font-weight:bold;">${qty}</td>
+        </tr>`;
+    });
+
+    kitchenTokenHtml = `
+      <div class="center heading" style="font-size:16pt;">KITCHEN TOKEN</div>
+      <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: #${d.orderId}</span></div>
+      <div class="row"><span>Date: ${d.dateStr}</span></div>
+      <div class="divider"></div>
+      <table>
+          <thead>
+              <tr>
+                  <th style="text-align:left; width:80%;">Item</th>
+                  <th style="text-align:right; width:20%;">Qty</th>
+              </tr>
+          </thead>
+          <tbody>${tokenItems}</tbody>
+      </table>
+      <div class="divider"></div>
+      <div class="center meta" style="margin-top:10px;">End of Token</div>
+      <div style="page-break-after: always; display: block; margin-bottom: 20px;"></div>
+    `;
+  }
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4280,6 +4341,8 @@ th         { border-bottom: 1px dashed #888; padding: 3px 0; }
 </style>
 </head>
 <body>
+
+${kitchenTokenHtml}
 
 <!-- Logo -->
 <div class="center" style="margin-bottom:6px;">
