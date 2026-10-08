@@ -3551,7 +3551,7 @@ window.handlePaymentMethodChange = async function () {
     window.handleDeliveryCheckboxChange();
     payAmountInput.value = "0";
     payAmountInput.setAttribute("readonly", "true");
-    buyerContainer.style.display = "block"; // Collect name and phone for COD
+    buyerContainer.style.display = "none"; // User requested name/phone only for creditors
   } else {
     payAmountInput.removeAttribute("readonly");
     if (method === "CREDIT") {
