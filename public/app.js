@@ -311,10 +311,23 @@ document.addEventListener("DOMContentLoaded", () => {
         switchPOSView("tech");       // Tech → Tech Hub
       } else if (_role === "CASHIER") {
         switchPOSView("register");   // Cashier → Register
+      } else if (_role === "WAITER") {
+        // Waiter: Register only — hide all other POS nav tabs
+        [
+          "pos-nav-stock",
+          "pos-nav-expenses",
+          "pos-nav-credits",
+          "pos-nav-finance",
+          "pos-nav-tech",
+        ].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = "none";
+        });
+        switchPOSView("register");   // Waiter → Register only
       } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
         switchPOSView("stock");      // Admin-like → Inventory
-      } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
-        switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
+      } else if (_role === "SUPERVISOR" || _role === "HR") {
+        switchPOSView("expenses");   // Supervisor/HR → Expenses
       } else {
         switchPOSView("stock");      // fallback
       }
