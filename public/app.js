@@ -5023,7 +5023,7 @@ async function loadTransactions(searchTerm = "") {
 
     filtered.forEach((tx) => {
       const color = tx.type === "INCOME" ? "var(--success)" : "var(--danger)";
-      const receiptNo = String(tx.row_num || tx.id).padStart(4, "0");
+      const receiptNo = String(tx.id).padStart(4, "0");
       const tr = document.createElement("tr");
 
       // Payment method badge based on type & description
@@ -5246,7 +5246,7 @@ async function loadCashierReport() {
     txList.forEach((tx) => {
       const color = tx.type === "INCOME" ? "#10b981" : "#ef4444";
       const sign = tx.type === "INCOME" ? "+" : "-";
-      const rn = String(tx.row_num || tx.id).padStart(4, "0");
+      const rn = String(tx.id).padStart(4, "0");
       txRows += `
         <tr>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">RCPT-${rn}</td>
@@ -5332,7 +5332,7 @@ window.printCashierReport = function(start, end, cashierLabel) {
   // Build 2-column rows using flex (no table = no gap issue)
   let rows = "";
   txList.forEach(tx => {
-    const rn = String(tx.row_num || tx.id).padStart(4, "0");
+    const rn = String(tx.id).padStart(4, "0");
     const sign = tx.type === "INCOME" ? "+" : "-";
     const amt = Number(tx.amount || 0).toLocaleString();
     rows += `<div class="row"><span>RCPT-${rn}</span><span>${sign}UGX ${amt}</span></div>`;

@@ -1481,8 +1481,7 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
   db.all(
     `
         SELECT t.*, 
-               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name,
-               ROW_NUMBER() OVER (ORDER BY t.transaction_date ASC, t.id ASC) AS row_num
+               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name
         FROM transactions t 
         LEFT JOIN employees e ON t.recorded_by = e.id 
         ORDER BY t.transaction_date DESC, t.id DESC
@@ -2993,7 +2992,6 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   let detailSql = `
         SELECT 
             t.id, t.transaction_date, t.amount, t.type, t.description, t.payment_status,
-            ROW_NUMBER() OVER (ORDER BY t.transaction_date ASC, t.id ASC) AS row_num,
             CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name
         FROM transactions t
         LEFT JOIN employees e ON t.recorded_by = e.id
