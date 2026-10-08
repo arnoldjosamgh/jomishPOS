@@ -2884,8 +2884,8 @@ app.post("/api/checkout", authenticateToken, (req, res) => {
                 emitAndBust("transactions", "finance_summary");
                 emitAndBust("products", "products");
                 io.emit("db_updated", { module: "pos" });
-                // Only emit deliveries update if this was truly a delivery dispatch
-                if (effectiveIsDelivery) {
+                // Emit deliveries update so Pending Sales (COD/Invoice) refresh immediately for all clients
+                if (effectiveIsDelivery || effectivePaymentMethod === "COD") {
                   io.emit("db_updated", { module: "deliveries" });
                 }
                 res.json({
@@ -5387,8 +5387,8 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, (req, res) => {
             }
 
             db.run(
-              "UPDATE transactions SET payment_status = ? WHERE id = ?",
-              ["PAID", row.transaction_id],
+              "UPDATE transactions SET payment_status = ?, description = ? WHERE id = ?",
+              ["PAID", "POS Sale (CASH)", row.transaction_id],
               function (err) {
                 if (err) {
                   db.run("ROLLBACK");
