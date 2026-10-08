@@ -1525,6 +1525,8 @@ app.delete("/api/transactions/:id", authenticateToken, (req, res) => {
   const { id } = req.params;
   db.run("DELETE FROM transactions WHERE id = ?", [id], function (err) {
     if (err) return res.status(500).json({ error: err.message });
+    // ── Recycle the freed receipt number so the next sale reuses it ──────────
+    db.run("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [id], () => {});
     emitAndBust("transactions", "finance_summary");
     res.json({ message: "Transaction successfully deleted." });
   });
@@ -2760,6 +2762,20 @@ app.post("/api/checkout", authenticateToken, (req, res) => {
   const effectiveIsDelivery =
     payment_method === "INVOICE" ? false : is_delivery;
 
+  // ── Check for a recycled receipt number to reuse ──────────────────────────
+  // When a cashier deletes a transaction via F8, its ID is stored in
+  // recycled_transaction_ids. The next checkout claims the lowest freed ID
+  // so that the printed receipt number perfectly matches the DB record.
+  db.get(
+    "SELECT id FROM recycled_transaction_ids ORDER BY id ASC LIMIT 1",
+    [],
+    (recycleErr, recycledRow) => {
+      const recycledId = recycledRow ? recycledRow.id : null;
+      if (recycledId) {
+        // Consume the recycled ID immediately so concurrent checkouts don't double-claim
+        db.run("DELETE FROM recycled_transaction_ids WHERE id = ?", [recycledId], () => {});
+      }
+
   db.serialize(() => {
     db.run("BEGIN TRANSACTION");
 
@@ -2774,9 +2790,17 @@ app.post("/api/checkout", authenticateToken, (req, res) => {
         ? total_amount
         : paid;
 
+    // Use recycled ID if available (explicit INSERT), else let DB auto-assign
+    const txInsertSql = recycledId
+      ? "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      : "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)";
+    const txInsertParams = recycledId
+      ? [recycledId, txAmount, "INCOME", description, cashier_id, now, payment_status]
+      : [txAmount, "INCOME", description, cashier_id, now, payment_status];
+
     db.run(
-      "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
-      [txAmount, "INCOME", description, cashier_id, now, payment_status],
+      txInsertSql,
+      txInsertParams,
       function (err) {
         if (err) {
           db.run("ROLLBACK");
@@ -2935,7 +2959,9 @@ app.post("/api/checkout", authenticateToken, (req, res) => {
         );
       },
     );
-  });
+  }); // end db.serialize
+  } // end db.get recycled ID callback
+  ); // end db.get
 });
 
 app.get("/api/pos_orders/tx/:transaction_id", authenticateToken, (req, res) => {

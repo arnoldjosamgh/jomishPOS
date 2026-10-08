@@ -408,6 +408,9 @@ const schema = [
         id SERIAL PRIMARY KEY, transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         amount REAL, type TEXT, description TEXT, recorded_by INTEGER
     )`,
+    `CREATE TABLE IF NOT EXISTS recycled_transaction_ids (
+        id INTEGER PRIMARY KEY
+    )`,
     `CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY, name TEXT, category TEXT, 
         price REAL, stock INTEGER, barcode TEXT,
