@@ -2724,7 +2724,7 @@ app.patch("/api/products/:id/photo", authenticateToken, (req, res) => {
   );
 });
 
-app.post("/api/checkout", authenticateToken, (req, res) => {
+app.post("/api/checkout", authenticateToken, async (req, res) => {
   const {
     total_amount,
     items,
@@ -2751,217 +2751,122 @@ app.post("/api/checkout", authenticateToken, (req, res) => {
   } else if (payment_method === "INVOICE") {
     paid = 0;
     payment_status = "PENDING";
-    // Invoice = unpaid sale. Record full amount as pending COD (no delivery dispatch).
-    // Force is_delivery off regardless of what frontend sent
   }
 
-  // Effective payment method to store — INVOICE becomes COD (pending) for reporting purposes
-  const effectivePaymentMethod =
-    payment_method === "INVOICE" ? "COD" : payment_method;
-  // Effective is_delivery: INVOICE must never create a transport record
-  const effectiveIsDelivery =
-    payment_method === "INVOICE" ? false : is_delivery;
+  // INVOICE stores as COD in pos_orders (pending COD)
+  const effectivePaymentMethod = payment_method === "INVOICE" ? "COD" : payment_method;
+  // INVOICE must never create a transport/delivery record
+  const effectiveIsDelivery = payment_method === "INVOICE" ? false : is_delivery;
 
-  // ── Check for a recycled receipt number to reuse ──────────────────────────
-  // When a cashier deletes a transaction via F8, its ID is stored in
-  // recycled_transaction_ids. The next checkout claims the lowest freed ID
-  // so that the printed receipt number perfectly matches the DB record.
-  db.get(
-    "SELECT id FROM recycled_transaction_ids ORDER BY id ASC LIMIT 1",
-    [],
-    (recycleErr, recycledRow) => {
-      const recycledId = recycledRow ? recycledRow.id : null;
+  try {
+    // ── 1. Claim a recycled receipt ID if one is available ─────────────────
+    // Done OUTSIDE the transaction so we don't hold a lock while deciding
+    let recycledId = null;
+    await new Promise((resolve) => {
+      db.get("SELECT id FROM recycled_transaction_ids ORDER BY id ASC LIMIT 1", [], (err, row) => {
+        if (!err && row) {
+          recycledId = row.id;
+          // Consume it immediately — best-effort, ignore errors
+          db.run("DELETE FROM recycled_transaction_ids WHERE id = ?", [recycledId], () => {});
+        }
+        resolve();
+      });
+    });
+
+    // ── 2. Run all DB writes inside a single atomic transaction ─────────────
+    const { transaction_id, pos_order_id } = await db.withTransaction(async (q) => {
+
+      const now = new Date().toISOString();
+      const description = payment_method === "INVOICE"
+        ? "POS Sale (COD - Pending Invoice)"
+        : `POS Sale (${payment_method})`;
+      const txAmount = payment_method === "COD" || payment_method === "INVOICE"
+        ? total_amount : paid;
+
+      // INSERT transaction — use explicit id if recycling, else auto-assign
+      let txResult;
       if (recycledId) {
-        // Consume the recycled ID immediately so concurrent checkouts don't double-claim
-        db.run("DELETE FROM recycled_transaction_ids WHERE id = ?", [recycledId], () => {});
+        txResult = await q(
+          "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [recycledId, txAmount, "INCOME", description, cashier_id, now, payment_status]
+        );
+        // Postgres RETURNING id won't return when we supply id explicitly — use recycledId
+        txResult.lastID = txResult.lastID || recycledId;
+      } else {
+        txResult = await q(
+          "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
+          [txAmount, "INCOME", description, cashier_id, now, payment_status]
+        );
+      }
+      const transaction_id = recycledId || txResult.lastID;
+
+      // INSERT pos_order — include buyer_name/buyer_phone always (columns exist now)
+      const orderResult = await q(
+        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null]
+      );
+      const pos_order_id = orderResult.lastID;
+
+      // Stock deductions
+      for (const item of items) {
+        await q(
+          "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
+          [item.qty, item.id, item.qty]
+        );
+        if (item.barcodes && Array.isArray(item.barcodes)) {
+          for (const bc of item.barcodes) {
+            await q(
+              "INSERT OR IGNORE INTO sold_barcodes (barcode, product_id, transaction_id) VALUES (?, ?, ?)",
+              [bc, item.id, transaction_id]
+            );
+          }
+        }
       }
 
-  db.serialize(() => {
-    db.run("BEGIN TRANSACTION");
-
-    const now = new Date().toISOString();
-    const description =
-      payment_method === "INVOICE"
-        ? `POS Sale (COD - Pending Invoice)`
-        : `POS Sale (${payment_method})`;
-    // For COD and INVOICE, record full total amount as pending
-    const txAmount =
-      payment_method === "COD" || payment_method === "INVOICE"
-        ? total_amount
-        : paid;
-
-    // Use recycled ID if available (explicit INSERT), else let DB auto-assign
-    const txInsertSql = recycledId
-      ? "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      : "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)";
-    const txInsertParams = recycledId
-      ? [recycledId, txAmount, "INCOME", description, cashier_id, now, payment_status]
-      : [txAmount, "INCOME", description, cashier_id, now, payment_status];
-
-    db.run(
-      txInsertSql,
-      txInsertParams,
-      function (err) {
-        if (err) {
-          db.run("ROLLBACK");
-          return res
-            .status(500)
-            .json({ error: "Transaction failed: " + err.message });
-        }
-        const transaction_id = this.lastID;
-
-        // Build INSERT dynamically — buyer_name/buyer_phone only included for CREDIT
-        // to avoid "column does not exist" on Postgres before migration v139 runs.
-        const needsBuyerInfo = !!(buyer_name || buyer_phone);
-        const posOrderSql = needsBuyerInfo
-          ? "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone) VALUES (?, ?, ?, ?, ?, ?, ?)"
-          : "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid) VALUES (?, ?, ?, ?, ?)";
-        const posOrderParams = needsBuyerInfo
-          ? [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null]
-          : [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid];
-        db.run(
-          posOrderSql,
-          posOrderParams,
-          function (err2) {
-            if (err2) {
-              db.run("ROLLBACK");
-              return res
-                .status(500)
-                .json({ error: "Order failed: " + err2.message });
-            }
-            const pos_order_id = this.lastID;
-
-            const completeCheckout = () => {
-              // Stock updates run inside the serialize block (safe for SQLite)
-              items.forEach((item) => {
-                db.run(
-                  "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
-                  [item.qty, item.id, item.qty],
-                );
-
-                if (item.barcodes && Array.isArray(item.barcodes)) {
-                  item.barcodes.forEach((bc) => {
-                    db.run(
-                      "INSERT OR IGNORE INTO sold_barcodes (barcode, product_id, transaction_id) VALUES (?, ?, ?)",
-                      [bc, item.id, transaction_id],
-                    );
-                  });
-                }
-              });
-
-              db.run("COMMIT", (err3) => {
-                if (err3) {
-                  db.run("ROLLBACK");
-                  return res.status(500).json({ error: "Commit failed" });
-                }
-
-                // Insert order_items AFTER commit — each db.run() gets its own
-                // connection on Postgres (pool), so inserting inside the transaction
-                // block above was unreliable. Post-commit inserts are always safe
-                // because pos_order_id already exists in the DB at this point.
-                items.forEach((item) => {
-                  const itemTotal = (item.price || 0) * (item.qty || 1);
-                  db.run(
-                    "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
-                    [
-                      pos_order_id,
-                      item.id,
-                      item.name,
-                      item.qty,
-                      item.price,
-                      itemTotal,
-                    ],
-                    (errInsert) => {
-                      if (errInsert)
-                        console.error(
-                          "Failed to insert order_item:",
-                          errInsert.message,
-                        );
-                    },
-                  );
-                });
-
-                emitAndBust("transactions", "finance_summary");
-                emitAndBust("products", "products");
-                io.emit("db_updated", { module: "pos" });
-                // Emit deliveries update so Pending Sales (COD/Invoice) refresh immediately for all clients
-                if (effectiveIsDelivery || effectivePaymentMethod === "COD") {
-                  io.emit("db_updated", { module: "deliveries" });
-                }
-                res.json({
-                  message: "Checkout successful!",
-                  transaction_id,
-                  pos_order_id,
-                });
-              });
-            };
-
-            const handleDeliveryAndComplete = () => {
-              // Only create a delivery/transport record if is_delivery was explicitly checked
-              // (INVOICE always uses effectiveIsDelivery=false so it never goes to transport)
-              if (effectiveIsDelivery) {
-                db.run(
-                  "INSERT INTO deliveries (order_id, client_name, client_phone, client_location, status, driver_name) VALUES (?, ?, ?, ?, ?, ?)",
-                  [
-                    pos_order_id,
-                    buyer_name || "Customer",
-                    buyer_phone || "",
-                    delivery_address || "",
-                    "Pending",
-                    driver_name || null,
-                  ],
-                  function (errDel) {
-                    if (errDel) {
-                      db.run("ROLLBACK");
-                      return res
-                        .status(500)
-                        .json({
-                          error: "Delivery record failed: " + errDel.message,
-                        });
-                    }
-                    completeCheckout();
-                  },
-                );
-              } else {
-                completeCheckout();
-              }
-            };
-
-            if (payment_method === "CREDIT" && paid < total_amount) {
-              const balance = total_amount - paid;
-              db.run(
-                "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance, promised_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                  buyer_name || "Unknown",
-                  buyer_phone || "",
-                  pos_order_id,
-                  total_amount,
-                  paid,
-                  balance,
-                  promised_date || null,
-                ],
-                function (errCredit) {
-                  if (errCredit) {
-                    db.run("ROLLBACK");
-                    return res
-                      .status(500)
-                      .json({
-                        error: "Credit record failed: " + errCredit.message,
-                      });
-                  }
-                  handleDeliveryAndComplete();
-                },
-              );
-            } else {
-              handleDeliveryAndComplete();
-            }
-          },
+      // CREDIT record
+      if (payment_method === "CREDIT" && paid < total_amount) {
+        const balance = total_amount - paid;
+        await q(
+          "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance, promised_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [buyer_name || "Unknown", buyer_phone || "", pos_order_id, total_amount, paid, balance, promised_date || null]
         );
-      },
-    );
-  }); // end db.serialize
-  } // end db.get recycled ID callback
-  ); // end db.get
+      }
+
+      // Delivery record
+      if (effectiveIsDelivery) {
+        await q(
+          "INSERT INTO deliveries (order_id, client_name, client_phone, client_location, status, driver_name) VALUES (?, ?, ?, ?, ?, ?)",
+          [pos_order_id, buyer_name || "Customer", buyer_phone || "", delivery_address || "", "Pending", driver_name || null]
+        );
+      }
+
+      return { transaction_id, pos_order_id };
+    });
+
+    // ── 3. Insert order_items AFTER commit (safe fire-and-forget) ──────────
+    for (const item of items) {
+      const itemTotal = (item.price || 0) * (item.qty || 1);
+      db.run(
+        "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+        [pos_order_id, item.id, item.name, item.qty, item.price, itemTotal],
+        (err) => { if (err) console.error("Failed to insert order_item:", err.message); }
+      );
+    }
+
+    // ── 4. Emit real-time updates ──────────────────────────────────────────
+    emitAndBust("transactions", "finance_summary");
+    emitAndBust("products", "products");
+    io.emit("db_updated", { module: "pos" });
+    if (effectiveIsDelivery || effectivePaymentMethod === "COD") {
+      io.emit("db_updated", { module: "deliveries" });
+    }
+
+    res.json({ message: "Checkout successful!", transaction_id, pos_order_id });
+
+  } catch (err) {
+    console.error("[CHECKOUT] Error:", err.message);
+    res.status(500).json({ error: "Checkout failed: " + err.message });
+  }
 });
 
 app.get("/api/pos_orders/tx/:transaction_id", authenticateToken, (req, res) => {

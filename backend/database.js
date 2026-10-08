@@ -125,6 +125,35 @@ if (config.dbType === 'postgres') {
                 },
                 finalize: () => {}
             };
+        },
+        // ── withTransaction: run a callback with all queries on ONE client ──────
+        // Works for both Postgres (real transaction) and is shimmed for SQLite.
+        // Usage: await db.withTransaction(async (q) => { await q('SQL', [params]); ... })
+        // Returns { lastID, rows } of the LAST query executed inside.
+        withTransaction: async function(fn) {
+            const schema = asyncLocalStorage.getStore() || 'public';
+            const client = await pool.connect();
+            try {
+                await client.query(`SET search_path TO ${searchPathFor(schema)}`);
+                await client.query('BEGIN');
+                // q() runs a query on the pinned client, returns { lastID, rows }
+                const q = async (sql, params = []) => {
+                    const res = await client.query(translateSql(sql), params);
+                    return {
+                        lastID: res.rows.length > 0 ? res.rows[0].id : null,
+                        rows: res.rows,
+                        rowCount: res.rowCount
+                    };
+                };
+                const result = await fn(q);
+                await client.query('COMMIT');
+                return result;
+            } catch (err) {
+                await client.query('ROLLBACK');
+                throw err;
+            } finally {
+                client.release();
+            }
         }
     };
     
@@ -325,6 +354,35 @@ if (config.dbType === 'postgres') {
                         await new Promise(resolve => asyncLocalStorage.run(prefix, () => { initDb(); setTimeout(resolve, 500); }));
                         console.log(`[MIGRATE] SQLite schema for "${prefix}" verified.`);
                     }
+                };
+            }
+            if (method === 'withTransaction') {
+                // SQLite shim: wrap callback in serialize + BEGIN/COMMIT
+                return async function(fn) {
+                    const prefix = asyncLocalStorage.getStore() || 'public';
+                    const activeDb = openSqliteDb(prefix);
+                    return new Promise(async (resolve, reject) => {
+                        activeDb.serialize(async () => {
+                            activeDb.run('BEGIN');
+                            try {
+                                // q() wraps db.run into a promise returning { lastID, rowCount }
+                                const q = (sql, params = []) => new Promise((res2, rej2) => {
+                                    activeDb.run(sql, params, function(err) {
+                                        if (err) rej2(err);
+                                        else res2({ lastID: this.lastID, rowCount: this.changes, rows: [] });
+                                    });
+                                });
+                                const result = await fn(q);
+                                activeDb.run('COMMIT', (err) => {
+                                    if (err) { activeDb.run('ROLLBACK'); reject(err); }
+                                    else resolve(result);
+                                });
+                            } catch (err) {
+                                activeDb.run('ROLLBACK');
+                                reject(err);
+                            }
+                        });
+                    });
                 };
             }
             return (...args) => {
