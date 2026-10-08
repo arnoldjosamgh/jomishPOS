@@ -472,7 +472,8 @@ const schema = [
     `CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY, name TEXT, category TEXT, 
         price REAL, stock INTEGER, barcode TEXT,
-        barcode_end TEXT, photo_base64 TEXT, buying_price REAL DEFAULT 0
+        barcode_end TEXT, photo_base64 TEXT, buying_price REAL DEFAULT 0,
+        track_stock INTEGER DEFAULT 1
     )`,
     `CREATE TABLE IF NOT EXISTS pos_orders (
         id SERIAL PRIMARY KEY, cashier_id INTEGER, total_amount REAL,
@@ -1341,6 +1342,14 @@ function runMigrations(fromVersion) {
                 });
             }
         );
+    }
+
+    if (fromVersion < 142) {
+        db.run("ALTER TABLE products ADD COLUMN track_stock INTEGER DEFAULT 1", (err) => {
+            db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '142'], () => {
+                console.log('Migration to v142 complete: Added track_stock to products.');
+            });
+        });
     }
 }
 

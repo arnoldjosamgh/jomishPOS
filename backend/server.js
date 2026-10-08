@@ -1554,9 +1554,10 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
         const posOrderId = posOrderRes.rows[0].id;
         
         // 2. Fetch order items to return stock
-        const itemsRes = await q("SELECT product_id, qty FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+        const itemsRes = await q("SELECT oi.product_id, oi.qty, p.track_stock FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.pos_order_id = ?", [posOrderId]);
         if (itemsRes.rows && itemsRes.rows.length > 0) {
           for (let item of itemsRes.rows) {
+            if (item.track_stock === 0) continue; // Made-to-order: no stock to restore
             await q("UPDATE products SET stock = stock + ? WHERE id = ?", [item.qty, item.product_id]);
           }
         }
@@ -2420,15 +2421,16 @@ app.get("/api/barcodes/sold", authenticateToken, (req, res) => {
 });
 
 app.post("/api/products", authenticateToken, (req, res) => {
-  const { name, category, price, photo_base64, buying_price } = req.body;
+  const { name, category, price, photo_base64, buying_price, track_stock } = req.body;
   // Set stock to 0 initially since barcodes haven't been scanned
   const stock = 0;
   const bp = parseFloat(buying_price) || 0;
+  const ts = track_stock === undefined ? 1 : track_stock;
 
-  // INSERT with NULL barcode â€” NULL bypasses UNIQUE constraint in SQLite
+  // INSERT with NULL barcode — NULL bypasses UNIQUE constraint in SQLite
   db.run(
-    "INSERT INTO products (name, category, price, stock, barcode, barcode_end, photo_base64, buying_price) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
-    [name, category, price, stock, photo_base64 || null, bp],
+    "INSERT INTO products (name, category, price, stock, barcode, barcode_end, photo_base64, buying_price, track_stock) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
+    [name, category, price, stock, photo_base64 || null, bp, ts],
     function (err) {
       if (err) {
         console.error("[PRODUCT CREATE ERROR]", err.message);
@@ -2664,20 +2666,22 @@ app.put("/api/products/:id", authenticateToken, (req, res) => {
     barcode_end,
     photo_base64,
     buying_price,
+    track_stock,
   } = req.body;
   const { id } = req.params;
   barcode = barcode ? barcode.toString().trim() : "";
   barcode_end = barcode_end ? barcode_end.toString().trim() : null;
   const bp = parseFloat(buying_price) || 0;
+  const ts = track_stock === undefined ? 1 : track_stock;
 
-  const params = [name, category, price, barcode, barcode_end, bp, id];
+  const params = [name, category, price, barcode, barcode_end, bp, ts, id];
   let sql =
-    "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ? WHERE id = ?";
+    "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ? WHERE id = ?";
 
   if (photo_base64 && photo_base64.length > 50) {
     sql =
-      "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, photo_base64 = ? WHERE id = ?";
-    params.splice(6, 0, photo_base64); // index 6 corresponds to photo_base64, pushing id to index 7
+      "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, photo_base64 = ? WHERE id = ?";
+    params.splice(7, 0, photo_base64); // index 7 corresponds to photo_base64, pushing id to index 8
   }
 
   db.run(sql, params, function (err) {
@@ -2788,8 +2792,9 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       );
       const pos_order_id = orderResult.lastID;
 
-      // Stock deductions
+      // Stock deductions (skip for Made-To-Order items where track_stock = 0)
       for (const item of items) {
+        if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
         await q(
           "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
           [item.qty, item.id, item.qty]
@@ -5563,6 +5568,7 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
         pos_order_id = orderRes.lastID;
 
         for (const item of items) {
+          if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
           await q(
             "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
             [item.qty, item.id, item.qty]

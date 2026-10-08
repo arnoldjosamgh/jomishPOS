@@ -3487,14 +3487,15 @@ function addToCart(p, scannedBarcode = null) {
   // Calculate what the stock will be after adding 1 more to the cart
   const currentQtyInCart = existing ? existing.qty : 0;
   const remainingAfterAdd = p.stock - currentQtyInCart - 1;
+  const isTracked = p.track_stock !== 0;
   
   // Check if remaining stock is hitting the warning threshold
-  if (remainingAfterAdd <= 10 && remainingAfterAdd >= 0) {
+  if (isTracked && remainingAfterAdd <= 10 && remainingAfterAdd >= 0) {
     showToast(`Low Inventory Warning: Only ${remainingAfterAdd} remaining for ${p.name}`, "warning");
   }
 
   if (existing) {
-    if (existing.qty < p.stock) {
+    if (!isTracked || existing.qty < p.stock) {
       existing.qty += 1;
       if (scannedBarcode && !isNaN(scannedBarcode)) {
         if (!existing.barcodes) existing.barcodes = [];
@@ -3504,7 +3505,7 @@ function addToCart(p, scannedBarcode = null) {
       showToast(`Cannot add ${p.name}. Out of stock!`, "error");
     }
   } else {
-    if (p.stock > 0) {
+    if (!isTracked || p.stock > 0) {
       const item = { ...p, qty: 1 };
       if (scannedBarcode && !isNaN(scannedBarcode)) {
         item.barcodes = [scannedBarcode];
@@ -6529,12 +6530,14 @@ async function loadInventory() {
                     </div>
                     ${profitHtml}
                     <div style="margin-top:6px; display:flex; justify-content:space-between; align-items:center;">
-                        <div class="stock" style="font-weight:bold; color:${p.stock < 10 ? "var(--danger)" : "var(--primary)"};">Stock: ${p.stock}</div>
+                        <div class="stock" style="font-weight:bold; color:${p.track_stock === 0 ? "var(--text-muted)" : (p.stock < 10 ? "var(--danger)" : "var(--primary)")};">
+                            ${p.track_stock === 0 ? "∞ Made to Order" : "Stock: " + p.stock}
+                        </div>
                         <div style="display:flex; gap:4px; align-items:center;">
                             <input type="number" id="restock-qty-${p.id}" value="10" min="1" style="width:55px; background:#fff; border:1px solid #ccc; border-radius:6px; color:#111 !important; font-size:0.8rem; padding:4px 4px; text-align:center; font-weight:700;">
                             <button class="sm-btn primary" onclick="const val = parseInt(document.getElementById('restock-qty-${p.id}').value); if(val > 0) restockProduct(${p.id}, val);" title="Add Stock & Print Labels">+</button>
                             <button class='sm-btn warning' onclick='printProductLabels(${JSON.stringify(p).replace(/'/g, "&apos;")})' title="Reprint All Labels"><i class="fa-solid fa-tag"></i></button>
-                            <button class='sm-btn success' onclick="openEditProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, "&quot;")}, ${JSON.stringify(p.category || 'General').replace(/"/g, "&quot;")}, ${p.price}, ${JSON.stringify(p.barcode || '').replace(/"/g, "&quot;")}, ${JSON.stringify(p.barcode_end || '').replace(/"/g, "&quot;")}, ${p.buying_price || 0})" title="Edit"><i class="fa-solid fa-pencil"></i></button>
+                            <button class='sm-btn success' onclick="openEditProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, "&quot;")}, ${JSON.stringify(p.category || 'General').replace(/"/g, "&quot;")}, ${p.price}, ${JSON.stringify(p.barcode || '').replace(/"/g, "&quot;")}, ${JSON.stringify(p.barcode_end || '').replace(/"/g, "&quot;")}, ${p.buying_price || 0}, ${p.track_stock === undefined ? 1 : p.track_stock})" title="Edit"><i class="fa-solid fa-pencil"></i></button>
                             <button class='sm-btn danger' onclick="deleteProduct(${p.id})" title="Delete"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>
@@ -6655,6 +6658,7 @@ async function handleAddProduct(e) {
     buying_price:
       parseFloat(document.getElementById("add-prod-buying-price").value) || 0,
     photo_base64: photoBase64,
+    track_stock: document.getElementById("add-prod-track-stock").checked ? 1 : 0,
   };
 
   try {
@@ -6869,6 +6873,7 @@ function openEditProduct(
   barcode,
   barcodeEnd,
   buyingPrice = 0,
+  trackStock = 1,
 ) {
   document.getElementById("edit-prod-id").value = id;
   document.getElementById("edit-prod-name").value = name;
@@ -6880,6 +6885,8 @@ function openEditProduct(
   document.getElementById("edit-prod-preview").style.display = "none";
   const bpInput = document.getElementById("edit-prod-buying-price");
   if (bpInput) bpInput.value = buyingPrice;
+  const tsCheckbox = document.getElementById("edit-prod-track-stock");
+  if (tsCheckbox) tsCheckbox.checked = (trackStock !== 0);
   document.getElementById("edit-product-modal").classList.remove("hidden");
 }
 
@@ -6955,6 +6962,7 @@ async function handleEditProduct(e) {
     barcode: document.getElementById("edit-prod-barcode").value,
     barcode_end: document.getElementById("edit-prod-barcode-end").value || null,
     photo_base64,
+    track_stock: document.getElementById("edit-prod-track-stock").checked ? 1 : 0,
   };
 
   try {

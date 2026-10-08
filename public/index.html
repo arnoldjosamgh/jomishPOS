@@ -808,6 +808,10 @@
                     <label>Buying Price (UGX, Optional)</label>
                     <input type="number" id="add-prod-buying-price" placeholder="4000">
                 </div>
+                <div class="form-group" style="display:flex; align-items:center; gap:8px; background:var(--background); padding:10px; border-radius:6px;">
+                    <input type="checkbox" id="add-prod-track-stock" checked style="width:18px;height:18px;accent-color:var(--primary); cursor:pointer;">
+                    <label for="add-prod-track-stock" style="margin:0; font-weight:600; cursor:pointer; font-size:0.9rem;">Track Stock / Inventory (uncheck for Made-To-Order items)</label>
+                </div>
                 <div class="form-group">
                     <label>Product Image</label>
                     <input type="file" id="add-prod-photo" accept="image/*" onchange="quickUploadPhoto(this, 'prod-photo-preview')">
@@ -897,6 +901,10 @@
                 <div class="form-group">
                     <label>CEO Buying Price (UGX) <span style="font-size:0.75rem; color:#94A3B8;">(Admin Only)</span></label>
                     <input type="number" id="edit-prod-buying-price" placeholder="e.g. 3500" value="0">
+                </div>
+                <div class="form-group" style="display:flex; align-items:center; gap:8px; background:var(--background); padding:10px; border-radius:6px;">
+                    <input type="checkbox" id="edit-prod-track-stock" style="width:18px;height:18px;accent-color:var(--primary); cursor:pointer;">
+                    <label for="edit-prod-track-stock" style="margin:0; font-weight:600; cursor:pointer; font-size:0.9rem;">Track Stock / Inventory</label>
                 </div>
                 <div class="form-group">
                     <label>Replace Photo <span style="color:var(--text-muted); font-size:0.8rem;">(optional — leave empty to keep current)</span></label>
