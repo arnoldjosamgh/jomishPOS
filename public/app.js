@@ -2087,6 +2087,10 @@ function enforceRBAC() {
     "pos-nav-tech":     isTech,
   };
 
+  // ── DEBUG: log role + tab visibility to console ──────────────────────
+  console.log(`[RBAC] uRole="${uRole}" isCashier=${isCashier} isTech=${isTech} isAdminLike=${isAdminLike}`);
+  console.log(`[RBAC] posNavMap:`, JSON.stringify(posNavMap));
+
   Object.entries(posNavMap).forEach(([id, visible]) => {
     const btn = document.getElementById(id);
     if (btn) {
@@ -2097,6 +2101,7 @@ function enforceRBAC() {
       }
     }
   });
+
 
   // Show/Hide buying price inputs (Admin/CEO/Manager/HR only)
   const canSeeAdminStuff = isAdminLike || isHRRole;
