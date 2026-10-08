@@ -1228,6 +1228,7 @@ function runMigrations(fromVersion) {
                     console.error(`[Migration v138] Error adding ${col}:`, err.message);
                 }
                 runNextV138();
+            });
         }
         runNextV138();
     }
