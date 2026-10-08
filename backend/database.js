@@ -639,7 +639,7 @@ function runMigrations(fromVersion) {
             ['CEO', 1, 1, 1, 1, 1], ['HR', 1, 1, 1, 1, 1],
             ['Supervisor', 0, 0, 1, 0, 0], ['Cashier', 1, 0, 0, 0, 1], ['Security', 0, 0, 1, 0, 0]
         ];
-        seedRoles.forEach(r => db.run('INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING', r));
+        seedRoles.forEach(r => db.run('INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos) VALUES (?,?,?,?,?,?) ON CONFLICT (role_name) DO NOTHING', r));
         db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ["version", "100"]);
     }
     if (fromVersion < 101) {
@@ -707,7 +707,7 @@ function runMigrations(fromVersion) {
     }
     if (fromVersion < 107) {
         db.run("ALTER TABLE roles_config ADD COLUMN can_see_secretary INTEGER DEFAULT 0", () => {});
-        db.run(`INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos, can_see_secretary) VALUES ('Receptionist', 1, 0, 1, 0, 0, 1) ON CONFLICT DO NOTHING`);
+        db.run(`INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos, can_see_secretary) VALUES ('Receptionist', 1, 0, 1, 0, 0, 1) ON CONFLICT (role_name) DO NOTHING`);
         db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ["version", "107"], () => {
             console.log("Migration to v107 complete: Added Secretary Hub (Calendar + Email).");
         });
@@ -1334,7 +1334,7 @@ function runMigrations(fromVersion) {
     if (fromVersion < 141) {
         db.run(
             `INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos, can_see_secretary, can_see_transport)
-             VALUES ('Waiter', 0, 0, 0, 0, 1, 0, 0) ON CONFLICT DO NOTHING`,
+             VALUES ('Waiter', 0, 0, 0, 0, 1, 0, 0) ON CONFLICT (role_name) DO NOTHING`,
             () => {
                 db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '141'], () => {
                     console.log('Migration to v141 complete: Added Waiter role.');
