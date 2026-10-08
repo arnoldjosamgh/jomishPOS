@@ -2786,17 +2786,18 @@ app.post("/api/checkout", authenticateToken, (req, res) => {
         }
         const transaction_id = this.lastID;
 
+        // Build INSERT dynamically — buyer_name/buyer_phone only included for CREDIT
+        // to avoid "column does not exist" on Postgres before migration v139 runs.
+        const needsBuyerInfo = !!(buyer_name || buyer_phone);
+        const posOrderSql = needsBuyerInfo
+          ? "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone) VALUES (?, ?, ?, ?, ?, ?, ?)"
+          : "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid) VALUES (?, ?, ?, ?, ?)";
+        const posOrderParams = needsBuyerInfo
+          ? [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null]
+          : [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid];
         db.run(
-          "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [
-            cashier_id,
-            total_amount,
-            transaction_id,
-            effectivePaymentMethod,
-            paid,
-            buyer_name || null,
-            buyer_phone || null,
-          ],
+          posOrderSql,
+          posOrderParams,
           function (err2) {
             if (err2) {
               db.run("ROLLBACK");
