@@ -4207,7 +4207,18 @@ window.endCashierShift = async function() {
     if (res.ok) {
       const report = await res.json();
       showToast("Shift ended successfully!", "success");
-      printEndShiftReport(report);
+      // Add a slight delay then print and logout
+      setTimeout(() => {
+        printEndShiftReport(report);
+        // After starting the print dialogue, log out
+        setTimeout(() => {
+          localStorage.removeItem("jomish_token");
+          localStorage.removeItem("jomish_role");
+          localStorage.removeItem("jomish_name");
+          localStorage.removeItem("jomish_permissions");
+          location.replace("login.html");
+        }, 1500);
+      }, 500);
     } else {
       const err = await res.json();
       alert("Error ending shift: " + err.error);
@@ -5476,14 +5487,35 @@ async function loadCashierReport() {
     }
 
     const txList = data.transactions || [];
+    
+    // Aggregate new summary fields from data.reports
+    let aggCashSales = 0;
+    let aggMomoSales = 0;
+    let aggTotalSales = 0;
+    let aggTotalIncome = 0;
+    let aggTotalExpense = 0;
+    if (data.reports) {
+      data.reports.forEach(r => {
+        aggCashSales += parseFloat(r.cash_sales) || 0;
+        aggMomoSales += parseFloat(r.momo_sales) || 0;
+        aggTotalSales += parseFloat(r.total_sales) || 0;
+        aggTotalIncome += parseFloat(r.total_income) || 0;
+        aggTotalExpense += parseFloat(r.total_expense) || 0;
+      });
+    }
+
+    const grandNet = aggTotalIncome - aggTotalExpense;
+
     // Store for print function
-    window._lastReportData = { txList, start, end, cashierLabel };
-    const totalIncome = txList.filter(t => t.type === "INCOME").reduce((s, t) => s + parseFloat(t.amount || 0), 0);
-    const totalExpense = txList.filter(t => t.type !== "INCOME").reduce((s, t) => s + parseFloat(t.amount || 0), 0);
-    const grandNet = totalIncome - totalExpense;
-    window._lastReportData.totalIncome = totalIncome;
-    window._lastReportData.totalExpense = totalExpense;
-    window._lastReportData.grandNet = grandNet;
+    window._lastReportData = { 
+      txList, start, end, cashierLabel,
+      totalIncome: aggTotalIncome, 
+      totalExpense: aggTotalExpense, 
+      grandNet,
+      cashSales: aggCashSales,
+      momoSales: aggMomoSales,
+      totalSales: aggTotalSales
+    };
 
     let txRows = "";
     txList.forEach((tx) => {
@@ -5527,12 +5559,12 @@ async function loadCashierReport() {
             <tr style="background:var(--surface); font-weight:bold; border-top:2px solid var(--primary);">
               <td colspan="3" style="padding:8px;"></td>
               <td style="padding:8px; text-align:right;">TOTAL INCOME:</td>
-              <td style="padding:8px; text-align:right; color:#10b981;">+UGX ${totalIncome.toLocaleString()}</td>
+              <td style="padding:8px; text-align:right; color:#10b981;">+UGX ${aggTotalIncome.toLocaleString()}</td>
             </tr>
             <tr style="background:var(--surface); font-weight:bold;">
               <td colspan="3"></td>
               <td style="padding:8px; text-align:right;">TOTAL EXPENSE:</td>
-              <td style="padding:8px; text-align:right; color:#ef4444;">-UGX ${totalExpense.toLocaleString()}</td>
+              <td style="padding:8px; text-align:right; color:#ef4444;">-UGX ${aggTotalExpense.toLocaleString()}</td>
             </tr>
             <tr style="background:var(--surface); font-weight:bold; font-size:1rem;">
               <td colspan="3"></td>
@@ -5572,14 +5604,12 @@ window.printCashierReport = function(start, end, cashierLabel) {
   const startTime = fmtTime(firstTx?.transaction_date);
   const endTime = fmtTime(lastTx?.transaction_date);
 
-  // Build 2-column rows using flex (no table = no gap issue)
-  let rows = "";
-  txList.forEach(tx => {
-    const rn = String(tx.id).padStart(4, "0");
-    const sign = tx.type === "INCOME" ? "+" : "-";
-    const amt = Number(tx.amount || 0).toLocaleString();
-    rows += `<div class="row"><span>RCPT-${rn}</span><span>${sign}UGX ${amt}</span></div>`;
-  });
+  const cashSales = rpt.cashSales || 0;
+  const momoSales = rpt.momoSales || 0;
+  const totalSales = rpt.totalSales || 0;
+  const expenses = rpt.totalExpense || 0;
+  // Note: we use "Net Cash" instead of "End Cash" since there is no Start Cash for an arbitrary date range.
+  const netCash = cashSales - expenses;
 
   const printHtml = `<!DOCTYPE html>
 <html>
@@ -5633,13 +5663,12 @@ window.printCashierReport = function(start, end, cashierLabel) {
     <div>Time: ${startTime} &ndash; ${endTime}</div>
     <div>Records: ${txList.length}</div>
   </div>
+  <div class="row"><span>Cash Sales:</span><span>UGX ${cashSales.toLocaleString()}</span></div>
+  <div class="row"><span>Mobile Money:</span><span>UGX ${momoSales.toLocaleString()}</span></div>
+  <div class="row"><span>Total Sales:</span><span>UGX ${totalSales.toLocaleString()}</span></div>
+  <div class="row"><span>Expenses Paid:</span><span>UGX ${expenses.toLocaleString()}</span></div>
   <div class="divider"></div>
-  <div class="row-head"><span>RCPT #</span><span>Amount</span></div>
-  ${rows || '<div style="text-align:center;padding:6px;font-size:10px;">No transactions.</div>'}
-  <div class="divider-solid"></div>
-  <div class="total-row"><span>Total Income:</span><span>+UGX ${totalIncome.toLocaleString()}</span></div>
-  <div class="total-row"><span>Total Expense:</span><span>-UGX ${totalExpense.toLocaleString()}</span></div>
-  <div class="net-row"><span>NET:</span><span>UGX ${grandNet.toLocaleString()}</span></div>
+  <div class="row bold" style="font-size:13pt;"><span>Net Cash:</span><span>UGX ${netCash.toLocaleString()}</span></div>
   <div class="footer">
     <div>Printed: ${new Date().toLocaleString("en-UG", {timeZone:"Africa/Kampala"})}</div>
     <div style="font-size:8px;font-style:italic;">Powered by Jomish Business Suite</div>

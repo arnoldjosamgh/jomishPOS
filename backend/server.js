@@ -2951,7 +2951,12 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   if (!start_date || !end_date)
     return res.status(400).json({ error: "Start and end dates required" });
 
-  const summaryParams = [start_date, end_date + " 23:59:59"];
+  const summaryParams = [
+    start_date, end_date + " 23:59:59", 
+    start_date, end_date + " 23:59:59", 
+    start_date, end_date + " 23:59:59", 
+    start_date, end_date + " 23:59:59"
+  ];
   let summarySql = `
         SELECT 
             t.recorded_by,
@@ -2959,7 +2964,10 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
             COUNT(CASE WHEN t.type = 'INCOME' THEN 1 END) as income_count,
             COUNT(CASE WHEN t.type = 'EXPENSE' THEN 1 END) as expense_count,
             SUM(CASE WHEN t.type = 'INCOME' THEN t.amount ELSE 0 END) as total_income,
-            SUM(CASE WHEN t.type = 'EXPENSE' THEN t.amount ELSE 0 END) as total_expense
+            SUM(CASE WHEN t.type = 'EXPENSE' THEN t.amount ELSE 0 END) as total_expense,
+            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ? AND payment_method = 'CASH') as cash_sales,
+            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ? AND payment_method = 'MOBILE MONEY') as momo_sales,
+            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ?) as total_sales
         FROM transactions t
         LEFT JOIN employees e ON t.recorded_by = e.id
         WHERE t.transaction_date >= ? AND t.transaction_date <= ?
