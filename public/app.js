@@ -4243,7 +4243,9 @@ window.printEndShiftReport = function(report) {
           body { font-family: 'Courier New', Courier, monospace; font-size: 11pt; line-height: 1.4; width: 76mm; color: #000; background: #fff; padding: 10px; }
           .center { text-align: center; }
           .bold { font-weight: bold; }
-          .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+          .row { display: flex; margin-bottom: 5px; }
+          .row > span:first-child { width: 50%; }
+          .row > span:last-child { width: 50%; text-align: left; }
           .divider { border-top: 1px dashed #000; margin: 6px 0; }
         </style>
       </head>
@@ -6501,6 +6503,20 @@ async function loadSoldBarcodes() {
     console.error("Load sold barcodes error:", e);
   }
 }
+
+window.filterInventory = function(query) {
+  const q = query.toLowerCase();
+  const cards = document.querySelectorAll("#inventory-grid .product-card");
+  cards.forEach(card => {
+    const name = card.querySelector("h4")?.textContent.toLowerCase() || "";
+    const category = card.querySelector(".badge")?.textContent.toLowerCase() || "";
+    if (name.includes(q) || category.includes(q)) {
+      card.style.display = "";
+    } else {
+      card.style.display = "none";
+    }
+  });
+};
 
 async function loadInventory() {
   try {

@@ -443,9 +443,10 @@
                 <!-- Product Inventory Management View -->
                 <div id="pos-stock-view" class="pos-sub-view hidden">
                     <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
-                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
                             <h2><i class="fa-solid fa-box"></i> Inventory Control</h2>
-                            <div style="display:flex; gap:10px;">
+                            <div style="display:flex; gap:10px; flex-wrap:wrap; flex:1; justify-content:flex-end;">
+                                <input type="text" id="inventory-search" placeholder="Search Inventory..." onkeyup="filterInventory(this.value)" style="flex:1; min-width:200px; max-width:300px; padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
                                 <button id="btn-add-product" class="primary-btn">+ New Product</button>
                             </div>
                         </header>
