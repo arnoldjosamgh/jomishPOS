@@ -3820,7 +3820,7 @@ app.delete("/api/expense-categories/:id", authenticateToken, (req, res) => {
 // 14. Low Stock Alerts
 app.get("/api/alerts/low-stock", authenticateToken, (req, res) => {
   db.all(
-    "SELECT * FROM products WHERE stock < 10 ORDER BY stock ASC",
+    "SELECT * FROM products WHERE track_stock != 0 AND stock < 10 ORDER BY stock ASC",
     [],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });

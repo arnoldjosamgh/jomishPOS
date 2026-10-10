@@ -765,6 +765,7 @@ function switchPOSView(viewName) {
   // Reset nav button active style
   [
     "pos-nav-register",
+    "pos-nav-pending",
     "pos-nav-stock",
     "pos-nav-expenses",
     "pos-nav-credits",
@@ -784,6 +785,15 @@ function switchPOSView(viewName) {
     const b = document.getElementById("pos-nav-register");
     if (b) b.classList.add("active");
     loadPOSProducts();
+  } else if (viewName === "pending") {
+    const el = document.getElementById("pos-pending-view");
+    if (el) {
+      el.classList.remove("hidden");
+      el.style.display = "block";
+    }
+    const b = document.getElementById("pos-nav-pending");
+    if (b) b.classList.add("active");
+    loadPendingCOD();
   } else if (viewName === "stock") {
     const el = document.getElementById("pos-stock-view");
     if (el) {
@@ -2126,6 +2136,8 @@ function enforceRBAC() {
   const posNavMap = {
     // Register — Cashier + Tech
     "pos-nav-register": isCashier || isTech,
+    // Pending Sales — Cashier + Tech
+    "pos-nav-pending":  isCashier || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
     // Expenses — everyone
@@ -2149,8 +2161,10 @@ function enforceRBAC() {
     if (btn) {
       if (visible) {
         btn.style.display = id === "pos-nav-tech" ? "flex" : "block";
+        btn.classList.remove("hidden");
       } else {
         btn.style.display = "none";
+        btn.classList.add("hidden");
       }
     }
   });
@@ -6526,8 +6540,8 @@ async function loadInventory() {
     if (!grid) return;
     grid.innerHTML = "";
 
-    // Update Dashboard Low Stock Count
-    const lowStock = data.products.filter((p) => p.stock < 10);
+    // Update Dashboard Low Stock Count (exclude infinite-stock / made-to-order products)
+    const lowStock = data.products.filter((p) => p.track_stock !== 0 && p.stock < 10);
     const lowStockCountEl = document.getElementById("stat-low-stock-count");
     if (lowStockCountEl) {
       lowStockCountEl.textContent = `${lowStock.length} items running low`;
@@ -6536,8 +6550,9 @@ async function loadInventory() {
     }
 
     data.products.forEach((p) => {
+      const isInfinite = p.track_stock === 0;
       const card = document.createElement("div");
-      card.className = `product-card management-card ${p.stock < 10 ? "low-stock" : ""}`;
+      card.className = `product-card management-card ${!isInfinite && p.stock < 10 ? "low-stock" : ""}`;
 
       const catClass = `category-${(p.category || "General").toLowerCase()}`;
       const imageHtml =
@@ -10223,14 +10238,13 @@ window.closeMobileNav = closeMobileNav;
   };
 })();
 
-// ==== COD Floating Bubble & Modal Logic ====
+// ==== COD Modal Logic (Moved to Tab) ====
 window.openCodModal = function () {
-  document.getElementById("cod-modal").classList.remove("hidden");
-  loadPendingCOD();
+  switchPOSView("pending");
 };
 
 window.closeCodModal = function () {
-  document.getElementById("cod-modal").classList.add("hidden");
+  switchPOSView("register");
 };
 
 window.loadPendingCOD = async function () {
@@ -10238,23 +10252,16 @@ window.loadPendingCOD = async function () {
     const res = await fetchAuth(`${API_URL}/deliveries/pending-cod`);
     if (res.ok) {
       const deliveries = await res.json();
-      const bubble = document.getElementById("cod-floating-bubble");
       const badge = document.getElementById("cod-badge-count");
       const listContainer = document.getElementById("cod-list-container");
 
-      if (!bubble) return; // Not on POS view or not added yet
-
-      // Waiters should never see the pending sales bubble
-      if ((USER_ROLE || "").toUpperCase() === "WAITER") {
-        bubble.style.display = "none";
-        return;
-      }
-
-      if (deliveries.length > 0) {
-        bubble.style.display = "flex";
-        badge.textContent = deliveries.length;
-      } else {
-        bubble.style.display = "none";
+      if (badge) {
+        if (deliveries.length > 0) {
+          badge.style.display = "inline-block";
+          badge.textContent = deliveries.length;
+        } else {
+          badge.style.display = "none";
+        }
       }
 
       if (listContainer) {
