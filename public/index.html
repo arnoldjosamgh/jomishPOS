@@ -343,19 +343,26 @@
                             <button id="pos-nav-hr" class="pos-tab pos-tab-hr hidden" style="display: none;" onclick="switchPOSView('hr')"><i class="fa-solid fa-users"></i> Staff / HR</button>
                             <button id="pos-nav-tech" class="pos-tab-tech" style="display:none;" onclick="switchPOSView('tech')"><i class="fa-solid fa-server"></i> Tech Hub</button>
                         </div>
-                        <div id="pos-search-wrap">
-                            <i class="fa-solid fa-magnifying-glass"></i>
-                            <input type="text" id="pos-search" placeholder="Search products...">
-                        </div>
                     </div>
                 </header>
 
                 <!-- Sales Register View -->
                 <div id="pos-register-view" class="pos-sub-view hidden" style="display: none;">
                     <div class="pos-layout">
-                        <!-- Products Grid -->
-                        <div class="products-grid" id="pos-products">
-                            <!-- Populated by JS -->
+                        <!-- Products Section with Search -->
+                        <div style="flex: 2; display: flex; flex-direction: column; gap: 12px; min-width: 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text); font-size: 1.05rem;">
+                                    <i class="fa-solid fa-boxes-stacked" style="color: var(--primary);"></i> Products
+                                </div>
+                                <div style="display: flex; gap: 10px; flex: 1; justify-content: flex-end; max-width: 380px;">
+                                    <input type="text" id="pos-search" placeholder="Search products..." style="flex: 1; min-width: 180px; max-width: 320px; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.9rem;">
+                                </div>
+                            </div>
+                            <!-- Products Grid -->
+                            <div class="products-grid" id="pos-products" style="flex: 1; padding-right: 4px;">
+                                <!-- Populated by JS -->
+                            </div>
                         </div>
                         
                         <!-- Shopping Cart Sidebar -->
