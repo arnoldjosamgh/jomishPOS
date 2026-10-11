@@ -2340,6 +2340,11 @@ async function fetchAuth(url, options = {}) {
       try {
         await fetch(`${API_URL}/logout`, { method: "POST" });
       } catch (e) {}
+      try {
+        if (window.OfflineDB && typeof window.OfflineDB.clearAllCache === "function") {
+          await window.OfflineDB.clearAllCache();
+        }
+      } catch (e) {}
       localStorage.clear();
       window.location.href = "login.html";
     }
@@ -5335,7 +5340,7 @@ async function downloadAttendancePDF() {
 
 async function loadTransactions(searchTerm = "") {
   try {
-    const res = await fetchAuth(`${API_URL}/transactions?t=${Date.now()}`);
+    const res = await fetchAuth(`${API_URL}/transactions`);
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`;
       try {
@@ -7460,6 +7465,13 @@ async function handleLogout() {
   try {
     await fetch(`${API_URL}/logout`, { method: "POST" });
   } catch (e) {}
+  // Clear all IndexedDB API cache to prevent stale data from one business
+  // bleeding into a different user's session after login switch.
+  try {
+    if (window.OfflineDB && typeof window.OfflineDB.clearAllCache === "function") {
+      await window.OfflineDB.clearAllCache();
+    }
+  } catch (e) {}
   localStorage.removeItem("jomish_token");
   localStorage.removeItem("jomish_role");
   localStorage.removeItem("jomish_name");
@@ -7479,6 +7491,11 @@ async function validateSession() {
       if (res.status === 401 || res.status === 403) {
         try {
           await fetch(`${API_URL}/logout`, { method: "POST" });
+        } catch (e) {}
+        try {
+          if (window.OfflineDB && typeof window.OfflineDB.clearAllCache === "function") {
+            await window.OfflineDB.clearAllCache();
+          }
         } catch (e) {}
         localStorage.removeItem("jomish_token");
         localStorage.removeItem("jomish_role");

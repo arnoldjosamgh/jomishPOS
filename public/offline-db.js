@@ -314,6 +314,29 @@ async function bustCache(urlPattern) {
     }
 }
 
+/**
+ * Wipes ALL entries from the api_cache store.
+ * Call this on logout to prevent stale data from one business
+ * bleeding into a different user's session.
+ */
+async function clearAllCache() {
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx    = db.transaction(STORE_CACHE, 'readwrite');
+            const store = tx.objectStore(STORE_CACHE);
+            store.clear();
+            tx.oncomplete = () => {
+                console.log('[OfflineDB] All API cache cleared on logout.');
+                resolve();
+            };
+            tx.onerror = () => reject(tx.error);
+        });
+    } catch (e) {
+        console.warn('[OfflineDB] Failed to clear all cache:', e);
+    }
+}
+
 // Expose globally for app.js and login.html
 window.OfflineDB = {
     cacheApiResponse,
@@ -329,5 +352,6 @@ window.OfflineDB = {
     getPendingOfflineSales,
     removeSyncedSales,
     getPendingCount,
-    bustCache
+    bustCache,
+    clearAllCache
 };
