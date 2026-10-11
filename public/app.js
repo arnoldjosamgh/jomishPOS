@@ -314,6 +314,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (_role === "WAITER") {
         // Waiter: Register only — hide all other POS nav tabs
         [
+          "pos-nav-pending",
           "pos-nav-stock",
           "pos-nav-expenses",
           "pos-nav-credits",
@@ -537,26 +538,28 @@ document.addEventListener("DOMContentLoaded", () => {
   // Global barcode scanning is handled by initGlobalScanner() — no duplicate listener needed
   // POS Checkout Handler — opens payment panel with numpad
   const btnCheckout = document.getElementById("btn-checkout");
-  const btnWaiterInvoice = document.getElementById("btn-waiter-invoice");
-
+  const btnPrintInvoice = document.getElementById("btn-print-invoice") || document.getElementById("btn-waiter-invoice");
   const btnEndShift = document.getElementById("btn-end-shift");
 
-  if (USER_ROLE && USER_ROLE.toUpperCase() === "WAITER") {
-    if (btnCheckout) btnCheckout.style.display = "none";
-    if (btnWaiterInvoice) btnWaiterInvoice.style.display = "block";
+  const _currentRole = (USER_ROLE || "").toUpperCase();
+  if (_currentRole === "WAITER") {
+    // Waiter cannot print invoice or end shift; can place/checkout order
+    if (btnCheckout) btnCheckout.style.display = "block";
+    if (btnPrintInvoice) btnPrintInvoice.style.display = "none";
     if (btnEndShift) btnEndShift.style.display = "none";
+  } else if (_currentRole === "CASHIER") {
+    // Cashier can pay now, print invoice, and end shift
+    if (btnCheckout) btnCheckout.style.display = "block";
+    if (btnPrintInvoice) btnPrintInvoice.style.display = "block";
+    if (btnEndShift) btnEndShift.style.display = "block";
   } else {
     if (btnCheckout) btnCheckout.style.display = "block";
-    if (btnWaiterInvoice) btnWaiterInvoice.style.display = "none";
-    if (USER_ROLE && USER_ROLE.toUpperCase() === "CASHIER") {
-      if (btnEndShift) btnEndShift.style.display = "block";
-    } else {
-      if (btnEndShift) btnEndShift.style.display = "none";
-    }
+    if (btnPrintInvoice) btnPrintInvoice.style.display = "none";
+    if (btnEndShift) btnEndShift.style.display = "none";
   }
 
-  if (btnWaiterInvoice) {
-    btnWaiterInvoice.addEventListener("click", () => {
+  if (btnPrintInvoice) {
+    btnPrintInvoice.addEventListener("click", () => {
       if (typeof getInvoice === "function") {
         getInvoice();
       }
@@ -2134,9 +2137,9 @@ function enforceRBAC() {
   const isFinanceMgr = role === "FINANCE MANAGER";
 
   const posNavMap = {
-    // Register — Cashier + Tech
-    "pos-nav-register": isCashier || isTech,
-    // Pending Sales — Cashier + Tech
+    // Register — Cashier + Tech + Waiter
+    "pos-nav-register": isCashier || isTech || role === "WAITER",
+    // Pending Sales — Cashier ONLY (+ Tech for debugging/admin)
     "pos-nav-pending":  isCashier || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
@@ -3862,12 +3865,13 @@ async function confirmPayment() {
 }
 
 async function getInvoice() {
+  if (posCart.length === 0) return alert("Cart is empty!");
   const total =
     parseFloat(
-      document.getElementById("btn-checkout").getAttribute("data-total"),
-    ) || 0;
-  const buyerName = document.getElementById("buyer-name-input").value.trim();
-  const buyerPhone = document.getElementById("buyer-phone-input").value.trim();
+      document.getElementById("btn-checkout")?.getAttribute("data-total") || "0",
+    ) || posCart.reduce((sum, item) => sum + (item.price * (item.qty || 1)), 0);
+  const buyerName = document.getElementById("buyer-name-input")?.value?.trim() || "Walk-in Customer";
+  const buyerPhone = document.getElementById("buyer-phone-input")?.value?.trim() || "";
   // Saving an invoice means NO delivery dispatch yet. It just records the unpaid sale.
   // If they want to dispatch COD, they must use the standard checkout flow with COD selected.
   const isDelivery = false;
@@ -10273,21 +10277,53 @@ window.loadPendingCOD = async function () {
 
         let html = "";
         deliveries.forEach((d) => {
+          const safeClient = (d.client_name || "").replace(/'/g, "\\'");
+          const invoiceLabel = d.transaction_id
+            ? `Invoice #${d.transaction_id}`
+            : `Order #${d.pos_order_id}`;
           html += `
-                        <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${(d.client_name || '').replace(/'/g, "\\'")}')"> 
-                            <div>
-                                <h4 style="margin:0 0 5px 0; color:var(--text);">Order #${d.order_id} - ${d.client_name}</h4>
-                                <p style="margin:0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || "No address"}</p>
-                                <p style="margin:4px 0 0 0; font-weight:bold; color:var(--primary);">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
-                            </div>
-                            <button onclick="event.stopPropagation(); openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${(d.client_name || '').replace(/'/g, "\\'")}')"
-                              style="background:var(--primary); color:white; border:none; padding:10px 15px; border-radius:6px; cursor:pointer; font-weight:600;">
-                              <i class="fa-solid fa-cash-register"></i> Collect Payment
-                            </button>
-                        </div>
-                    `;
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+                <div style="flex:1;">
+                  <h4 style="margin:0 0 3px 0; color:var(--text); font-size:1rem;">${invoiceLabel}</h4>
+                  <p style="margin:0 0 2px 0; font-size:0.88rem; color:var(--text-muted);"><i class="fa-solid fa-user"></i> ${d.client_name}</p>
+                  <p style="margin:0 0 2px 0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || 'In-Store'}</p>
+                  <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
+                </div>
+                <button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
+                  style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap; align-self:center;">
+                  <i class="fa-solid fa-cash-register"></i> Collect Payment
+                </button>
+              </div>
+              <div id="items-${d.pos_order_id}" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:0.83rem; color:var(--text-muted); font-style:italic;">
+                Loading items...
+              </div>
+            </div>
+          `;
         });
         listContainer.innerHTML = html;
+
+        // Load items for each pending order asynchronously
+        deliveries.forEach(async (d) => {
+          try {
+            const ir = await fetchAuth(`${API_URL}/pos_orders/${d.pos_order_id}/items`);
+            if (ir.ok) {
+              const items = await ir.json();
+              const el = document.getElementById(`items-${d.pos_order_id}`);
+              if (el && items && items.length > 0) {
+                el.style.fontStyle = "normal";
+                el.innerHTML = items.map(i =>
+                  `<div style="display:flex; justify-content:space-between; padding:3px 0;">
+                    <span>${i.name} &times;${i.qty}</span>
+                    <span style="color:var(--text);">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
+                  </div>`
+                ).join("");
+              } else if (el) {
+                el.textContent = "No item details available.";
+              }
+            }
+          } catch (_) {}
+        });
       }
     }
   } catch (e) {
@@ -10297,11 +10333,10 @@ window.loadPendingCOD = async function () {
 
 // Opens the standard payment panel pre-filled for a pending order
 window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName) {
-  // Close the COD modal first
-  const codModal = document.getElementById("cod-modal");
-  if (codModal) codModal.classList.add("hidden");
+  // 1. Switch to Register view first so the cart is visible
+  switchPOSView("register");
 
-  // Fetch the actual order items and populate the cart
+  // 2. Fetch the actual order items and populate the cart
   try {
     const itemsRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`);
     if (itemsRes.ok) {
@@ -10312,6 +10347,7 @@ window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clien
           name: i.name,
           price: i.price,
           qty: i.qty,
+          track_stock: 0, // treat as untracked to avoid stock warnings on already-sold items
         }));
         renderCart();
       }
@@ -10320,7 +10356,7 @@ window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clien
     console.warn("Could not load order items:", e);
   }
 
-  // Store which pending order we're collecting for
+  // 3. Store which pending order we're collecting for
   window._pendingOrderId = posOrderId;
   window._pendingOrderTotal = totalAmount;
 
