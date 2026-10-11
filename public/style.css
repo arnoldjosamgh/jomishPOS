@@ -1514,6 +1514,11 @@ tr:hover td {
 
 /* Utility Classes */
 .hidden { display: none !important; }
+.pos-tab.hidden,
+.pos-tab[style*="display: none"],
+.pos-tab[hidden] {
+  display: none !important;
+}
 
 .sm-btn.primary { background-color: var(--primary); }
 .sm-btn.primary:hover { background-color: var(--primary-hover); }

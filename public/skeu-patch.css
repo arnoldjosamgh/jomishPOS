@@ -458,6 +458,12 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
 }
 
 /* Tab buttons */
+.pos-tab.hidden,
+.pos-tab[style*="display: none"],
+.pos-tab[hidden] {
+  display: none !important;
+}
+
 .pos-tab {
   display: inline-flex !important;
   align-items: center !important;

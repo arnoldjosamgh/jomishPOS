@@ -503,6 +503,12 @@ body.dark-theme input[type="text"], body.dark-theme input[type="number"] {
 }
 
 /* Tab buttons */
+.pos-tab.hidden,
+.pos-tab[style*="display: none"],
+.pos-tab[hidden] {
+  display: none !important;
+}
+
 .pos-tab {
   display: inline-flex !important;
   align-items: center !important;

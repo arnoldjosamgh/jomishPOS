@@ -322,7 +322,10 @@ document.addEventListener("DOMContentLoaded", () => {
           "pos-nav-tech",
         ].forEach((id) => {
           const el = document.getElementById(id);
-          if (el) el.style.display = "none";
+          if (el) {
+            el.style.setProperty("display", "none", "important");
+            el.classList.add("hidden");
+          }
         });
         switchPOSView("register");   // Waiter → Register only
       } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
@@ -543,19 +546,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
   if (_currentRole === "WAITER") {
-    // Waiter can only place/submit orders — no payment panel, no print, no shift
-    if (btnCheckout) btnCheckout.style.display = "block";
-    if (btnPrintInvoice) btnPrintInvoice.style.display = "none";
-    if (btnEndShift) btnEndShift.style.display = "none";
+    // Waiter prints invoice (creates pending order & kitchen token) — no payment collection or shift
+    if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (_currentRole === "CASHIER") {
     // Cashier can pay, print invoice, and end shift
-    if (btnCheckout) btnCheckout.style.display = "block";
-    if (btnPrintInvoice) btnPrintInvoice.style.display = "block";
-    if (btnEndShift) btnEndShift.style.display = "block";
+    if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
   } else {
-    if (btnCheckout) btnCheckout.style.display = "block";
-    if (btnPrintInvoice) btnPrintInvoice.style.display = "none";
-    if (btnEndShift) btnEndShift.style.display = "none";
+    if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   }
 
   if (btnPrintInvoice) {
@@ -571,12 +574,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (posCart.length === 0) return alert("Cart is empty!");
       const _roleNow = (USER_ROLE || "").toUpperCase();
       if (_roleNow === "WAITER") {
-        // Waiter: submit as pending order without opening the payment panel
-        if (typeof submitWaiterOrder === "function") {
-          submitWaiterOrder();
-        } else {
-          alert("Order submission is not available yet.");
-        }
+        alert("Waiters cannot collect payment. Please click 'PRINT INVOICE'.");
         return;
       }
       const total = parseFloat(btnCheckout.getAttribute("data-total"));
@@ -687,12 +685,12 @@ function initNavigation() {
             const _role = (USER_ROLE || "").toUpperCase();
             if (_role === "TECH") {
               switchPOSView("tech");       // Tech → Tech Hub
-            } else if (_role === "CASHIER") {
-              switchPOSView("register");   // Cashier → Register
+            } else if (_role === "CASHIER" || _role === "WAITER") {
+              switchPOSView("register");   // Cashier / Waiter → Register
             } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
               switchPOSView("stock");      // Admin-like → Inventory
-            } else if (_role === "SUPERVISOR" || _role === "HR" || _role === "CASHIER") {
-              switchPOSView("expenses");   // Supervisor/HR/Cashier → Expenses
+            } else if (_role === "SUPERVISOR" || _role === "HR") {
+              switchPOSView("expenses");   // Supervisor/HR → Expenses
             } else {
               switchPOSView("stock");      // fallback
             }
@@ -770,6 +768,10 @@ function initNavigation() {
 }
 
 function switchPOSView(viewName) {
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_role === "WAITER" && viewName !== "register" && viewName !== "terminal") {
+    viewName = "register";
+  }
   // Hide all sub-views & reset nav button states
   document.querySelectorAll(".pos-sub-view").forEach((v) => {
     v.classList.add("hidden");
@@ -2175,14 +2177,33 @@ function enforceRBAC() {
     const btn = document.getElementById(id);
     if (btn) {
       if (visible) {
-        btn.style.display = id === "pos-nav-tech" ? "flex" : "block";
+        btn.style.setProperty("display", id === "pos-nav-tech" ? "flex" : "inline-flex", "important");
         btn.classList.remove("hidden");
       } else {
-        btn.style.display = "none";
+        btn.style.setProperty("display", "none", "important");
         btn.classList.add("hidden");
       }
     }
   });
+
+  // Sync POS cart buttons according to role
+  const btnCheckout = document.getElementById("btn-checkout");
+  const btnPrintInvoice = document.getElementById("btn-print-invoice") || document.getElementById("btn-waiter-invoice");
+  const btnEndShift = document.getElementById("btn-end-shift");
+
+  if (isWaiter) {
+    if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+  } else if (isCashier) {
+    if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
+  } else {
+    if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+  }
 
 
   // Show/Hide buying price inputs (Admin/CEO/Manager/HR only)
@@ -7374,7 +7395,8 @@ async function handleUpdateAccess(e) {
 }
 
 function autoRedirect() {
-  if (USER_ROLE === "Cashier" || USER_ROLE === "Finance Manager") {
+  const _r = (USER_ROLE || "").toUpperCase();
+  if (_r === "CASHIER" || _r === "FINANCE MANAGER" || _r === "WAITER") {
     const posBtn = document.querySelector('[data-target="pos-terminal"]');
     if (posBtn && posBtn.style.display !== "none") {
       posBtn.click();
@@ -10309,6 +10331,13 @@ window.closeCodModal = function () {
 };
 
 window.loadPendingCOD = async function () {
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_role === "WAITER") {
+    // Waiters should never load or see pending orders or badge
+    const badge = document.getElementById("cod-badge-count");
+    if (badge) badge.style.display = "none";
+    return;
+  }
   try {
     const res = await fetchAuth(`${API_URL}/deliveries/pending-cod`);
     if (res.ok) {
@@ -10347,10 +10376,16 @@ window.loadPendingCOD = async function () {
                   <p style="margin:0 0 2px 0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || 'In-Store'}</p>
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
-                <button onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
-                  style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap; align-self:center;">
-                  <i class="fa-solid fa-print"></i> Print Invoice
-                </button>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <button onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
+                    style="background:var(--warning, #f59e0b); color:white; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
+                    <i class="fa-solid fa-print"></i> Print Invoice
+                  </button>
+                  <button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
+                    style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
+                    <i class="fa-solid fa-cash-register"></i> Collect Payment
+                  </button>
+                </div>
               </div>
               <div id="items-${d.pos_order_id}" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:0.83rem; color:var(--text-muted); font-style:italic;">
                 Loading items...
@@ -10388,7 +10423,7 @@ window.loadPendingCOD = async function () {
   }
 };
 
-// Print invoice for a pending order (cashier view — no payment collection)
+// Print invoice for a pending order (cashier view)
 window.printPendingInvoice = async function (posOrderId, totalAmount, clientName) {
   try {
     const itemsRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`);
@@ -10423,9 +10458,58 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
   }
 };
 
-// (Legacy) openPendingOrderCheckout kept for any existing references — now redirects to print
-window.openPendingOrderCheckout = function (posOrderId, totalAmount, clientName) {
-  window.printPendingInvoice(posOrderId, totalAmount, clientName);
+// Opens the standard payment panel pre-filled for a pending order (Cashier collects payment)
+window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName) {
+  // 1. Switch to Register view first so the cart is visible
+  switchPOSView("register");
+
+  // 2. Fetch the actual order items and populate the cart
+  try {
+    const itemsRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`);
+    if (itemsRes.ok) {
+      const items = await itemsRes.json();
+      if (items && items.length > 0) {
+        posCart = items.map((i) => ({
+          id: i.id || i.product_id,
+          name: i.name,
+          price: i.price,
+          qty: i.qty,
+          track_stock: 0,
+        }));
+        renderCart();
+      }
+    }
+  } catch (e) {
+    console.warn("Could not load order items:", e);
+  }
+
+  // 3. Store which pending order we're collecting for
+  window._pendingOrderId = posOrderId;
+  window._pendingOrderTotal = totalAmount;
+
+  // Pre-fill the payment panel total display
+  document.getElementById("pay-total").textContent =
+    "UGX " + Math.round(totalAmount).toLocaleString();
+  document.getElementById("pay-amount").value = "0";
+  document.getElementById("pay-change").textContent = "UGX 0";
+  document.getElementById("pay-change").style.color = "var(--text-muted)";
+
+  const btnCheckout = document.getElementById("btn-checkout");
+  if (btnCheckout) btnCheckout.setAttribute("data-total", Math.round(totalAmount));
+
+  const buyerInput = document.getElementById("buyer-name-input");
+  if (buyerInput) buyerInput.value = clientName || "";
+
+  // Show the payment panel
+  const panel = document.getElementById("payment-panel");
+  if (panel) panel.classList.remove("hidden");
+
+  // Swap confirm button to collect this pending payment
+  const btnConfirm = document.getElementById("btn-confirm-pay");
+  if (btnConfirm) {
+    btnConfirm.setAttribute("data-pending-id", posOrderId);
+    btnConfirm.onclick = () => collectPendingPayment(posOrderId, totalAmount);
+  }
 };
 
 // Called when cashier confirms payment for a pending order
