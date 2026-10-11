@@ -263,12 +263,13 @@ window.onunhandledrejection = function(e) {
             <div id="error-manual" class="alert error"></div>
             <form id="form-manual" autocomplete="on">
                 <div class="field">
-                    <label>Email Address</label>
-                    <input type="email" id="manual-email" placeholder="e.g. jerry@gmail.com" required autocomplete="email">
+                    <label>Email or Employee ID</label>
+                    <input type="text" id="manual-email" placeholder="e.g. JOM001 or jerry@gmail.com" required autocomplete="username" inputmode="text">
+                    <p style="font-size:0.73rem; color:var(--muted); margin:4px 0 0 0;">Use your Employee ID (given by Admin) or your registered email</p>
                 </div>
                 <div class="field">
                     <label>PIN / Password</label>
-                    <input type="password" id="manual-password" placeholder="Enter your PIN or password" required autocomplete="current-password">
+                    <input type="password" id="manual-password" placeholder="4-digit PIN or password" required autocomplete="current-password" inputmode="numeric">
                     <button type="button" class="eye-btn" id="toggle-pwd">👁</button>
                 </div>
                 <button type="submit" class="submit-btn" id="btn-manual-signin">Sign In</button>
@@ -297,6 +298,13 @@ window.onunhandledrejection = function(e) {
     function showScreen(id) {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         document.getElementById(id).classList.add('active');
+        // Auto-focus the first focusable field when screen-manual appears
+        if (id === 'screen-manual') {
+            setTimeout(() => {
+                const f = document.getElementById('manual-email');
+                if (f) f.focus();
+            }, 50);
+        }
     }
 
     function showError(screenId, msg) {
