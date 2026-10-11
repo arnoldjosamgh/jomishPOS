@@ -2136,19 +2136,21 @@ function enforceRBAC() {
   const isCashier   = role === "CASHIER";
   const isFinanceMgr = role === "FINANCE MANAGER";
 
+  const isWaiter    = role === "WAITER";
+
   const posNavMap = {
     // Register — Cashier + Tech + Waiter
-    "pos-nav-register": isCashier || isTech || role === "WAITER",
-    // Pending Sales — Cashier ONLY (+ Tech for debugging/admin)
+    "pos-nav-register": isCashier || isTech || isWaiter,
+    // Pending Sales — Cashier + Tech ONLY (Waiter excluded)
     "pos-nav-pending":  isCashier || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
-    // Expenses — everyone
-    "pos-nav-expenses": true,
-    // Credits — Admin-like + Cashier + Tech
-    "pos-nav-credits":  isAdminLike || isCashier || isTech,
-    // Finance Hub — everyone
-    "pos-nav-finance":  true,
+    // Expenses — Admin-like + HR + Supervisor + Tech (NOT Cashier or Waiter)
+    "pos-nav-expenses": isAdminLike || isHRRole || isSupervisor || isTech,
+    // Credits — Admin-like + Tech
+    "pos-nav-credits":  isAdminLike || isTech,
+    // Finance Hub — Admin-like + HR + Supervisor + Tech (NOT Cashier or Waiter)
+    "pos-nav-finance":  isAdminLike || isHRRole || isSupervisor || isTech,
     // Staff / HR — Admin-like + Tech
     "pos-nav-hr":       isAdminLike || isTech,
     // Tech sub-tab — Tech ONLY
@@ -2209,6 +2211,8 @@ function enforceRBAC() {
   // Default POS landing view per role
   if (isTech) {
     setTimeout(() => switchPOSView("tech"), 150);       // Tech → Tech Hub
+  } else if (isWaiter) {
+    setTimeout(() => switchPOSView("register"), 150);   // Waiter → Register only
   } else if (isCashier) {
     setTimeout(() => switchPOSView("register"), 150);   // Cashier → Register
   } else if (isAdminLike) {
