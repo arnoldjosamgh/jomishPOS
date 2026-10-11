@@ -10290,9 +10290,9 @@ window.loadPendingCOD = async function () {
                   <p style="margin:0 0 2px 0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || 'In-Store'}</p>
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
-                <button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
+                <button onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
                   style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap; align-self:center;">
-                  <i class="fa-solid fa-cash-register"></i> Collect Payment
+                  <i class="fa-solid fa-print"></i> Print Invoice
                 </button>
               </div>
               <div id="items-${d.pos_order_id}" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:0.83rem; color:var(--text-muted); font-style:italic;">
@@ -10331,59 +10331,44 @@ window.loadPendingCOD = async function () {
   }
 };
 
-// Opens the standard payment panel pre-filled for a pending order
-window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName) {
-  // 1. Switch to Register view first so the cart is visible
-  switchPOSView("register");
-
-  // 2. Fetch the actual order items and populate the cart
+// Print invoice for a pending order (cashier view — no payment collection)
+window.printPendingInvoice = async function (posOrderId, totalAmount, clientName) {
   try {
     const itemsRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`);
+    let items = [];
     if (itemsRes.ok) {
-      const items = await itemsRes.json();
-      if (items && items.length > 0) {
-        posCart = items.map(i => ({
-          id: i.id || Math.random(),
-          name: i.name,
-          price: i.price,
-          qty: i.qty,
-          track_stock: 0, // treat as untracked to avoid stock warnings on already-sold items
-        }));
-        renderCart();
-      }
+      items = await itemsRes.json();
     }
+    if (!items || items.length === 0) {
+      items = [{ name: "Invoice Payment", qty: 1, price: totalAmount }];
+    }
+    // Fetch a transaction_id if available
+    let txnId = null;
+    try {
+      const txRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}`);
+      if (txRes.ok) {
+        const txData = await txRes.json();
+        txnId = txData.transaction_id || null;
+      }
+    } catch (_) {}
+    printReceipt(
+      items,
+      totalAmount,
+      txnId || posOrderId,
+      "PENDING",
+      totalAmount,
+      clientName || "",
+      null
+    );
   } catch (e) {
-    console.warn("Could not load order items:", e);
+    console.error("Failed to print pending invoice:", e);
+    showToast("Could not load invoice details.", "error");
   }
+};
 
-  // 3. Store which pending order we're collecting for
-  window._pendingOrderId = posOrderId;
-  window._pendingOrderTotal = totalAmount;
-
-  // Pre-fill the payment panel total display
-  document.getElementById("pay-total").textContent = "UGX " + Math.round(totalAmount).toLocaleString();
-  document.getElementById("pay-amount").value = "0";
-  document.getElementById("pay-change").textContent = "UGX 0";
-  document.getElementById("pay-change").style.color = "var(--text-muted)";
-
-  // Patch btn-checkout data-total so numpadExact works correctly
-  const btnCheckout = document.getElementById("btn-checkout");
-  if (btnCheckout) btnCheckout.setAttribute("data-total", Math.round(totalAmount));
-
-  // Pre-fill buyer name if available
-  const buyerInput = document.getElementById("buyer-name-input");
-  if (buyerInput) buyerInput.value = clientName || "";
-
-  // Show the panel
-  const panel = document.getElementById("payment-panel");
-  if (panel) panel.classList.remove("hidden");
-
-  // Swap confirm button to mark this as a pending order collection (not new checkout)
-  const btnConfirm = document.getElementById("btn-confirm-pay");
-  if (btnConfirm) {
-    btnConfirm.setAttribute("data-pending-id", posOrderId);
-    btnConfirm.onclick = () => collectPendingPayment(posOrderId, totalAmount);
-  }
+// (Legacy) openPendingOrderCheckout kept for any existing references — now redirects to print
+window.openPendingOrderCheckout = function (posOrderId, totalAmount, clientName) {
+  window.printPendingInvoice(posOrderId, totalAmount, clientName);
 };
 
 // Called when cashier confirms payment for a pending order
