@@ -543,12 +543,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
   if (_currentRole === "WAITER") {
-    // Waiter cannot print invoice or end shift; can place/checkout order
+    // Waiter can only place/submit orders — no payment panel, no print, no shift
     if (btnCheckout) btnCheckout.style.display = "block";
     if (btnPrintInvoice) btnPrintInvoice.style.display = "none";
     if (btnEndShift) btnEndShift.style.display = "none";
   } else if (_currentRole === "CASHIER") {
-    // Cashier can pay now, print invoice, and end shift
+    // Cashier can pay, print invoice, and end shift
     if (btnCheckout) btnCheckout.style.display = "block";
     if (btnPrintInvoice) btnPrintInvoice.style.display = "block";
     if (btnEndShift) btnEndShift.style.display = "block";
@@ -569,6 +569,16 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnCheckout) {
     btnCheckout.addEventListener("click", () => {
       if (posCart.length === 0) return alert("Cart is empty!");
+      const _roleNow = (USER_ROLE || "").toUpperCase();
+      if (_roleNow === "WAITER") {
+        // Waiter: submit as pending order without opening the payment panel
+        if (typeof submitWaiterOrder === "function") {
+          submitWaiterOrder();
+        } else {
+          alert("Order submission is not available yet.");
+        }
+        return;
+      }
       const total = parseFloat(btnCheckout.getAttribute("data-total"));
       document.getElementById("pay-total").textContent =
         "UGX " + Math.round(total).toLocaleString();
@@ -3867,6 +3877,49 @@ async function confirmPayment() {
     alert("Checkout failed: " + e.message);
   }
 }
+
+// ── WAITER ORDER SUBMISSION ────────────────────────────────────────────────
+// Waiter places a pending order (COD) — no payment panel, no receipt.
+// The Cashier will see it in the Pending tab and collect payment later.
+async function submitWaiterOrder() {
+  if (posCart.length === 0) return alert("Cart is empty!");
+  const total = parseFloat(document.getElementById("btn-checkout").getAttribute("data-total")) || 0;
+  const buyerNameEl = document.getElementById("buyer-name-input");
+  const buyerPhoneEl = document.getElementById("buyer-phone-input");
+  const buyerName = buyerNameEl ? buyerNameEl.value.trim() : "";
+  const buyerPhone = buyerPhoneEl ? buyerPhoneEl.value.trim() : "";
+
+  if (!confirm(`Submit order of UGX ${Math.round(total).toLocaleString()} as pending?\nThe cashier will collect payment.`)) return;
+
+  try {
+    const res = await fetchAuth(`${API_URL}/checkout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        total_amount: total,
+        items: posCart,
+        payment_method: "COD",
+        amount_paid: 0,
+        buyer_name: buyerName || "Walk-in",
+        buyer_phone: buyerPhone,
+        is_delivery: false,
+        delivery_address: "",
+      }),
+    });
+    if (res.ok) {
+      showToast("Order submitted! Cashier will collect payment.", "success");
+      posCart = [];
+      renderCart();
+      loadPOSProducts();
+    } else {
+      const data = await res.json();
+      alert("Error: " + data.error);
+    }
+  } catch (e) {
+    alert("Failed to submit order: " + e.message);
+  }
+}
+window.submitWaiterOrder = submitWaiterOrder;
 
 async function getInvoice() {
   if (posCart.length === 0) return alert("Cart is empty!");
@@ -10469,10 +10522,14 @@ window.markCODReceived = async function (posOrderId) {
 
 // Hook into existing events
 document.addEventListener("DOMContentLoaded", () => {
-  // Initial load
+  // Initial load — only for Cashier and Tech roles
+  const _initRole = (localStorage.getItem("jomish_role") || "").toUpperCase();
   if (
-    window.location.pathname.includes("index") ||
-    window.location.pathname === "/"
+    (_initRole === "CASHIER" || _initRole === "TECH") &&
+    (
+      window.location.pathname.includes("index") ||
+      window.location.pathname === "/"
+    )
   ) {
     setTimeout(() => loadPendingCOD(), 1000);
   }
