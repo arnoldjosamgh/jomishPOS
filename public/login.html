@@ -422,8 +422,8 @@ window.onunhandledrejection = function(e) {
     // Handle physical keyboard input for PIN
     document.addEventListener('keydown', (e) => {
         const pinScreen = document.getElementById('screen-pin');
-        // Only trigger if PIN screen is visible
-        if (!pinScreen || pinScreen.classList.contains('hidden')) return;
+        // Only trigger if PIN screen is the active screen
+        if (!pinScreen || !pinScreen.classList.contains('active')) return;
 
         if (e.key >= '0' && e.key <= '9') {
             e.preventDefault();
