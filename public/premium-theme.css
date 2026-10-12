@@ -637,19 +637,49 @@ body.dark-theme #pos-search-wrap input {
   display: none !important;
 }
 
-/* ── Management Card fix for Admin / Inventory tab (PC & Desktop) ── */
+/* ── Management Card fix for Admin / Inventory tab ── */
+#inventory-grid {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+  gap: 12px !important;
+}
+
+@media screen and (max-width: 480px) {
+  #inventory-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
 .management-card {
   overflow: visible !important;
   aspect-ratio: auto !important;
   height: auto !important;
   min-height: 0 !important;
+  transform: none !important;
+  transition: box-shadow 0.2s ease !important;
+}
+
+.management-card:hover {
+  transform: none !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+.management-card .product-img-container {
+  height: 120px !important;
+  position: relative !important;
+  inset: auto !important;
 }
 
 .management-card .management-info {
   overflow: visible !important;
   height: auto !important;
   flex: 1 1 auto !important;
+  padding: 8px 10px !important;
 }
+
+.management-card .management-info * {
+  pointer-events: auto !important;
+}
+
 
 /* ── POS Navigation Bar Mobile Scroll Fix ── */
 #pos-header-bar {
