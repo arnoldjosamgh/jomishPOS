@@ -549,24 +549,34 @@ document.addEventListener("DOMContentLoaded", () => {
   // Global barcode scanning is handled by initGlobalScanner() — no duplicate listener needed
   // POS Checkout Handler — opens payment panel with numpad
   const btnCheckout = document.getElementById("btn-checkout");
+  const btnSendToCashier = document.getElementById("btn-send-to-cashier");
   const btnPrintInvoice = document.getElementById("btn-print-invoice") || document.getElementById("btn-waiter-invoice");
   const btnEndShift = document.getElementById("btn-end-shift");
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
   if (_currentRole === "WAITER") {
-    // Waiter prints invoice (creates pending order & kitchen token) — no payment collection or shift
+    // Waiter sends order to cashier — no payment collection, no invoice printing, no shift
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (_currentRole === "CASHIER") {
     // Cashier can pay, print invoice, and end shift
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
   } else {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+  }
+
+  if (btnSendToCashier) {
+    btnSendToCashier.addEventListener("click", () => {
+      submitWaiterOrder();
+    });
   }
 
   if (btnPrintInvoice) {
@@ -582,7 +592,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (posCart.length === 0) return alert("Cart is empty!");
       const _roleNow = (USER_ROLE || "").toUpperCase();
       if (_roleNow === "WAITER") {
-        alert("Waiters cannot collect payment. Please click 'PRINT INVOICE'.");
+        alert("Waiters cannot collect payment. Please click 'SEND TO CASHIER'.");
         return;
       }
       const total = parseFloat(btnCheckout.getAttribute("data-total"));
@@ -2196,19 +2206,23 @@ function enforceRBAC() {
 
   // Sync POS cart buttons according to role
   const btnCheckout = document.getElementById("btn-checkout");
+  const btnSendToCashier = document.getElementById("btn-send-to-cashier");
   const btnPrintInvoice = document.getElementById("btn-print-invoice") || document.getElementById("btn-waiter-invoice");
   const btnEndShift = document.getElementById("btn-end-shift");
 
   if (isWaiter) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (isCashier) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
   } else {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   }
@@ -3701,6 +3715,9 @@ function updateChange() {
 
 function closePaymentPanel() {
   document.getElementById("payment-panel").classList.add("hidden");
+  const servedByContainer = document.getElementById("pay-served-by-container");
+  if (servedByContainer) servedByContainer.style.display = "none";
+  window._pendingServedBy = null;
 }
 
 window.handleDeliveryCheckboxChange = function () {
@@ -3913,17 +3930,21 @@ async function confirmPayment() {
 }
 
 // ── WAITER ORDER SUBMISSION ────────────────────────────────────────────────
-// Waiter places a pending order (COD) — no payment panel, no receipt.
-// The Cashier will see it in the Pending tab and collect payment later.
+// Waiter places a pending order (COD) — sends to cashier, no payment panel, NO receipt printing.
+// The Cashier will see it in the Pending tab with 'Served by: [1st name]' and collect payment later.
 async function submitWaiterOrder() {
   if (posCart.length === 0) return alert("Cart is empty!");
-  const total = parseFloat(document.getElementById("btn-checkout").getAttribute("data-total")) || 0;
+  const total =
+    parseFloat(document.getElementById("btn-checkout")?.getAttribute("data-total")) ||
+    posCart.reduce((sum, item) => sum + (item.price * (item.qty || 1)), 0);
   const buyerNameEl = document.getElementById("buyer-name-input");
   const buyerPhoneEl = document.getElementById("buyer-phone-input");
   const buyerName = buyerNameEl ? buyerNameEl.value.trim() : "";
   const buyerPhone = buyerPhoneEl ? buyerPhoneEl.value.trim() : "";
 
-  if (!confirm(`Submit order of UGX ${Math.round(total).toLocaleString()} as pending?\nThe cashier will collect payment.`)) return;
+  // Extract waiter's 1st name
+  const rawName = USER_NAME || localStorage.getItem("jomish_name") || "Waiter";
+  const waiterFirstName = rawName.trim().split(/\s+/)[0] || "Waiter";
 
   try {
     const res = await fetchAuth(`${API_URL}/checkout`, {
@@ -3938,13 +3959,16 @@ async function submitWaiterOrder() {
         buyer_phone: buyerPhone,
         is_delivery: false,
         delivery_address: "",
+        served_by: waiterFirstName,
       }),
     });
     if (res.ok) {
-      showToast("Order submitted! Cashier will collect payment.", "success");
+      showToast(`Order sent to cashier! (Served by ${waiterFirstName})`, "success");
       posCart = [];
       renderCart();
       loadPOSProducts();
+      if (buyerNameEl) buyerNameEl.value = "";
+      if (buyerPhoneEl) buyerPhoneEl.value = "";
     } else {
       const data = await res.json();
       alert("Error: " + data.error);
@@ -3956,6 +3980,11 @@ async function submitWaiterOrder() {
 window.submitWaiterOrder = submitWaiterOrder;
 
 async function getInvoice() {
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_role === "WAITER") {
+    // Waiters should never print invoices/orders — send directly to cashier instead
+    return submitWaiterOrder();
+  }
   if (posCart.length === 0) return alert("Cart is empty!");
   const total =
     parseFloat(
@@ -4153,6 +4182,7 @@ function printReceipt(
   buyerName = null,
   deliveryInfo = null,
   isInvoice = false,
+  servedBy = null,
 ) {
   // ── Business info ─────────────────────────────────────
   const bizName = localStorage.getItem("jomish_biz_name") || "Jomish Business";
@@ -4191,6 +4221,7 @@ function printReceipt(
     orderId: orderNo,
     dateStr,
     cashierName: USER_NAME || "Cashier",
+    servedBy: servedBy || null,
     items: items.map((i) => ({
       name: i.name,
       qty: i.qty || 1,
@@ -4219,6 +4250,15 @@ function printReceipt(
   set("receipt-date", "Date: " + dateStr);
   set("receipt-no", (isInvoice ? "INVOICE" : "RECEIPT") + " #" + orderNo);
   set("receipt-cashier", "Cashier: " + (USER_NAME || "Cashier"));
+  const servedByEl = document.getElementById("receipt-served-by");
+  if (servedByEl) {
+    if (servedBy) {
+      servedByEl.textContent = "Served by: " + servedBy;
+      servedByEl.style.display = "inline";
+    } else {
+      servedByEl.style.display = "none";
+    }
+  }
 
   // Items
   const tbody = document.getElementById("receipt-items");
@@ -4433,6 +4473,7 @@ table { width: 100%; border-collapse: collapse; }
     <div class="center heading" style="font-size:16pt;">KITCHEN TOKEN</div>
     <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: #${d.orderId}</span></div>
     <div class="row"><span>Date: ${d.dateStr}</span></div>
+    ${d.servedBy ? `<div class="row"><span>Served by: ${d.servedBy}</span></div>` : ""}
     <div class="divider"></div>
     <table>
         <thead>
@@ -4580,6 +4621,7 @@ th         { border-bottom: 1px dashed #888; padding: 3px 0; }
 <div class="row">
     <span>Cashier: ${d.cashierName}</span>
 </div>
+${d.servedBy ? `<div class="row" style="font-weight:bold;"><span>Served by: ${d.servedBy}</span></div>` : ""}
 
 <div class="divider"></div>
 
@@ -10662,9 +10704,15 @@ window.loadPendingCOD = async function () {
         let html = "";
         deliveries.forEach((d) => {
           const safeClient = (d.client_name || "").replace(/'/g, "\\'");
+          const safeServer = (d.served_by || "").replace(/'/g, "\\'");
           const invoiceLabel = d.transaction_id
             ? `Invoice #${d.transaction_id}`
             : `Order #${d.pos_order_id}`;
+          const waiterBadge = d.served_by
+            ? `<div style="display:inline-flex; align-items:center; gap:5px; background:rgba(79, 70, 229, 0.12); color:var(--primary, #4F46E5); padding:3px 9px; border-radius:12px; font-size:0.83rem; font-weight:700; margin-top:4px;">
+                 <i class="fa-solid fa-bell-concierge"></i> Served by: ${d.served_by}
+               </div>`
+            : "";
           html += `
             <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
               <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
@@ -10672,14 +10720,15 @@ window.loadPendingCOD = async function () {
                   <h4 style="margin:0 0 3px 0; color:var(--text); font-size:1rem;">${invoiceLabel}</h4>
                   <p style="margin:0 0 2px 0; font-size:0.88rem; color:var(--text-muted);"><i class="fa-solid fa-user"></i> ${d.client_name}</p>
                   <p style="margin:0 0 2px 0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || 'In-Store'}</p>
+                  ${waiterBadge}
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  <button onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
+                  <button onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
                     style="background:var(--warning, #f59e0b); color:white; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-print"></i> Print Invoice
                   </button>
-                  <button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}')"
+                  <button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
                     style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-cash-register"></i> Collect Payment
                   </button>
@@ -10722,7 +10771,7 @@ window.loadPendingCOD = async function () {
 };
 
 // Print invoice for a pending order (cashier view)
-window.printPendingInvoice = async function (posOrderId, totalAmount, clientName) {
+window.printPendingInvoice = async function (posOrderId, totalAmount, clientName, servedBy) {
   try {
     const itemsRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`);
     let items = [];
@@ -10734,11 +10783,13 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
     }
     // Fetch a transaction_id if available
     let txnId = null;
+    let orderServer = servedBy || null;
     try {
       const txRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}`);
       if (txRes.ok) {
         const txData = await txRes.json();
         txnId = txData.transaction_id || null;
+        if (!orderServer && txData.served_by) orderServer = txData.served_by;
       }
     } catch (_) {}
     printReceipt(
@@ -10748,7 +10799,9 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
       "PENDING",
       totalAmount,
       clientName || "",
-      null
+      null,
+      true,
+      orderServer
     );
   } catch (e) {
     console.error("Failed to print pending invoice:", e);
@@ -10757,9 +10810,22 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
 };
 
 // Opens the standard payment panel pre-filled for a pending order (Cashier collects payment)
-window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName) {
+window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName, servedBy) {
   // 1. Switch to Register view first so the cart is visible
   switchPOSView("register");
+
+  // Store server info for receipt and payment display
+  window._pendingServedBy = servedBy || null;
+  const servedByContainer = document.getElementById("pay-served-by-container");
+  const servedByName = document.getElementById("pay-served-by-name");
+  if (servedByContainer && servedByName) {
+    if (servedBy) {
+      servedByName.textContent = servedBy;
+      servedByContainer.style.display = "block";
+    } else {
+      servedByContainer.style.display = "none";
+    }
+  }
 
   // 2. Fetch the actual order items and populate the cart
   try {
@@ -10835,19 +10901,24 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
       showToast("Payment collected!", "success");
       loadPendingCOD();
 
+      const receiptItems = posCart.length > 0 ? [...posCart] : [{ name: "Invoice Payment", qty: 1, price: data.total_amount }];
+      const serverName = data.served_by || window._pendingServedBy || null;
+
       // Clear the cart so the cashier starts fresh for the next sale
       posCart = [];
       renderCart();
 
       if (data.transaction_id && data.total_amount) {
         printReceipt(
-          [{ name: "Invoice Payment", qty: 1, price: data.total_amount }],
+          receiptItems,
           data.total_amount,
           data.transaction_id,
           "CASH",
           paid,
           data.client_name || "",
           null,
+          false,
+          serverName
         );
       }
     } else {

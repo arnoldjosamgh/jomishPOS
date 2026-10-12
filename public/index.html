@@ -414,6 +414,7 @@
                                 <div class="cart-row" style="display: none;"><span>Tax (0):</span><span id="cart-tax">UGX 0</span></div>
                                 <div class="cart-row total"><span>Total:</span><span id="cart-total">UGX 0</span></div>
                                 <button id="btn-checkout" class="primary-btn checkout-btn"><i class="fa-solid fa-credit-card"></i> PAY NOW</button>
+                                <button id="btn-send-to-cashier" class="primary-btn checkout-btn" style="display:none; background:var(--primary, #4F46E5);"><i class="fa-solid fa-paper-plane"></i> SEND TO CASHIER</button>
                                 <button id="btn-print-invoice" class="primary-btn checkout-btn" style="display:none; background:var(--warning); margin-top:8px;"><i class="fa-solid fa-print"></i> PRINT INVOICE</button>
                                 <button id="btn-end-shift" class="secondary-btn" style="width:100%; margin-top:8px; display:none; background:var(--danger); color:white; border-color:var(--danger);" onclick="endCashierShift()"><i class="fa-solid fa-power-off"></i> END SHIFT & PRINT REPORT</button>
                             </div>
@@ -425,6 +426,7 @@
                                     <button onclick="closePaymentPanel()" style="background:none;border:none;color:var(--text-muted);font-size:1.2rem;cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
                                 </div>
                                 <div class="pay-row"><span>Total Due:</span><span id="pay-total" style="font-weight:700;color:var(--primary);font-size:1.1rem;">UGX 0</span></div>
+                                <div id="pay-served-by-container" style="display:none; margin:6px 0; padding:6px 10px; background:rgba(79, 70, 229, 0.1); border-radius:6px; font-size:0.85rem; color:var(--primary, #4F46E5); font-weight:600;"><i class="fa-solid fa-bell-concierge"></i> Served by: <span id="pay-served-by-name"></span></div>
                                 
                                 <div style="margin:10px 0;">
                                     <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Payment Method</label>
@@ -1197,8 +1199,9 @@
                         <span id="receipt-date">Date: --</span>
                         <strong id="receipt-no">RECEIPT #0000</strong>
                     </div>
-                    <div style="margin-top:2px;">
+                    <div style="margin-top:2px; display:flex; justify-content:space-between; flex-wrap:wrap;">
                         <span id="receipt-cashier">Cashier: --</span>
+                        <span id="receipt-served-by" style="display:none; color:var(--text-muted);">Served by: --</span>
                     </div>
                 </div>
 

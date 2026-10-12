@@ -479,7 +479,7 @@ const schema = [
         id SERIAL PRIMARY KEY, cashier_id INTEGER, total_amount REAL,
         order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, transaction_id INTEGER,
         payment_method TEXT DEFAULT 'CASH', amount_paid REAL DEFAULT 0,
-        buyer_name TEXT, buyer_phone TEXT
+        buyer_name TEXT, buyer_phone TEXT, served_by TEXT, waiter_id INTEGER
     )`,
     `CREATE TABLE IF NOT EXISTS schedules (
         id SERIAL PRIMARY KEY, employee_id INTEGER, shift_date TEXT,
@@ -1353,6 +1353,24 @@ function runMigrations(fromVersion) {
             // Ignore "column already exists" errors (SQLite: SQLITE_ERROR, Postgres: 42701)
             db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '142'], () => {
                 console.log('Migration to v142 complete: Added track_stock to products.');
+            });
+        });
+    }
+
+    if (fromVersion < 143) {
+        // v143: Add served_by and waiter_id to pos_orders for tracking waiter orders
+        const alterServedBy = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS served_by TEXT"
+            : "ALTER TABLE pos_orders ADD COLUMN served_by TEXT";
+        const alterWaiterId = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS waiter_id INTEGER"
+            : "ALTER TABLE pos_orders ADD COLUMN waiter_id INTEGER";
+
+        db.run(alterServedBy, () => {
+            db.run(alterWaiterId, () => {
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '143'], () => {
+                    console.log('Migration to v143 complete: Added served_by and waiter_id to pos_orders.');
+                });
             });
         });
     }

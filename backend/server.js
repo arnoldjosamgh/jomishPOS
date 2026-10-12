@@ -2825,8 +2825,15 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     is_delivery,
     delivery_address,
     driver_name,
+    served_by,
+    waiter_id,
   } = req.body;
   const cashier_id = req.user.id;
+
+  const isReqUserWaiter = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
+  const userFirstName = (req.user && req.user.name ? req.user.name : "").trim().split(/\s+/)[0] || "";
+  const effectiveServedBy = (served_by ? String(served_by).trim().split(/\s+/)[0] : "") || (isReqUserWaiter ? userFirstName : null);
+  const effectiveWaiterId = waiter_id || (isReqUserWaiter ? req.user.id : null);
 
   if (!items || items.length === 0)
     return res.status(400).json({ error: "Cart is empty" });
@@ -2889,10 +2896,10 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       }
       const transaction_id = recycledId || txResult.lastID;
 
-      // INSERT pos_order — include buyer_name/buyer_phone always (columns exist now)
+      // INSERT pos_order — include buyer_name/buyer_phone and waiter tracking
       const orderResult = await q(
-        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null]
+        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null]
       );
       const pos_order_id = orderResult.lastID;
 
@@ -3016,6 +3023,22 @@ app.get("/api/pos_orders/:id/items", authenticateToken, (req, res) => {
     (err, items) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json(items || []);
+    }
+  );
+});
+
+app.get("/api/pos_orders/:id", authenticateToken, (req, res) => {
+  db.get(
+    `SELECT p.*, COALESCE(p.served_by, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.first_name WHEN LOWER(ec.role) = 'waiter' THEN ec.first_name ELSE NULL END) as served_by
+     FROM pos_orders p
+     LEFT JOIN employees ew ON p.waiter_id = ew.id
+     LEFT JOIN employees ec ON p.cashier_id = ec.id
+     WHERE p.id = ?`,
+    [req.params.id],
+    (err, order) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!order) return res.status(404).json({ error: "Order not found" });
+      res.json(order);
     }
   );
 });
@@ -5413,10 +5436,14 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
             p.transaction_id, 
             t.payment_status,
             p.buyer_name,
-            p.buyer_phone
+            p.buyer_phone,
+            COALESCE(p.served_by, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.first_name WHEN LOWER(ec.role) = 'waiter' THEN ec.first_name ELSE NULL END) as served_by,
+            COALESCE(p.waiter_id, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.id WHEN LOWER(ec.role) = 'waiter' THEN ec.id ELSE NULL END) as waiter_id
         FROM pos_orders p
         JOIN transactions t ON p.transaction_id = t.id
         LEFT JOIN deliveries d ON d.order_id = p.id
+        LEFT JOIN employees ew ON p.waiter_id = ew.id
+        LEFT JOIN employees ec ON p.cashier_id = ec.id
         WHERE p.payment_method IN ('COD', 'INVOICE') AND t.payment_status = 'PENDING'
         ORDER BY p.order_date DESC, p.id DESC
     `;
@@ -5432,7 +5459,7 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
     let transactionData = null;
     await db.withTransaction(async (q) => {
       const rowRes = await q(
-        "SELECT id as pos_order_id, transaction_id, total_amount FROM pos_orders WHERE id = ?",
+        "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, served_by FROM pos_orders WHERE id = ?",
         [req.params.id]
       );
       if (!rowRes.rows || rowRes.rows.length === 0) {
@@ -5455,8 +5482,9 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       success: true,
       transaction_id: transactionData.transaction_id,
       total_amount: transactionData.total_amount,
-      client_name: "Customer", // We could fetch this if needed, but receipt relies on this
+      client_name: transactionData.buyer_name || "Customer",
       client_location: "",
+      served_by: transactionData.served_by || "",
     });
   } catch (err) {
     if (err.message === "Order not found") return res.status(404).json({ error: err.message });
