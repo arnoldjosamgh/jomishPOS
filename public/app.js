@@ -532,10 +532,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // SME Finance Search
   const smeSearch = document.getElementById("sme-search");
-  if (smeSearch)
-    smeSearch.addEventListener("input", (e) =>
-      loadTransactions(e.target.value),
-    );
+  if (smeSearch) {
+    smeSearch.addEventListener("input", (e) => {
+      const prodView = document.getElementById("sme-view-products");
+      const isProdViewActive = prodView && prodView.style.display !== "none";
+      if (isProdViewActive) {
+        const prodInput = document.getElementById("sme-product-search");
+        if (prodInput) prodInput.value = e.target.value;
+        filterSmeProducts(e.target.value);
+      } else {
+        loadTransactions(e.target.value);
+      }
+    });
+  }
 
   // Global barcode scanning is handled by initGlobalScanner() — no duplicate listener needed
   // POS Checkout Handler — opens payment panel with numpad
@@ -5544,15 +5553,44 @@ function renderSmeProductsTable(products) {
   }).join("");
 }
 
-function filterSmeProducts() {
-  const query = (document.getElementById("sme-product-search")?.value || "").trim().toLowerCase();
+function filterSmeProducts(optionalVal) {
+  const inputEl = document.getElementById("sme-product-search");
+  const query = (optionalVal !== undefined ? String(optionalVal) : (inputEl?.value || "")).trim().toLowerCase();
   const category = document.getElementById("sme-product-category-filter")?.value || "";
 
+  const terms = query ? query.split(/\s+/).filter(Boolean) : [];
+
   const filtered = _allSmeProducts.filter((p) => {
-    const matchesName = !query || (p.name && p.name.toLowerCase().includes(query));
-    const matchesCat = !category || (p.category === category);
+    const pName = (p.name || "").toLowerCase();
+    const pCat = (p.category || "").toLowerCase();
+    const pBarcode = (p.barcode || "").toLowerCase();
+    const pBarcodeEnd = (p.barcode_end || "").toLowerCase();
+
+    const matchesName =
+      terms.length === 0 ||
+      terms.every(
+        (t) =>
+          pName.includes(t) ||
+          pCat.includes(t) ||
+          pBarcode.includes(t) ||
+          pBarcodeEnd.includes(t)
+      );
+    const matchesCat = !category || p.category === category;
     return matchesName && matchesCat;
   });
+
+  // Dynamically update the summary counters based on searched/filtered products
+  let totalSoldFiltered = 0;
+  let soldTodayFiltered = 0;
+  filtered.forEach((p) => {
+    totalSoldFiltered += Number(p.total_sold) || 0;
+    soldTodayFiltered += Number(p.sold_today) || 0;
+  });
+
+  const totalSoldEl = document.getElementById("sme-total-sold-counter");
+  const todaySoldEl = document.getElementById("sme-today-sold-counter");
+  if (totalSoldEl) totalSoldEl.textContent = totalSoldFiltered.toLocaleString();
+  if (todaySoldEl) todaySoldEl.textContent = soldTodayFiltered.toLocaleString();
 
   renderSmeProductsTable(filtered);
 }
@@ -5636,13 +5674,21 @@ function renderModalProductSalesTable(products) {
   }).join("");
 }
 
-function filterModalProductSales() {
-  const query = (document.getElementById("modal-product-sales-search")?.value || "").trim().toLowerCase();
+function filterModalProductSales(optionalVal) {
+  const inputEl = document.getElementById("modal-product-sales-search");
+  const query = (optionalVal !== undefined ? String(optionalVal) : (inputEl?.value || "")).trim().toLowerCase();
   const category = document.getElementById("modal-product-category-filter")?.value || "";
 
+  const terms = query ? query.split(/\s+/).filter(Boolean) : [];
+
   const filtered = _allModalProducts.filter((p) => {
-    const matchesName = !query || (p.name && p.name.toLowerCase().includes(query));
-    const matchesCat = !category || (p.category === category);
+    const pName = (p.name || "").toLowerCase();
+    const pCat = (p.category || "").toLowerCase();
+    const pBarcode = (p.barcode || "").toLowerCase();
+    const matchesName =
+      terms.length === 0 ||
+      terms.every((t) => pName.includes(t) || pCat.includes(t) || pBarcode.includes(t));
+    const matchesCat = !category || p.category === category;
     return matchesCat && matchesName;
   });
 
@@ -6792,17 +6838,37 @@ async function loadSoldBarcodes() {
 }
 
 window.filterInventory = function(query) {
-  const q = query.toLowerCase();
+  const q = (query || "").trim().toLowerCase();
+  const terms = q ? q.split(/\s+/).filter(Boolean) : [];
   const cards = document.querySelectorAll("#inventory-grid .product-card");
+
+  let visibleCount = 0;
+  let totalSoldFiltered = 0;
+  let soldTodayFiltered = 0;
+
   cards.forEach(card => {
-    const name = card.querySelector("h4")?.textContent.toLowerCase() || "";
-    const category = card.querySelector(".badge")?.textContent.toLowerCase() || "";
-    if (name.includes(q) || category.includes(q)) {
+    const name = (card.querySelector("h4")?.textContent || "").toLowerCase();
+    const category = (card.querySelector(".badge")?.textContent || "").toLowerCase();
+    const matches = terms.length === 0 || terms.every(t => name.includes(t) || category.includes(t));
+    
+    if (matches) {
       card.style.display = "";
+      visibleCount++;
+      const soldVal = Number(card.dataset.totalSold) || 0;
+      const todayVal = Number(card.dataset.soldToday) || 0;
+      totalSoldFiltered += soldVal;
+      soldTodayFiltered += todayVal;
     } else {
       card.style.display = "none";
     }
   });
+
+  const totalSoldBarEl = document.getElementById("stock-total-items-sold");
+  const todaySoldBarEl = document.getElementById("stock-today-items-sold");
+  const totalCountBarEl = document.getElementById("stock-total-products-count");
+  if (totalSoldBarEl) totalSoldBarEl.textContent = totalSoldFiltered.toLocaleString();
+  if (todaySoldBarEl) todaySoldBarEl.textContent = soldTodayFiltered.toLocaleString();
+  if (totalCountBarEl) totalCountBarEl.textContent = visibleCount.toLocaleString();
 };
 
 async function loadInventory() {
@@ -6843,6 +6909,8 @@ async function loadInventory() {
       const isInfinite = p.track_stock === 0;
       const card = document.createElement("div");
       card.className = `product-card management-card ${!isInfinite && p.stock < 10 ? "low-stock" : ""}`;
+      card.dataset.totalSold = Number(p.total_sold) || 0;
+      card.dataset.soldToday = Number(p.sold_today) || 0;
 
       const catClass = `category-${(p.category || "General").toLowerCase()}`;
       const imageHtml =
