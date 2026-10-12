@@ -603,3 +603,28 @@ body.dark-theme #pos-search-wrap input {
 #pos-register-view, #pos-stock-view, #pos-expenses-view, #pos-credits-view {
   padding: 14px 16px !important;
 }
+
+/* ── Management card action buttons visibility fix ── */
+.management-card {
+  overflow: visible !important;
+  aspect-ratio: auto !important;
+  height: auto !important;
+}
+.management-card .management-info {
+  overflow: visible !important;
+}
+
+/* ── Phone nav bar scrolling fix ── */
+#pos-toolbar {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+#pos-tab-bar {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  flex-shrink: 0 !important;
+}
+.pos-tab {
+  flex-shrink: 0 !important;
+}
+
