@@ -3858,7 +3858,7 @@ async function confirmPayment() {
       printReceipt(
         posCart,
         total,
-        result.transaction_id,
+        result.receipt_no || result.transaction_id,
         paymentMethod,
         paid,
         buyerName,
@@ -4028,7 +4028,7 @@ async function getInvoice() {
       printReceipt(
         posCart,
         total,
-        result.transaction_id,
+        result.receipt_no || result.transaction_id,
         "INVOICE",
         0,
         buyerName,
@@ -5430,7 +5430,7 @@ async function loadTransactions(searchTerm = "") {
 
     filtered.forEach((tx) => {
       const color = tx.type === "INCOME" ? "var(--success)" : "var(--danger)";
-      const receiptNo = String(tx.id).padStart(4, "0");
+      const receiptNo = String(tx.receipt_no || tx.id).padStart(4, "0");
       const tr = document.createElement("tr");
 
       // Payment method badge based on type & description
@@ -5748,7 +5748,7 @@ async function viewReceiptDetails(txId) {
     const order = await res.json();
 
     document.getElementById("rd-tx-id").textContent =
-      `RCPT-${String(txId).padStart(4, "0")}`;
+      `RCPT-${String(order.receipt_no || txId).padStart(4, "0")}`;
     document.getElementById("rd-cashier").textContent =
       order.cashier_name || "System";
     document.getElementById("rd-date").textContent = formatDisplayDate(
@@ -5898,7 +5898,7 @@ async function loadCashierReport() {
     txList.forEach((tx) => {
       const color = tx.type === "INCOME" ? "#10b981" : "#ef4444";
       const sign = tx.type === "INCOME" ? "+" : "-";
-      const rn = String(tx.id).padStart(4, "0");
+      const rn = String(tx.receipt_no || tx.id).padStart(4, "0");
       txRows += `
         <tr>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">RCPT-${rn}</td>
@@ -6133,7 +6133,7 @@ function toggleBackdateField() {
 }
 
 async function deleteTransaction(id, silent = false) {
-  const receiptNo = String(id).padStart(4, "0");
+  const receiptNo = String(id).padStart(4, "0"); // Note: uses raw id for delete confirm; receipt_no shown in list
   if (!silent) {
     if (
       !confirm(
@@ -10912,7 +10912,7 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
         printReceipt(
           receiptItems,
           data.total_amount,
-          data.transaction_id,
+          data.receipt_no || data.transaction_id,
           "CASH",
           paid,
           data.client_name || "",
@@ -10958,7 +10958,7 @@ window.markCODReceived = async function (posOrderId) {
         printReceipt(
           deliveryItem,
           data.total_amount,
-          data.transaction_id,
+          data.receipt_no || data.transaction_id,
           "COD (Received)",
           data.total_amount,
           data.client_name,

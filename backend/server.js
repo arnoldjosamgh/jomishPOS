@@ -1469,8 +1469,9 @@ app.post("/api/attendance/manual-out", authenticateToken, (req, res) => {
 app.get("/api/transactions", authenticateToken, (req, res) => {
   db.all(
     `
-        SELECT t.*, 
-               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name
+        SELECT t.*,
+               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name,
+               ROW_NUMBER() OVER (ORDER BY t.id ASC) AS receipt_no
         FROM transactions t 
         LEFT JOIN employees e ON t.recorded_by = e.id 
         ORDER BY t.transaction_date DESC, t.id DESC
@@ -2926,7 +2927,19 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       io.emit("db_updated", { module: "deliveries" });
     }
 
-    res.json({ message: "Checkout successful!", transaction_id, pos_order_id });
+    // Compute sequential receipt_no for this new transaction
+    let receipt_no = transaction_id;
+    try {
+      const rnResult = await new Promise((resolve, reject) => {
+        db.get(
+          "SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?",
+          [transaction_id],
+          (err, row) => err ? reject(err) : resolve(row)
+        );
+      });
+      receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
+    } catch (_) { /* fallback to raw id */ }
+    res.json({ message: "Checkout successful!", transaction_id, receipt_no, pos_order_id });
 
   } catch (err) {
     console.error("[CHECKOUT] Error:", err.message);
@@ -3015,12 +3028,13 @@ app.get("/api/pos_orders/tx/:transaction_id", authenticateToken, (req, res) => {
   const txId = req.params.transaction_id;
   db.get(
     `
-        SELECT p.*, CASE WHEN p.cashier_id = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name
+        SELECT p.*, CASE WHEN p.cashier_id = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
+               (SELECT COUNT(*) FROM transactions WHERE id <= ?) AS receipt_no
         FROM pos_orders p
         LEFT JOIN employees e ON p.cashier_id = e.id
         WHERE p.transaction_id = ?
     `,
-    [txId],
+    [txId, txId],
     (err, order) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!order)
@@ -3074,7 +3088,8 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   let detailSql = `
         SELECT 
             t.id, t.transaction_date, t.amount, t.type, t.description, t.payment_status,
-            CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name
+            CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
+            ROW_NUMBER() OVER (ORDER BY t.id ASC) AS receipt_no
         FROM transactions t
         LEFT JOIN employees e ON t.recorded_by = e.id
         WHERE t.transaction_date >= ? AND t.transaction_date <= ?
@@ -5446,9 +5461,19 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
     io.emit("db_updated", { module: "pos" });
     io.emit("db_updated", { module: "deliveries" });
 
+    // Compute sequential receipt_no
+    let receipt_no = transactionData.transaction_id;
+    try {
+      const rnRow = await new Promise((resolve, reject) => {
+        db.get("SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?", [transactionData.transaction_id], (e, r) => e ? reject(e) : resolve(r));
+      });
+      receipt_no = rnRow ? Number(rnRow.cnt) : transactionData.transaction_id;
+    } catch (_) {}
+
     res.json({
       success: true,
       transaction_id: transactionData.transaction_id,
+      receipt_no,
       total_amount: transactionData.total_amount,
       client_name: transactionData.buyer_name || "Customer",
       client_location: "",
