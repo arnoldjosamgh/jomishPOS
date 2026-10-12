@@ -295,7 +295,6 @@ window.onunhandledrejection = function(e) {
             <button class="other-btn" id="btn-other">
                 ➕ &nbsp;Sign in with email
             </button>
-            <button class="demo-btn" id="btn-demo" style="margin-top:10px;">Try Demo</button>
         </div>
 
         <!-- ─── SCREEN 2: PIN Pad ─── -->
@@ -431,7 +430,6 @@ window.onunhandledrejection = function(e) {
             // First time — go straight to email form
             showScreen('screen-manual');
             document.getElementById('btn-other').style.display = 'none';
-            document.getElementById('btn-demo').style.display = 'none';
             return;
         }
 
@@ -625,33 +623,6 @@ window.onunhandledrejection = function(e) {
             btn.textContent = 'Sign In';
         }
     }
-
-    // ───── Demo ─────
-    document.getElementById('btn-demo').addEventListener('click', async () => {
-        const btn = document.getElementById('btn-demo');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner spinner-white"></span>Starting Demo...';
-        try {
-            const res = await fetch(`${BASE}/api/login/demo`, { method: 'POST' });
-            const data = await res.json();
-            if (res.ok) {
-                localStorage.setItem('jomish_token', data.token);
-                localStorage.setItem('jomish_role', data.role);
-                localStorage.setItem('jomish_name', data.name);
-                localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
-                localStorage.setItem('jomish_user_id', data.user_id);
-                localStorage.setItem('jomish_prefix', data.prefix);
-                localStorage.setItem('jomish_demo', 'true');
-                window.location.href = 'index.html';
-            } else {
-                btn.disabled = false;
-                btn.textContent = 'Try Demo';
-            }
-        } catch (e) {
-            btn.disabled = false;
-            btn.textContent = 'Try Demo';
-        }
-    });
 
     // ───── Online/Offline banner ─────
     function updateOnlineStatus() {

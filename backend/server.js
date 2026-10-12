@@ -11,7 +11,6 @@ const { Bonjour } = require("bonjour-service");
 const fs = require("fs");
 const os = require("os");
 const { exec, spawn } = require("child_process");
-const { seedDemoTenant } = require("./seed_demo");
 const {
   buildBuffer,
   buildReceiptLines,
@@ -302,37 +301,6 @@ app.get("/api/employees", authenticateToken, (req, res) => {
   );
 });
 
-app.post("/api/login/demo", (req, res) => {
-  // Generate a valid JWT token representing a "Demo CEO" for the demo schema
-  const permissions = {
-    can_see_dashboard: 1,
-    can_see_hr: 1,
-    can_see_attendance: 1,
-    can_see_sme: 1,
-    can_see_pos: 1,
-    can_see_secretary: 1,
-    can_see_transport: 1,
-  };
-  const token = jwt.sign(
-    { id: 99999, role: "CEO", name: "Demo CEO", permissions, prefix: "demo" },
-    JWT_SECRET,
-    { expiresIn: "8h" },
-  );
-  res.cookie("jomish_auth", token, {
-    httpOnly: true,
-    secure: false,
-    sameSite: "lax",
-    maxAge: 8 * 60 * 60 * 1000,
-  });
-  res.json({
-    token,
-    role: "CEO",
-    name: "Demo CEO",
-    permissions,
-    user_id: 99999,
-    prefix: "demo",
-  });
-});
 
 app.post("/api/verify-password", authenticateToken, (req, res) => {
   const { password } = req.body;
@@ -5770,11 +5738,6 @@ io.on("connection", (socket) => {
 
 server
   .listen(PORT, "0.0.0.0", () => {
-    // Seed demo database tenant if needed
-    seedDemoTenant(db, db.asyncLocalStorage).catch((err) =>
-      console.error("[SEED] Failed to seed demo tenant:", err),
-    );
-
     // Ensure all existing tenant schemas have all tables (runs missing CREATE TABLE IF NOT EXISTS)
     // This fixes "relation does not exist" errors after new tables are added to the schema.
     if (db.ensureAllTenantSchemas) {
