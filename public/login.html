@@ -201,78 +201,91 @@ window.onunhandledrejection = function(e) {
 
         @media(max-width: 500px) { .login-card { padding: 24px 16px; } .pinpad { gap: 7px; } .pin-key { padding: 16px; } }
 
-        /* ── Full-Screen tile overlay (screen-select) ── */
-        body.tiles-mode {
-            align-items: stretch;
-            justify-content: stretch;
+        /* ── Full-Screen tile overlay (screen-select) — PC/tablet only ── */
+        @media (min-width: 768px) {
+            body.tiles-mode {
+                align-items: stretch;
+                justify-content: stretch;
+            }
+            body.tiles-mode .card-wrap {
+                padding: 0;
+                border-radius: 0;
+                width: 100vw; height: 100vh;
+                animation: none;
+            }
+            body.tiles-mode .card-wrap::before,
+            body.tiles-mode .card-wrap::after { display: none; }
+            body.tiles-mode .login-card {
+                width: 100vw; height: 100vh;
+                max-height: 100vh;
+                border-radius: 0;
+                padding: 0;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+            }
+            /* compact brand bar when full-screen */
+            body.tiles-mode .brand {
+                flex-direction: row;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                margin-bottom: 0;
+                padding: 12px 20px;
+                border-bottom: 1px solid rgba(255,255,255,0.07);
+                background: rgba(22,22,40,0.9);
+                backdrop-filter: blur(8px);
+                flex-shrink: 0;
+            }
+            body.tiles-mode .brand-logo { width: 34px; height: 34px; border-radius: 8px; }
+            body.tiles-mode .brand-name { font-size: 1rem; }
+            body.tiles-mode .brand-tag { display: none; }
+            /* tile screen fills remaining space */
+            body.tiles-mode #screen-select {
+                flex: 1;
+                display: flex !important;
+                flex-direction: column;
+                padding: 16px 16px 12px;
+                overflow: hidden;
+                min-height: 0;
+            }
+            body.tiles-mode .screen-title {
+                margin-bottom: 12px;
+                font-size: .8rem;
+            }
+            body.tiles-mode .user-grid {
+                flex: 1;
+                min-height: 0;
+                max-height: none;
+                overflow-y: auto;
+                grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+                gap: 12px;
+                margin-bottom: 12px;
+                align-content: start;
+            }
+            body.tiles-mode .user-tile {
+                padding: 16px 8px;
+            }
+            body.tiles-mode .user-avatar {
+                width: 52px; height: 52px; font-size: 1.4rem;
+            }
+            body.tiles-mode .other-btn,
+            body.tiles-mode .demo-btn {
+                flex-shrink: 0;
+            }
+            body.tiles-mode .demo-btn { margin-top: 8px !important; }
         }
-        body.tiles-mode .card-wrap {
-            padding: 0;
-            border-radius: 0;
-            width: 100vw; height: 100vh;
-            animation: none;
+
+        /* ── Mobile: keep login card centred, limit grid height ── */
+        @media (max-width: 767px) {
+            .login-card {
+                overflow-y: auto;
+            }
+            .user-grid {
+                max-height: 45vh;
+                overflow-y: auto;
+            }
         }
-        body.tiles-mode .card-wrap::before,
-        body.tiles-mode .card-wrap::after { display: none; }
-        body.tiles-mode .login-card {
-            width: 100vw; height: 100vh;
-            max-height: 100vh;
-            border-radius: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-        /* compact brand bar when full-screen */
-        body.tiles-mode .brand {
-            flex-direction: row;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            margin-bottom: 0;
-            padding: 12px 20px;
-            border-bottom: 1px solid rgba(255,255,255,0.07);
-            background: rgba(22,22,40,0.9);
-            backdrop-filter: blur(8px);
-            flex-shrink: 0;
-        }
-        body.tiles-mode .brand-logo { width: 34px; height: 34px; border-radius: 8px; }
-        body.tiles-mode .brand-name { font-size: 1rem; }
-        body.tiles-mode .brand-tag { display: none; }
-        /* tile screen fills remaining space */
-        body.tiles-mode #screen-select {
-            flex: 1;
-            display: flex !important;
-            flex-direction: column;
-            padding: 16px 16px 12px;
-            overflow: hidden;
-            min-height: 0;
-        }
-        body.tiles-mode .screen-title {
-            margin-bottom: 12px;
-            font-size: .8rem;
-        }
-        body.tiles-mode .user-grid {
-            flex: 1;
-            min-height: 0;
-            max-height: none;
-            overflow-y: auto;
-            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-            gap: 12px;
-            margin-bottom: 12px;
-            align-content: start;
-        }
-        body.tiles-mode .user-tile {
-            padding: 16px 8px;
-        }
-        body.tiles-mode .user-avatar {
-            width: 52px; height: 52px; font-size: 1.4rem;
-        }
-        body.tiles-mode .other-btn,
-        body.tiles-mode .demo-btn {
-            flex-shrink: 0;
-        }
-        body.tiles-mode .demo-btn { margin-top: 8px !important; }
     </style>
 </head>
 <body>
