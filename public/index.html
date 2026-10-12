@@ -203,11 +203,12 @@
             <section id="sme-business" class="view-section">
                 <header>
                     <h1>SME Financial Portal</h1>
-                    <div style="display:flex; gap:10px; align-items:center;">
+                    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
                         <button onclick="toggleSmeFinanceMode()" class="secondary-btn"><i class="fa-solid fa-arrow-left"></i> Back to POS</button>
-                        <input type="text" id="sme-search" placeholder="Search Receipt No or Item..." style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); width: 250px;">
-                        <button id="btn-sme-transactions" class="secondary-btn" onclick="toggleSmeView('transactions')">Transactions</button>
-                        <button id="btn-sme-reports" class="secondary-btn" onclick="toggleSmeView('reports')">Cashier Reports</button>
+                        <input type="text" id="sme-search" placeholder="Search Receipt No or Item..." style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); width: 220px;">
+                        <button id="btn-sme-transactions" class="secondary-btn" onclick="toggleSmeView('transactions')"><i class="fa-solid fa-money-bill-transfer"></i> Transactions</button>
+                        <button id="btn-sme-reports" class="secondary-btn" onclick="toggleSmeView('reports')"><i class="fa-solid fa-user-tie"></i> Cashier Reports</button>
+                        <button id="btn-sme-product-sales" class="secondary-btn" onclick="toggleSmeView('products')"><i class="fa-solid fa-chart-pie"></i> Products Sold Counter</button>
                         <button id="btn-add-tx" class="primary-btn">+ New Transaction</button>
                     </div>
                 </header>
@@ -257,6 +258,43 @@
                         </thead>
                         <tbody>
                             <tr><td colspan="6" style="text-align:center; padding:20px; color:var(--text-muted);">Select dates and click Generate Report</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Products Sold Counter Sub-View for CEO & Finance -->
+                <div id="sme-view-products" class="table-container" style="display:none;">
+                    <div style="display:flex; gap:12px; margin-bottom:15px; align-items:center; flex-wrap:wrap; justify-content:space-between;">
+                        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; flex:1;">
+                            <input type="text" id="sme-product-search" placeholder="Filter specific product (e.g. beef, plate)..." onkeyup="filterSmeProducts(this.value)" style="padding:8px 14px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); min-width:240px;">
+                            <select id="sme-product-category-filter" onchange="filterSmeProducts()" style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
+                                <option value="">All Categories</option>
+                            </select>
+                            <button class="secondary-btn" onclick="loadSmeProductSales()"><i class="fa-solid fa-arrows-rotate"></i> Refresh Counter</button>
+                        </div>
+                        <div style="display:flex; gap:10px;">
+                            <div style="background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); border-radius:8px; padding:6px 14px; font-size:0.85rem; color:#10B981; font-weight:700;">
+                                Total Units Sold: <span id="sme-total-sold-counter">0</span>
+                            </div>
+                            <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25); border-radius:8px; padding:6px 14px; font-size:0.85rem; color:#F59E0B; font-weight:700;">
+                                Sold Today: <span id="sme-today-sold-counter">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <table id="sme-products-table">
+                        <thead>
+                            <tr>
+                                <th>Product Name</th>
+                                <th>Category</th>
+                                <th>Unit Price</th>
+                                <th>Total Sold (All-Time)</th>
+                                <th>Sold Today</th>
+                                <th>Total Revenue</th>
+                                <th>Stock / Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sme-products-tbody">
+                            <tr><td colspan="7" style="text-align:center; padding:20px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -463,13 +501,38 @@
                 <!-- Product Inventory Management View -->
                 <div id="pos-stock-view" class="pos-sub-view hidden">
                     <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
-                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
+                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
                             <h2><i class="fa-solid fa-box"></i> Inventory Control</h2>
                             <div style="display:flex; gap:10px; flex-wrap:wrap; flex:1; justify-content:flex-end;">
-                                <input type="text" id="inventory-search" placeholder="Search Inventory..." onkeyup="filterInventory(this.value)" style="flex:1; min-width:200px; max-width:300px; padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
+                                <input type="text" id="inventory-search" placeholder="Search Inventory (e.g. beef)..." onkeyup="filterInventory(this.value)" style="flex:1; min-width:200px; max-width:300px; padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
                                 <button id="btn-add-product" class="primary-btn">+ New Product</button>
                             </div>
                         </header>
+
+                        <!-- Products Sales Counter Bar (CEO / Inventory) -->
+                        <div id="stock-sales-counter-bar" style="display:flex; gap:16px; margin-bottom:18px; flex-wrap:wrap; align-items:center; background:rgba(99,102,241,0.06); border:1px solid rgba(99,102,241,0.18); border-radius:10px; padding:10px 16px;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <i class="fa-solid fa-fire" style="color:#F59E0B; font-size:1.05rem;"></i>
+                                <span style="font-size:0.85rem; color:var(--text-muted); font-weight:600;">Total Items Sold:</span>
+                                <strong id="stock-total-items-sold" style="font-size:1.1rem; color:var(--primary); font-weight:800;">0</strong>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:8px; border-left:1px solid var(--border); padding-left:14px;">
+                                <i class="fa-solid fa-calendar-day" style="color:#10B981; font-size:1.05rem;"></i>
+                                <span style="font-size:0.85rem; color:var(--text-muted); font-weight:600;">Sold Today:</span>
+                                <strong id="stock-today-items-sold" style="font-size:1.1rem; color:#10B981; font-weight:800;">0</strong>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:8px; border-left:1px solid var(--border); padding-left:14px;">
+                                <i class="fa-solid fa-boxes-stacked" style="color:#8B5CF6; font-size:1.05rem;"></i>
+                                <span style="font-size:0.85rem; color:var(--text-muted); font-weight:600;">Catalog:</span>
+                                <strong id="stock-total-products-count" style="font-size:1.1rem; color:#8B5CF6; font-weight:800;">0</strong>
+                            </div>
+                            <div style="margin-left:auto;">
+                                <button type="button" class="secondary-btn" onclick="openProductSalesCounterModal()" style="padding:6px 12px; font-size:0.8rem; font-weight:600; display:flex; align-items:center; gap:6px;">
+                                    <i class="fa-solid fa-chart-column"></i> Sales Breakdown Table
+                                </button>
+                            </div>
+                        </div>
+
                         <div id="inventory-grid" class="products-grid" style="margin-top: 10px;">
                             <!-- Populated by JS as cards -->
                         </div>
@@ -1332,7 +1395,48 @@
         </div>
     </div>
 
+    <!-- Product Sales Counter Breakdown Modal -->
+    <div id="product-sales-counter-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:850px; width:92%; max-height:88vh; display:flex; flex-direction:column;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:14px;">
+                <h2 style="margin:0; font-size:1.2rem; display:flex; align-items:center; gap:8px;">
+                    <i class="fa-solid fa-chart-pie" style="color:var(--primary);"></i> Product Sales Counter & Breakdown
+                </h2>
+                <span class="close-modal" onclick="closeProductSalesCounterModal()" style="cursor:pointer; font-size:1.5rem;">&times;</span>
+            </div>
+            <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
+                <input type="text" id="modal-product-sales-search" placeholder="Search specific product (e.g. beef, plate)..." onkeyup="filterModalProductSales(this.value)" style="flex:1; min-width:200px; padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--background); color:var(--text);">
+                <select id="modal-product-category-filter" onchange="filterModalProductSales()" style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--background); color:var(--text);">
+                    <option value="">All Categories</option>
+                </select>
+                <button class="secondary-btn" onclick="fetchAndRenderProductSalesModal()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+            </div>
+            <div style="flex:1; overflow-y:auto; border:1px solid var(--border); border-radius:8px;">
+                <table style="width:100%; border-collapse:collapse;" id="modal-product-sales-table">
+                    <thead>
+                        <tr style="background:var(--surface); position:sticky; top:0; z-index:2; border-bottom:2px solid var(--border); text-align:left;">
+                            <th style="padding:10px;">Product</th>
+                            <th style="padding:10px;">Category</th>
+                            <th style="padding:10px; text-align:right;">Price</th>
+                            <th style="padding:10px; text-align:center;">Total Sold</th>
+                            <th style="padding:10px; text-align:center;">Sold Today</th>
+                            <th style="padding:10px; text-align:right;">Total Revenue</th>
+                            <th style="padding:10px; text-align:center;">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modal-product-sales-tbody">
+                        <tr><td colspan="7" style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="margin-top:14px; display:flex; justify-content:space-between; align-items:center; font-size:0.85rem; color:var(--text-muted);">
+                <div>Showing real-time sales data from completed POS orders.</div>
+                <button type="button" class="secondary-btn" onclick="closeProductSalesCounterModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script src="offline-db.js?v=2"></script>
-    <script src="app.js?v=35"></script>
+    <script src="app.js?v=36"></script>
 </body>
 </html>

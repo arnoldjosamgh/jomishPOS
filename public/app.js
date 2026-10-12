@@ -5452,16 +5452,203 @@ async function loadTransactions(searchTerm = "") {
   }
 }
 
+let _allSmeProducts = [];
+
 function toggleSmeView(view) {
+  const txView = document.getElementById("sme-view-transactions");
+  const repView = document.getElementById("sme-view-reports");
+  const prodView = document.getElementById("sme-view-products");
+
+  if (txView) txView.style.display = "none";
+  if (repView) repView.style.display = "none";
+  if (prodView) prodView.style.display = "none";
+
   if (view === "transactions") {
-    document.getElementById("sme-view-transactions").style.display = "block";
-    document.getElementById("sme-view-reports").style.display = "none";
-  } else {
-    document.getElementById("sme-view-transactions").style.display = "none";
-    document.getElementById("sme-view-reports").style.display = "block";
+    if (txView) txView.style.display = "block";
+  } else if (view === "reports") {
+    if (repView) repView.style.display = "block";
     populateCashierSelect();
+  } else if (view === "products") {
+    if (prodView) prodView.style.display = "block";
+    loadSmeProductSales();
   }
 }
+
+async function loadSmeProductSales() {
+  const tbody = document.getElementById("sme-products-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:25px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>';
+
+  try {
+    const res = await fetchAuth(`${API_URL}/reports/products-sold`);
+    const data = await res.json();
+    _allSmeProducts = data.products || [];
+
+    const totalSoldEl = document.getElementById("sme-total-sold-counter");
+    const todaySoldEl = document.getElementById("sme-today-sold-counter");
+    if (totalSoldEl) totalSoldEl.textContent = (data.totalItemsSold || 0).toLocaleString();
+    if (todaySoldEl) todaySoldEl.textContent = (data.totalItemsSoldToday || 0).toLocaleString();
+
+    // Populate category filter dropdown
+    const catSelect = document.getElementById("sme-product-category-filter");
+    if (catSelect) {
+      const currentVal = catSelect.value;
+      const categories = [...new Set(_allSmeProducts.map((p) => p.category || "General"))].sort();
+      catSelect.innerHTML = '<option value="">All Categories</option>' +
+        categories.map((c) => `<option value="${c}">${c}</option>`).join("");
+      catSelect.value = currentVal;
+    }
+
+    renderSmeProductsTable(_allSmeProducts);
+  } catch (err) {
+    console.error("Failed to load SME product sales:", err);
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:20px; color:var(--danger);">Error loading product sales data.</td></tr>';
+  }
+}
+
+function renderSmeProductsTable(products) {
+  const tbody = document.getElementById("sme-products-tbody");
+  if (!tbody) return;
+  if (!products || products.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:25px; color:var(--text-muted);">No products found.</td></tr>';
+    return;
+  }
+
+  const safe = (str) => String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  tbody.innerHTML = products.map((p) => {
+    const totalSold = Number(p.total_sold) || 0;
+    const soldToday = Number(p.sold_today) || 0;
+    const rev = Number(p.total_revenue) || (totalSold * (Number(p.price) || 0));
+    const statusText = p.track_stock === 0 ? '<span style="color:#8B5CF6; font-weight:600;"><i class="fa-solid fa-infinity"></i> Made to Order</span>' : `Stock: <strong>${p.stock}</strong>`;
+
+    return `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 12px; font-weight:600; color:var(--text);">${safe(p.name)}</td>
+        <td style="padding:10px 12px;"><span class="badge" style="background:rgba(255,255,255,0.08); font-size:0.75rem;">${safe(p.category || "General")}</span></td>
+        <td style="padding:10px 12px; text-align:right; font-weight:600;">UGX ${(p.price || 0).toLocaleString()}</td>
+        <td style="padding:10px 12px; text-align:center;">
+          <span style="background:rgba(16,185,129,0.12); color:#10B981; border:1px solid rgba(16,185,129,0.25); padding:3px 10px; border-radius:12px; font-weight:800; font-size:0.85rem;">
+            ${totalSold.toLocaleString()}
+          </span>
+        </td>
+        <td style="padding:10px 12px; text-align:center;">
+          <span style="font-weight:700; color:${soldToday > 0 ? '#F59E0B' : 'var(--text-muted)'};">
+            ${soldToday.toLocaleString()}
+          </span>
+        </td>
+        <td style="padding:10px 12px; text-align:right; font-weight:700; color:var(--primary);">UGX ${rev.toLocaleString()}</td>
+        <td style="padding:10px 12px; text-align:center; font-size:0.82rem;">${statusText}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function filterSmeProducts() {
+  const query = (document.getElementById("sme-product-search")?.value || "").trim().toLowerCase();
+  const category = document.getElementById("sme-product-category-filter")?.value || "";
+
+  const filtered = _allSmeProducts.filter((p) => {
+    const matchesName = !query || (p.name && p.name.toLowerCase().includes(query));
+    const matchesCat = !category || (p.category === category);
+    return matchesName && matchesCat;
+  });
+
+  renderSmeProductsTable(filtered);
+}
+
+let _allModalProducts = [];
+
+async function openProductSalesCounterModal() {
+  const modal = document.getElementById("product-sales-counter-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  await fetchAndRenderProductSalesModal();
+}
+
+function closeProductSalesCounterModal() {
+  const modal = document.getElementById("product-sales-counter-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+async function fetchAndRenderProductSalesModal() {
+  const tbody = document.getElementById("modal-product-sales-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>';
+
+  try {
+    const res = await fetchAuth(`${API_URL}/reports/products-sold`);
+    const data = await res.json();
+    _allModalProducts = data.products || [];
+
+    // Populate modal category filter
+    const catSelect = document.getElementById("modal-product-category-filter");
+    if (catSelect) {
+      const currentVal = catSelect.value;
+      const categories = [...new Set(_allModalProducts.map((p) => p.category || "General"))].sort();
+      catSelect.innerHTML = '<option value="">All Categories</option>' +
+        categories.map((c) => `<option value="${c}">${c}</option>`).join("");
+      catSelect.value = currentVal;
+    }
+
+    renderModalProductSalesTable(_allModalProducts);
+  } catch (err) {
+    console.error("Modal Product Sales Error:", err);
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:20px; color:var(--danger);">Error loading sales data.</td></tr>';
+  }
+}
+
+function renderModalProductSalesTable(products) {
+  const tbody = document.getElementById("modal-product-sales-tbody");
+  if (!tbody) return;
+  if (!products || products.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:30px; color:var(--text-muted);">No products match filter.</td></tr>';
+    return;
+  }
+
+  const safe = (str) => String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  tbody.innerHTML = products.map((p) => {
+    const totalSold = Number(p.total_sold) || 0;
+    const soldToday = Number(p.sold_today) || 0;
+    const rev = Number(p.total_revenue) || (totalSold * (Number(p.price) || 0));
+    const statusText = p.track_stock === 0 ? '<span style="color:#8B5CF6; font-weight:600;"><i class="fa-solid fa-infinity"></i> Made to Order</span>' : `Stock: <strong>${p.stock}</strong>`;
+
+    return `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px; font-weight:600;">${safe(p.name)}</td>
+        <td style="padding:10px;"><span class="badge" style="background:rgba(255,255,255,0.08); font-size:0.75rem;">${safe(p.category || "General")}</span></td>
+        <td style="padding:10px; text-align:right;">UGX ${(p.price || 0).toLocaleString()}</td>
+        <td style="padding:10px; text-align:center;">
+          <span style="background:rgba(16,185,129,0.12); color:#10B981; border:1px solid rgba(16,185,129,0.25); padding:2px 8px; border-radius:12px; font-weight:800; font-size:0.85rem;">
+            ${totalSold.toLocaleString()}
+          </span>
+        </td>
+        <td style="padding:10px; text-align:center;">
+          <span style="font-weight:700; color:${soldToday > 0 ? '#F59E0B' : 'var(--text-muted)'};">
+            ${soldToday.toLocaleString()}
+          </span>
+        </td>
+        <td style="padding:10px; text-align:right; font-weight:700; color:var(--primary);">UGX ${rev.toLocaleString()}</td>
+        <td style="padding:10px; text-align:center; font-size:0.8rem;">${statusText}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function filterModalProductSales() {
+  const query = (document.getElementById("modal-product-sales-search")?.value || "").trim().toLowerCase();
+  const category = document.getElementById("modal-product-category-filter")?.value || "";
+
+  const filtered = _allModalProducts.filter((p) => {
+    const matchesName = !query || (p.name && p.name.toLowerCase().includes(query));
+    const matchesCat = !category || (p.category === category);
+    return matchesCat && matchesName;
+  });
+
+  renderModalProductSalesTable(filtered);
+}
+
 
 async function viewReceiptDetails(txId) {
   try {
@@ -6626,8 +6813,25 @@ async function loadInventory() {
     if (!grid) return;
     grid.innerHTML = "";
 
+    const prods = data.products || [];
+
+    // Calculate overall products sold counters
+    let totalAllSold = 0;
+    let totalAllSoldToday = 0;
+    prods.forEach((p) => {
+      totalAllSold += Number(p.total_sold) || 0;
+      totalAllSoldToday += Number(p.sold_today) || 0;
+    });
+
+    const totalSoldBarEl = document.getElementById("stock-total-items-sold");
+    const todaySoldBarEl = document.getElementById("stock-today-items-sold");
+    const totalCountBarEl = document.getElementById("stock-total-products-count");
+    if (totalSoldBarEl) totalSoldBarEl.textContent = totalAllSold.toLocaleString();
+    if (todaySoldBarEl) todaySoldBarEl.textContent = totalAllSoldToday.toLocaleString();
+    if (totalCountBarEl) totalCountBarEl.textContent = prods.length.toLocaleString();
+
     // Update Dashboard Low Stock Count (exclude infinite-stock / made-to-order products)
-    const lowStock = data.products.filter((p) => p.track_stock !== 0 && p.stock < 10);
+    const lowStock = prods.filter((p) => p.track_stock !== 0 && p.stock < 10);
     const lowStockCountEl = document.getElementById("stat-low-stock-count");
     if (lowStockCountEl) {
       lowStockCountEl.textContent = `${lowStock.length} items running low`;
@@ -6635,7 +6839,7 @@ async function loadInventory() {
         lowStock.length > 0 ? "#FEF3C7" : "var(--surface)";
     }
 
-    data.products.forEach((p) => {
+    prods.forEach((p) => {
       const isInfinite = p.track_stock === 0;
       const card = document.createElement("div");
       card.className = `product-card management-card ${!isInfinite && p.stock < 10 ? "low-stock" : ""}`;
@@ -6660,6 +6864,15 @@ async function loadInventory() {
                 `;
       }
 
+      const totalSold = Number(p.total_sold) || 0;
+      const soldToday = Number(p.sold_today) || 0;
+      const soldCounterHtml = `
+                    <div style="margin-top:6px; font-size:0.75rem; color:#10B981; display:flex; justify-content:space-between; align-items:center; background:rgba(16,185,129,0.08); padding:5px 8px; border-radius:6px; border:1px solid rgba(16,185,129,0.22); width: 100%;">
+                        <span><i class="fa-solid fa-fire" style="color:#F59E0B;"></i> Sold: <strong style="color:#10B981; font-size:0.82rem;">${totalSold.toLocaleString()}</strong> <small style="color:var(--text-muted);">sold</small></span>
+                        <span style="font-size:0.7rem; color:var(--text-muted);"><i class="fa-solid fa-calendar-day" style="color:#10B981;"></i> Today: <strong style="color:var(--text);">${soldToday.toLocaleString()}</strong></span>
+                    </div>
+                `;
+
       card.innerHTML = `
                 ${imageHtml}
                 <div class="product-info management-info">
@@ -6675,6 +6888,7 @@ async function loadInventory() {
                         <span>Barcodes: ${p.barcode || "—"}${p.barcode_end && p.barcode_end !== p.barcode ? " → " + p.barcode_end : ""}</span>
                     </div>
                     ${profitHtml}
+                    ${soldCounterHtml}
                     <div style="margin-top:6px; display:flex; justify-content:space-between; align-items:center;">
                         <div class="stock" style="font-weight:bold; color:${p.track_stock === 0 ? "var(--text-muted)" : (p.stock < 10 ? "var(--danger)" : "var(--primary)")};">
                             ${p.track_stock === 0 ? "∞ Made to Order" : "Stock: " + p.stock}

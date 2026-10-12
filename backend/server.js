@@ -2391,27 +2391,131 @@ app.get("/api/products", authenticateToken, (req, res) => {
       "SELECT product_id, barcode FROM product_barcodes",
       [],
       (err, barcodes) => {
-        if (err) {
-          return res.json({
-            products: products.map((p) => ({ ...p, additional_barcodes: [] })),
+        const barcodeMap = {};
+        if (!err && barcodes) {
+          barcodes.forEach((b) => {
+            if (!barcodeMap[b.product_id]) barcodeMap[b.product_id] = [];
+            barcodeMap[b.product_id].push(b.barcode);
           });
         }
-        const barcodeMap = {};
-        barcodes.forEach((b) => {
-          if (!barcodeMap[b.product_id]) barcodeMap[b.product_id] = [];
-          barcodeMap[b.product_id].push(b.barcode);
+
+        const todayStr = new Date().toISOString().split("T")[0];
+        const salesSql = `
+          SELECT 
+            oi.product_id, 
+            oi.product_name, 
+            COALESCE(SUM(oi.qty), 0) AS total_sold,
+            COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today
+          FROM order_items oi
+          LEFT JOIN pos_orders po ON oi.pos_order_id = po.id
+          GROUP BY oi.product_id, oi.product_name
+        `;
+
+        db.all(salesSql, [todayStr], (salesErr, salesRows) => {
+          const soldById = {};
+          const soldByName = {};
+          const soldTodayById = {};
+          const soldTodayByName = {};
+
+          if (!salesErr && salesRows) {
+            salesRows.forEach((r) => {
+              const qty = Number(r.total_sold) || 0;
+              const todayQty = Number(r.sold_today) || 0;
+              if (r.product_id) {
+                soldById[r.product_id] = (soldById[r.product_id] || 0) + qty;
+                soldTodayById[r.product_id] = (soldTodayById[r.product_id] || 0) + todayQty;
+              }
+              if (r.product_name) {
+                const nameKey = String(r.product_name).trim().toLowerCase();
+                soldByName[nameKey] = (soldByName[nameKey] || 0) + qty;
+                soldTodayByName[nameKey] = (soldTodayByName[nameKey] || 0) + todayQty;
+              }
+            });
+          }
+
+          const productsWithDetails = products.map((p) => {
+            const nameKey = p.name ? String(p.name).trim().toLowerCase() : "";
+            const totalSold = (p.id && soldById[p.id]) || (nameKey && soldByName[nameKey]) || 0;
+            const soldToday = (p.id && soldTodayById[p.id]) || (nameKey && soldTodayByName[nameKey]) || 0;
+
+            return {
+              ...p,
+              additional_barcodes: barcodeMap[p.id] || [],
+              total_sold: totalSold,
+              sold_today: soldToday,
+            };
+          });
+
+          const result = { products: productsWithDetails };
+          setCache(schema, "products", result, 30); // 30s TTL
+          res.json(result);
         });
-        const productsWithBarcodes = products.map((p) => ({
-          ...p,
-          additional_barcodes: barcodeMap[p.id] || [],
-        }));
-        const result = { products: productsWithBarcodes };
-        setCache(schema, "products", result, 30); // 30s TTL
-        res.json(result);
       },
     );
   });
 });
+
+// Dedicated product sales analytics / counter report for CEO and Management
+app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
+  const { start_date, end_date } = req.query;
+  const todayStr = new Date().toISOString().split("T")[0];
+
+  let dateFilter = "";
+  let params = [];
+  if (start_date && end_date) {
+    dateFilter = "AND po.order_date >= ? AND po.order_date <= ?";
+    params = [start_date, end_date + " 23:59:59"];
+  }
+
+  const sql = `
+    SELECT 
+      p.id,
+      p.name,
+      p.category,
+      p.price,
+      p.buying_price,
+      p.stock,
+      p.track_stock,
+      COALESCE(SUM(oi.qty), 0) AS total_sold,
+      COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today,
+      COALESCE(SUM(oi.total), 0) AS total_revenue
+    FROM products p
+    LEFT JOIN order_items oi ON (oi.product_id = p.id OR LOWER(oi.product_name) = LOWER(p.name))
+    LEFT JOIN pos_orders po ON oi.pos_order_id = po.id ${dateFilter}
+    GROUP BY p.id, p.name, p.category, p.price, p.buying_price, p.stock, p.track_stock
+    ORDER BY total_sold DESC, p.name ASC
+  `;
+
+  const queryParams = [todayStr, ...params];
+  db.all(sql, queryParams, (err, rows) => {
+    if (err) {
+      // Fallback in case of join issue
+      return db.all("SELECT id, name, category, price, buying_price, stock, track_stock, 0 as total_sold, 0 as sold_today, 0 as total_revenue FROM products ORDER BY name ASC", [], (e2, fallbackRows) => {
+        if (e2) return res.status(500).json({ error: err.message });
+        res.json({ products: fallbackRows || [], totalItemsSold: 0, totalItemsSoldToday: 0 });
+      });
+    }
+
+    const items = rows || [];
+    let totalItemsSold = 0;
+    let totalItemsSoldToday = 0;
+    let totalRevenue = 0;
+
+    items.forEach((item) => {
+      totalItemsSold += Number(item.total_sold) || 0;
+      totalItemsSoldToday += Number(item.sold_today) || 0;
+      totalRevenue += Number(item.total_revenue) || 0;
+    });
+
+    res.json({
+      products: items,
+      totalItemsSold,
+      totalItemsSoldToday,
+      totalRevenue,
+    });
+  });
+});
+
 
 app.get("/api/barcodes/sold", authenticateToken, (req, res) => {
   db.all("SELECT barcode FROM sold_barcodes", [], (err, rows) => {
