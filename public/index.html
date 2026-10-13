@@ -376,6 +376,7 @@
                             <button id="pos-nav-register" class="pos-tab hidden" style="display: none;" onclick="switchPOSView('register')"><i class="fa-solid fa-cash-register"></i> Register</button>
                             <button id="pos-nav-pending" class="pos-tab hidden" style="display: none;" onclick="switchPOSView('pending')"><i class="fa-solid fa-file-invoice-dollar"></i> Pending <span id="cod-badge-count" style="background:var(--danger); color:white; border-radius:50%; padding:2px 8px; font-size:0.75rem; margin-left:5px; display:none;">0</span></button>
                             <button id="pos-nav-stock" class="pos-tab hidden" style="display: none;" onclick="switchPOSView('stock')"><i class="fa-solid fa-box"></i> Inventory</button>
+                            <button id="pos-nav-lowstock" class="pos-tab hidden" style="display: none;" onclick="switchPOSView('low-stock')"><i class="fa-solid fa-triangle-exclamation" style="color:#F59E0B;"></i> Low Stock <span id="pos-lowstock-badge" style="background:#EF4444; color:white; border-radius:10px; padding:1px 6px; font-size:0.72rem; margin-left:4px; font-weight:700; display:none;">0</span></button>
                             <button id="pos-nav-expenses" class="pos-tab hidden" style="display: none;" onclick="switchPOSView('expenses')"><i class="fa-solid fa-money-bill-transfer"></i> Expenses</button>
                             <button id="pos-nav-credits" class="pos-tab hidden" style="display: none;" onclick="switchPOSView('credits')"><i class="fa-solid fa-handshake"></i> Credits</button>
                             <button id="pos-nav-finance" class="pos-tab pos-tab-finance hidden" style="display: none;" onclick="toggleSmeFinanceMode()"><i class="fa-solid fa-sack-dollar"></i> Finance Hub</button>
@@ -507,10 +508,23 @@
                         <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
                             <h2><i class="fa-solid fa-box"></i> Inventory Control</h2>
                             <div style="display:flex; gap:10px; flex-wrap:wrap; flex:1; justify-content:flex-end;">
-                                <input type="text" id="inventory-search" placeholder="Search Inventory (e.g. beef)..." onkeyup="filterInventory(this.value)" style="flex:1; min-width:200px; max-width:300px; padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
+                                <input type="text" id="inventory-search" placeholder="Search Inventory (e.g. beef, barcode)..." oninput="filterInventory(this.value)" onkeyup="filterInventory(this.value)" style="flex:1; min-width:200px; max-width:320px; padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
                                 <button id="btn-add-product" class="primary-btn">+ New Product</button>
                             </div>
                         </header>
+
+                        <!-- Inventory Sub-Tabs: All Inventory | Low Stock Items | Out of Stock -->
+                        <div id="inventory-filter-tabs" style="display:flex; gap:10px; margin-bottom:15px; flex-wrap:wrap; align-items:center;">
+                            <button type="button" class="inv-filter-btn active" id="inv-tab-all" onclick="setInventoryFilterTab('all')">
+                                <i class="fa-solid fa-boxes-stacked"></i> All Inventory (<span id="inv-count-all">0</span>)
+                            </button>
+                            <button type="button" class="inv-filter-btn" id="inv-tab-low" onclick="setInventoryFilterTab('low')">
+                                <i class="fa-solid fa-triangle-exclamation" style="color:#F59E0B;"></i> Low Stock Items (<span id="inv-count-low" style="color:#EF4444; font-weight:800;">0</span>)
+                            </button>
+                            <button type="button" class="inv-filter-btn" id="inv-tab-out" onclick="setInventoryFilterTab('out')">
+                                <i class="fa-solid fa-circle-xmark" style="color:#EF4444;"></i> Out of Stock (<span id="inv-count-out">0</span>)
+                            </button>
+                        </div>
 
                         <!-- Products Sales Counter Bar (CEO / Inventory) -->
                         <div id="stock-sales-counter-bar" style="display:flex; gap:16px; margin-bottom:18px; flex-wrap:wrap; align-items:center; background:rgba(99,102,241,0.06); border:1px solid rgba(99,102,241,0.18); border-radius:10px; padding:10px 16px;">

@@ -307,6 +307,7 @@ document.addEventListener("DOMContentLoaded", () => {
     [
       "pos-nav-register",
       "pos-nav-stock",
+      "pos-nav-lowstock",
       "pos-nav-expenses",
       "pos-nav-credits",
       "pos-nav-finance",
@@ -329,6 +330,7 @@ document.addEventListener("DOMContentLoaded", () => {
         [
           "pos-nav-pending",
           "pos-nav-stock",
+          "pos-nav-lowstock",
           "pos-nav-expenses",
           "pos-nav-credits",
           "pos-nav-finance",
@@ -543,6 +545,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const posSearch = document.getElementById("pos-search");
   if (posSearch)
     posSearch.addEventListener("input", (e) => loadPOSProducts(e.target.value));
+
+  // Inventory Search in Admin Portal
+  const invSearch = document.getElementById("inventory-search");
+  if (invSearch) {
+    invSearch.addEventListener("input", (e) => window.filterInventory(e.target.value));
+  }
 
   // SME Finance Search
   const smeSearch = document.getElementById("sme-search");
@@ -772,6 +780,12 @@ function initNavigation() {
       e.preventDefault();
       switchPOSView("stock");
     });
+  const btnPosLowStock = document.getElementById("pos-nav-lowstock");
+  if (btnPosLowStock)
+    btnPosLowStock.addEventListener("click", (e) => {
+      e.preventDefault();
+      switchPOSView("low-stock");
+    });
   if (btnPosExp)
     btnPosExp.addEventListener("click", (e) => {
       e.preventDefault();
@@ -814,6 +828,7 @@ function switchPOSView(viewName) {
     "pos-nav-register",
     "pos-nav-pending",
     "pos-nav-stock",
+    "pos-nav-lowstock",
     "pos-nav-expenses",
     "pos-nav-credits",
     "pos-nav-hr",
@@ -849,6 +864,17 @@ function switchPOSView(viewName) {
     }
     const b = document.getElementById("pos-nav-stock");
     if (b) b.classList.add("active");
+    if (window.setInventoryFilterTab) window.setInventoryFilterTab("all");
+    loadInventory();
+  } else if (viewName === "low-stock" || viewName === "lowstock") {
+    const el = document.getElementById("pos-stock-view");
+    if (el) {
+      el.classList.remove("hidden");
+      el.style.display = "block";
+    }
+    const b = document.getElementById("pos-nav-lowstock");
+    if (b) b.classList.add("active");
+    if (window.setInventoryFilterTab) window.setInventoryFilterTab("low");
     loadInventory();
   } else if (viewName === "expenses") {
     const el = document.getElementById("pos-expenses-view");
@@ -2189,6 +2215,8 @@ function enforceRBAC() {
     "pos-nav-pending":  isCashier || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
+    // Low Stock — Admin-like + Tech
+    "pos-nav-lowstock": isAdminLike || isTech,
     // Expenses — Admin-like + HR + Supervisor + Tech (NOT Cashier or Waiter)
     "pos-nav-expenses": isAdminLike || isHRRole || isSupervisor || isTech,
     // Credits — Admin-like + Tech
@@ -3442,6 +3470,9 @@ async function loadPOSProducts(searchTerm = "") {
       if (prodStock > 0) card.onclick = () => addToCart(p);
       grid.appendChild(card);
     });
+
+    // Run active inventory filter
+    window.filterInventory();
   } catch (e) {
     console.error("POS Load Error:", e);
   }
@@ -6893,8 +6924,32 @@ async function loadSoldBarcodes() {
   }
 }
 
+window.currentInventoryTab = "all";
+
+window.setInventoryFilterTab = function(tabName) {
+  window.currentInventoryTab = tabName || "all";
+  document.querySelectorAll(".inv-filter-btn").forEach((btn) => btn.classList.remove("active"));
+  const activeBtn = document.getElementById("inv-tab-" + window.currentInventoryTab);
+  if (activeBtn) activeBtn.classList.add("active");
+
+  // Keep topbar Low Stock nav item in sync
+  const lowNav = document.getElementById("pos-nav-lowstock");
+  const stockNav = document.getElementById("pos-nav-stock");
+  if (window.currentInventoryTab === "low") {
+    if (lowNav) lowNav.classList.add("active");
+    if (stockNav) stockNav.classList.remove("active");
+  } else if (window.currentInventoryTab === "all") {
+    if (lowNav) lowNav.classList.remove("active");
+    if (stockNav) stockNav.classList.add("active");
+  }
+
+  const searchVal = document.getElementById("inventory-search")?.value || "";
+  window.filterInventory(searchVal);
+};
+
 window.filterInventory = function(query) {
-  const q = (query || "").trim().toLowerCase();
+  const inputEl = document.getElementById("inventory-search");
+  const q = (query !== undefined ? query : (inputEl ? inputEl.value : "")).trim().toLowerCase();
   const terms = q ? q.split(/\s+/).filter(Boolean) : [];
   const cards = document.querySelectorAll("#inventory-grid .product-card");
 
@@ -6902,20 +6957,40 @@ window.filterInventory = function(query) {
   let totalSoldFiltered = 0;
   let soldTodayFiltered = 0;
 
-  cards.forEach(card => {
-    const name = (card.querySelector("h4")?.textContent || "").toLowerCase();
-    const category = (card.querySelector(".badge")?.textContent || "").toLowerCase();
-    const matches = terms.length === 0 || terms.every(t => name.includes(t) || category.includes(t));
-    
+  cards.forEach((card) => {
+    const name = (card.dataset.name || card.querySelector("h4")?.textContent || "").toLowerCase();
+    const category = (card.dataset.category || card.querySelector(".badge")?.textContent || "").toLowerCase();
+    const barcode = (card.dataset.barcode || "").toLowerCase();
+    const cardText = (card.textContent || "").toLowerCase();
+
+    // Check multi-term text search
+    const textMatches = terms.length === 0 || terms.every((t) =>
+      name.includes(t) || category.includes(t) || barcode.includes(t) || cardText.includes(t)
+    );
+
+    // Check sub-tab filter (All vs Low Stock vs Out of Stock)
+    const isInfinite = card.dataset.trackStock === "0";
+    const stock = parseFloat(card.dataset.stock) || 0;
+    let tabMatches = true;
+    if (window.currentInventoryTab === "low") {
+      tabMatches = !isInfinite && stock < 10;
+    } else if (window.currentInventoryTab === "out") {
+      tabMatches = !isInfinite && stock <= 0;
+    }
+
+    const matches = textMatches && tabMatches;
+
     if (matches) {
-      card.style.display = "";
+      card.classList.remove("is-hidden");
+      card.style.removeProperty("display");
       visibleCount++;
       const soldVal = Number(card.dataset.totalSold) || 0;
       const todayVal = Number(card.dataset.soldToday) || 0;
       totalSoldFiltered += soldVal;
       soldTodayFiltered += todayVal;
     } else {
-      card.style.display = "none";
+      card.classList.add("is-hidden");
+      card.style.setProperty("display", "none", "important");
     }
   });
 
@@ -6925,6 +7000,22 @@ window.filterInventory = function(query) {
   if (totalSoldBarEl) totalSoldBarEl.textContent = totalSoldFiltered.toLocaleString();
   if (todaySoldBarEl) todaySoldBarEl.textContent = soldTodayFiltered.toLocaleString();
   if (totalCountBarEl) totalCountBarEl.textContent = visibleCount.toLocaleString();
+
+  // Handle empty state message
+  let emptyEl = document.getElementById("inventory-empty-state");
+  if (visibleCount === 0) {
+    if (!emptyEl) {
+      emptyEl = document.createElement("div");
+      emptyEl.id = "inventory-empty-state";
+      emptyEl.style = "grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 0.95rem;";
+      document.getElementById("inventory-grid")?.appendChild(emptyEl);
+    }
+    const filterDesc = window.currentInventoryTab === "low" ? "low stock items" : (window.currentInventoryTab === "out" ? "out of stock items" : "products");
+    emptyEl.innerHTML = '<i class="fa-solid fa-box-open" style="font-size:2rem; margin-bottom:10px; display:block; opacity:0.5;"></i> No ' + filterDesc + ' found' + (terms.length > 0 ? ' matching "' + q + '"' : '') + '.';
+    emptyEl.style.display = "block";
+  } else if (emptyEl) {
+    emptyEl.style.display = "none";
+  }
 };
 
 async function loadInventory() {
@@ -6954,11 +7045,26 @@ async function loadInventory() {
 
     // Update Dashboard Low Stock Count (exclude infinite-stock / made-to-order products)
     const lowStock = prods.filter((p) => p.track_stock !== 0 && p.stock < 10);
+    const outStock = prods.filter((p) => p.track_stock !== 0 && p.stock <= 0);
     const lowStockCountEl = document.getElementById("stat-low-stock-count");
     if (lowStockCountEl) {
       lowStockCountEl.textContent = `${lowStock.length} items running low`;
       lowStockCountEl.parentElement.parentElement.style.background =
         lowStock.length > 0 ? "#FEF3C7" : "var(--surface)";
+    }
+
+    // Update sub-tabs counts and topbar badge
+    const invCountAll = document.getElementById("inv-count-all");
+    if (invCountAll) invCountAll.textContent = prods.length;
+    const invCountLow = document.getElementById("inv-count-low");
+    if (invCountLow) invCountLow.textContent = lowStock.length;
+    const invCountOut = document.getElementById("inv-count-out");
+    if (invCountOut) invCountOut.textContent = outStock.length;
+
+    const navLowBadge = document.getElementById("pos-lowstock-badge");
+    if (navLowBadge) {
+      navLowBadge.textContent = lowStock.length;
+      navLowBadge.style.display = lowStock.length > 0 ? "inline-flex" : "none";
     }
 
     prods.forEach((p) => {
@@ -6967,6 +7073,11 @@ async function loadInventory() {
       card.className = `product-card management-card ${!isInfinite && p.stock < 10 ? "low-stock" : ""}`;
       card.dataset.totalSold = Number(p.total_sold) || 0;
       card.dataset.soldToday = Number(p.sold_today) || 0;
+      card.dataset.stock = Number(p.stock) || 0;
+      card.dataset.trackStock = p.track_stock === undefined ? 1 : p.track_stock;
+      card.dataset.name = (p.name || '').toLowerCase();
+      card.dataset.category = (p.category || '').toLowerCase();
+      card.dataset.barcode = ((p.barcode || '') + ' ' + (p.barcode_end || '')).toLowerCase();
 
       const catClass = `category-${(p.category || "General").toLowerCase()}`;
       const imageHtml =

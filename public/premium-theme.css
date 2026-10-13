@@ -667,6 +667,44 @@ body.dark-theme #pos-search-wrap input {
   transition: box-shadow 0.2s ease !important;
 }
 
+/* Ensure hidden filtered cards are strictly hidden even with !important on management-card */
+.management-card.is-hidden,
+.product-card.is-hidden,
+#inventory-grid .product-card.is-hidden {
+  display: none !important;
+}
+
+/* Inventory Sub-Filter Tabs */
+.inv-filter-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+.inv-filter-btn:hover {
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--text);
+  border-color: var(--primary);
+}
+.inv-filter-btn.active {
+  background: var(--primary) !important;
+  color: #fff !important;
+  border-color: var(--primary) !important;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35) !important;
+}
+.inv-filter-btn.active span,
+.inv-filter-btn.active i {
+  color: #fff !important;
+}
+
 .management-card:hover {
   transform: none !important;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12) !important;
