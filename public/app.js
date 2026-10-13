@@ -59,6 +59,20 @@ let GLOBAL_OPERATIONAL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
   document.documentElement.setAttribute("data-theme", t);
 })();
 
+// Detect Staging / Test Environment & Show Indicator Badge
+(async function checkEnvironmentBadge() {
+  try {
+    const isStagingHost = window.location.hostname.includes("staging") || window.location.hostname.includes("test");
+    const res = await fetch(`${API_URL}/system/status`).catch(() => null);
+    const data = res && res.ok ? await res.json() : null;
+    if (isStagingHost || (data && data.env === "staging")) {
+      const b = document.getElementById("pos-staging-badge");
+      if (b) b.style.display = "inline-flex";
+      document.title = "[TEST] " + document.title;
+    }
+  } catch (e) {}
+})();
+
 function toggleTheme() {
   const current =
     document.documentElement.getAttribute("data-theme") || "light";

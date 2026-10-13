@@ -141,9 +141,10 @@ setInterval(
 app.get("/api/system/status", (req, res) => {
   // Return DB info and app version
   res.json({
-    dbType: config.dbType || "sqlite",
+    dbType: process.env.DATABASE_URL ? "postgres" : "sqlite",
     version: "1.0.0 (Enterprise)",
     host: os.hostname(),
+    env: process.env.NODE_ENV || "development",
   });
 });
 

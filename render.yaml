@@ -1,10 +1,16 @@
-# render.yaml — JomishPOS Deployment Configuration
-# Deploy to Render.com by linking your GitHub repo (arnoldjosamgh/jomishPOS)
+# render.yaml — JomishPOS Multi-Environment Deployment Configuration
+# Deploy to Render.com via Blueprint: links arnoldjosamgh/jomishPOS
 # See: https://render.com/docs/blueprint-spec
 
 services:
+  # ─────────────────────────────────────────────────────────────
+  # 1. PRODUCTION ENVIRONMENT (Live Store System)
+  # Tracks: 'main' branch
+  # Database: neondb (Production Neon Database)
+  # ─────────────────────────────────────────────────────────────
   - type: web
     name: jomish-pos
+    branch: main
     env: node
     region: oregon
     plan: free
@@ -21,3 +27,29 @@ services:
         generateValue: true
       - key: DATABASE_URL
         value: postgresql://neondb_owner:npg_wfOXbnA3i0JY@ep-raspy-thunder-ayuhx4hs-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. STAGING / TEST ENVIRONMENT (Preview & Testing System)
+  # Tracks: 'staging' branch
+  # Database: neondb_staging (Isolated Neon Test Database)
+  # ─────────────────────────────────────────────────────────────
+  - type: web
+    name: jomish-pos-staging
+    branch: staging
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install --omit=optional
+    startCommand: node backend/server.js
+    healthCheckPath: /api/system/status
+
+    envVars:
+      - key: NODE_ENV
+        value: staging
+      - key: PORT
+        value: 3005
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_wfOXbnA3i0JY@ep-raspy-thunder-ayuhx4hs-pooler.c-5.us-east-2.aws.neon.tech/neondb_staging?sslmode=require&channel_binding=require
+
