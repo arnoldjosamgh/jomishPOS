@@ -637,48 +637,125 @@ body.dark-theme #pos-search-wrap input {
   display: none !important;
 }
 
-/* ── Management Card fix for Admin / Inventory tab ── */
+/* ── Management Card fix for Admin / Inventory tab (PC & Phone) ── */
 #inventory-grid {
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
-  gap: 12px !important;
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)) !important;
+  gap: 20px !important;
+  width: 100% !important;
 }
 
-@media screen and (max-width: 480px) {
+@media screen and (max-width: 680px) {
   #inventory-grid {
-    grid-template-columns: 1fr 1fr !important;
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
   }
 }
 
 .management-card {
-  overflow: visible !important;
+  overflow: hidden !important;
   aspect-ratio: auto !important;
   height: auto !important;
   min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-radius: 18px !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06) !important;
   transform: none !important;
   transition: box-shadow 0.2s ease !important;
 }
 
 .management-card:hover {
   transform: none !important;
-  box-shadow: var(--shadow-md) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12) !important;
 }
 
 .management-card .product-img-container {
-  height: 120px !important;
+  height: 160px !important;
   position: relative !important;
   inset: auto !important;
+  width: 100% !important;
+  border-radius: 18px 18px 0 0 !important;
+  overflow: hidden !important;
+  background: var(--background) !important;
+}
+
+.management-card .product-img-container img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
 }
 
 .management-card .management-info {
-  overflow: visible !important;
-  height: auto !important;
+  position: relative !important;
+  bottom: auto !important;
+  left: auto !important;
+  right: auto !important;
+  background: var(--surface) !important;
+  backdrop-filter: none !important;
+  border-top: 1px solid var(--border) !important;
   flex: 1 1 auto !important;
-  padding: 8px 10px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  padding: 14px 16px !important;
+  gap: 6px !important;
+  overflow: visible !important;
+}
+
+.management-card h4 {
+  color: var(--text) !important;
+  font-size: 0.95rem !important;
+  font-weight: 700 !important;
+  text-shadow: none !important;
+  white-space: normal !important;
+  margin: 0 !important;
+}
+
+.management-card .price {
+  color: #10B981 !important;
+  font-size: 0.95rem !important;
+  font-weight: 800 !important;
+  text-shadow: none !important;
+  white-space: nowrap !important;
+}
+
+.management-card .stock {
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+}
+
+.management-card .sm-btn {
+  height: 32px !important;
+  min-width: 32px !important;
+  padding: 0 8px !important;
+  font-size: 0.8rem !important;
+  border-radius: 6px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  flex-shrink: 0 !important;
+}
+
+.management-card input[type="number"] {
+  height: 32px !important;
+  width: 52px !important;
+  margin: 0 !important;
+  border-radius: 6px !important;
+  box-sizing: border-box !important;
+  flex-shrink: 0 !important;
+  text-align: center !important;
 }
 
 .management-card .management-info * {
   pointer-events: auto !important;
 }
+
 
 
 /* ── POS Navigation Bar Mobile Scroll Fix ── */
