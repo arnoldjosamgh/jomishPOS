@@ -3987,14 +3987,27 @@ function numpadExact() {
 }
 
 function updateChange() {
+  const method = document.getElementById("payment-method-select")?.value;
   const total =
     parseFloat(
       document.getElementById("btn-checkout").getAttribute("data-total"),
     ) || 0;
   const paid = parseInt(document.getElementById("pay-amount").value) || 0;
-  const change = paid - Math.round(total);
   const changeEl = document.getElementById("pay-change");
 
+  if (method === "DISCOUNT") {
+    const diff = Math.round(total) - paid;
+    if (diff > 0) {
+      changeEl.textContent = "Discount: UGX " + diff.toLocaleString();
+      changeEl.style.color = "#10B981"; // green
+    } else {
+      changeEl.textContent = "UGX 0 (Custom Price)";
+      changeEl.style.color = "var(--text-muted)";
+    }
+    return;
+  }
+
+  const change = paid - Math.round(total);
   if (change >= 0) {
     changeEl.textContent = "UGX " + change.toLocaleString();
     changeEl.style.color = "#10B981"; // green
@@ -4044,6 +4057,12 @@ window.handlePaymentMethodChange = async function () {
     payAmountInput.value = "0";
     payAmountInput.setAttribute("readonly", "true");
     buyerContainer.style.display = "none"; // User requested name/phone only for creditors
+  } else if (method === "DISCOUNT") {
+    payAmountInput.removeAttribute("readonly");
+    buyerContainer.style.display = "none";
+    updateChange();
+    payAmountInput.focus();
+    payAmountInput.select();
   } else {
     payAmountInput.removeAttribute("readonly");
     if (method === "CREDIT") {
@@ -4051,6 +4070,7 @@ window.handlePaymentMethodChange = async function () {
     } else {
       buyerContainer.style.display = "none";
     }
+    updateChange();
   }
 
   if (method === "CREDIT" || method === "COD") {
@@ -4095,6 +4115,8 @@ async function confirmPayment() {
       alert("Please enter a Buyer Name for Credit transactions.");
       return;
     }
+  } else if (paymentMethod === "DISCOUNT") {
+    // Discount as form of payment: whatever amount the cashier inserts is what is paid for those products no matter the real price
   } else if (paymentMethod !== "COD") {
     if (paid < Math.round(total)) {
       alert(
@@ -4110,14 +4132,16 @@ async function confirmPayment() {
     return;
   }
 
-  const change = paid > Math.round(total) ? paid - Math.round(total) : 0;
+  const effectiveTotal = paymentMethod === "DISCOUNT" ? paid : total;
+  const change = paymentMethod !== "DISCOUNT" && paid > Math.round(total) ? paid - Math.round(total) : 0;
 
   try {
     const res = await fetchAuth(`${API_URL}/checkout`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        total_amount: total,
+        total_amount: effectiveTotal,
+        original_total: total,
         items: posCart,
         payment_method: paymentMethod,
         amount_paid: paid,
@@ -4148,12 +4172,15 @@ async function confirmPayment() {
 
       printReceipt(
         posCart,
-        total,
+        effectiveTotal,
         result.receipt_no || result.transaction_id,
         paymentMethod,
         paid,
         buyerName,
         null,
+        false,
+        null,
+        paymentMethod === "DISCOUNT" ? total : null,
       );
 
       posCart = [];
@@ -4172,7 +4199,7 @@ async function confirmPayment() {
     ) {
       const client_uuid = crypto.randomUUID();
       const offlinePayload = {
-        total_amount: total,
+        total_amount: effectiveTotal,
         items: posCart,
         payment_method: paymentMethod,
         amount_paid: paid,
@@ -4199,12 +4226,15 @@ async function confirmPayment() {
 
       printReceipt(
         posCart,
-        total,
+        effectiveTotal,
         `OFFLINE-${client_uuid.slice(0, 8).toUpperCase()}`,
         paymentMethod,
         paid,
         buyerName,
         null,
+        false,
+        null,
+        paymentMethod === "DISCOUNT" ? total : null,
       );
 
       posCart = [];
@@ -4526,6 +4556,7 @@ function printReceipt(
   deliveryInfo = null,
   isInvoice = false,
   servedBy = null,
+  originalTotal = null,
 ) {
   // ── Business info ─────────────────────────────────────
   const bizName = localStorage.getItem("jomish_biz_name") || "Jomish Business";
@@ -4539,7 +4570,7 @@ function printReceipt(
   const sub = taxRate > 0 ? total / (1 + taxRate / 100) : total;
   const tax = total - sub;
   const change =
-    paymentMethod !== "CREDIT" && paymentMethod !== "INVOICE"
+    paymentMethod !== "CREDIT" && paymentMethod !== "INVOICE" && paymentMethod !== "DISCOUNT"
       ? Math.max(0, paid - total)
       : 0;
   const bal =
@@ -4573,6 +4604,7 @@ function printReceipt(
     sub,
     tax,
     total,
+    originalTotal,
     paid,
     change,
     bal,
@@ -4857,6 +4889,11 @@ function _buildReceiptHTML(d) {
   let conditionalRows = "";
   if (d.taxRate > 0) {
     conditionalRows += `<div class="row"><span>Tax (${d.taxRate}%):</span><span>${fmtUGX(d.tax)}</span></div>`;
+  }
+  if (d.originalTotal && String(d.paymentMethod).includes("DISCOUNT") && d.originalTotal !== d.total) {
+    const discAmount = d.originalTotal - d.total;
+    conditionalRows += `<div class="row" style="color:#666;"><span>Original Total:</span><span>UGX ${fmtUGX(d.originalTotal)}</span></div>`;
+    conditionalRows += `<div class="row" style="color:#10B981;font-weight:bold;"><span>Discount:</span><span>-UGX ${fmtUGX(discAmount)}</span></div>`;
   }
   if (d.change > 0) {
     conditionalRows += `<div class="row" style="color:#10B981;font-weight:bold;"><span>Change:</span><span>${fmtUGX(d.change)}</span></div>`;

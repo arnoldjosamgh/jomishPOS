@@ -2878,6 +2878,9 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   } else if (payment_method === "INVOICE") {
     paid = 0;
     payment_status = "PENDING";
+  } else if (payment_method === "DISCOUNT") {
+    paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
+    payment_status = "PAID";
   }
 
   // INVOICE stores as COD in pos_orders (pending COD)
@@ -2906,6 +2909,8 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       const now = new Date().toISOString();
       const description = payment_method === "INVOICE"
         ? "POS Sale (COD - Pending Invoice)"
+        : payment_method === "DISCOUNT"
+        ? `POS Sale (DISCOUNT: UGX ${paid.toLocaleString()})`
         : `POS Sale (${payment_method})`;
       const txAmount = payment_method === "COD" || payment_method === "INVOICE"
         ? total_amount : paid;
@@ -2928,9 +2933,11 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       const transaction_id = recycledId || txResult.lastID;
 
       // INSERT pos_order — include buyer_name/buyer_phone and waiter tracking
+      // For DISCOUNT, the effective total for the order is whatever was inserted/paid
+      const effectiveOrderTotal = payment_method === "DISCOUNT" ? paid : total_amount;
       const orderResult = await q(
         "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null]
+        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null]
       );
       const pos_order_id = orderResult.lastID;
 
@@ -3040,7 +3047,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
       let startCash = lastShift ? lastShift.end_cash : 0;
       
       const queries = {
-        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND payment_method = 'CASH' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
+        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
         momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
         totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
         expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE recorded_by = ? AND type = 'EXPENSE' AND transaction_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
@@ -3279,7 +3286,7 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
             COUNT(CASE WHEN t.type = 'EXPENSE' THEN 1 END) as expense_count,
             SUM(CASE WHEN t.type = 'INCOME' THEN t.amount ELSE 0 END) as total_income,
             SUM(CASE WHEN t.type = 'EXPENSE' THEN t.amount ELSE 0 END) as total_expense,
-            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ? AND payment_method = 'CASH') as cash_sales,
+            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ? AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT')) as cash_sales,
             (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ? AND payment_method = 'MOBILE MONEY') as momo_sales,
             (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ?) as total_sales
         FROM transactions t
