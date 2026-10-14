@@ -352,7 +352,7 @@ tbody tr td:last-child { border-radius: 0 var(--radius-md) var(--radius-md) 0 !i
 }
 
 /* ── DARK THEME ── */
-body.dark-theme, html.dark-theme {
+body.dark-theme, html.dark-theme, [data-theme="dark"], html[data-theme="dark"] body {
   --bg-color: #0f172a;
   --surface-color: #1e293b;
   --text-main: #f8fafc;
@@ -360,7 +360,8 @@ body.dark-theme, html.dark-theme {
   --border-color: #334155;
 }
 
-body.dark-theme #pos-tab-bar .pos-tab:not(.active):hover {
+body.dark-theme #pos-tab-bar .pos-tab:not(.active):hover,
+html[data-theme="dark"] #pos-tab-bar .pos-tab:not(.active):hover {
   background: #334155 !important;
 }
 body.dark-theme .cart-item {
@@ -428,18 +429,31 @@ body.dark-theme input[type="text"], body.dark-theme input[type="number"] {
   min-height: 0 !important;
 }
 
-/* ── FULL-PAGE SUB-VIEWS (Inventory, Expenses, Credits) ── */
+/* ── FULL-PAGE SUB-VIEWS (Inventory, Expenses, Credits, Pending Orders) ── */
 /* These MUST NOT force display — JS handles that with .hidden / inline style */
 /* Only control scroll & sizing when they ARE visible */
 
 #pos-stock-view:not(.hidden),
 #pos-expenses-view:not(.hidden),
-#pos-credits-view:not(.hidden) {
+#pos-credits-view:not(.hidden),
+#pos-pending-view:not(.hidden) {
   overflow-y: auto !important;
   width: 100% !important;
   height: calc(100vh - 115px) !important;
   padding: 16px !important;
   box-sizing: border-box !important;
+}
+
+/* SME Financial Portal View Scrolling */
+#sme-business.active,
+#sme-business:not(.hidden) {
+  overflow-y: auto !important;
+  width: 100% !important;
+  height: calc(100vh - 50px) !important;
+  max-height: calc(100vh - 50px) !important;
+  padding: 20px !important;
+  box-sizing: border-box !important;
+  display: block !important;
 }
 
 /* Hidden state — stronger than inline style */

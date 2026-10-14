@@ -101,10 +101,19 @@ let GLOBAL_SHIFTS = [
 let GLOBAL_OPERATIONAL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 
 // Dark mode
-(function applyTheme() {
+function applyTheme() {
   const t = localStorage.getItem("jomish_theme") || "light";
   document.documentElement.setAttribute("data-theme", t);
-})();
+  if (t === "dark") {
+    document.documentElement.classList.add("dark-theme");
+    if (document.body) document.body.classList.add("dark-theme");
+  } else {
+    document.documentElement.classList.remove("dark-theme");
+    if (document.body) document.body.classList.remove("dark-theme");
+  }
+}
+applyTheme();
+document.addEventListener("DOMContentLoaded", applyTheme);
 
 // Detect Staging / Test Environment & Show Indicator Badge
 (async function checkEnvironmentBadge() {
@@ -125,6 +134,13 @@ function toggleTheme() {
     document.documentElement.getAttribute("data-theme") || "light";
   const next = current === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
+  if (next === "dark") {
+    document.documentElement.classList.add("dark-theme");
+    if (document.body) document.body.classList.add("dark-theme");
+  } else {
+    document.documentElement.classList.remove("dark-theme");
+    if (document.body) document.body.classList.remove("dark-theme");
+  }
   localStorage.setItem("jomish_theme", next);
 }
 
@@ -646,20 +662,20 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (btnSendToCashier) {
-    btnSendToCashier.addEventListener("click", () => {
+    btnSendToCashier.onclick = () => {
       submitWaiterOrder();
-    });
+    };
   }
 
   if (btnPrintInvoice) {
-    btnPrintInvoice.addEventListener("click", () => {
+    btnPrintInvoice.onclick = () => {
       const _role = (USER_ROLE || "").toUpperCase();
       if (_role === "WAITER") {
         submitWaiterOrder();
       } else if (typeof getInvoice === "function") {
         getInvoice();
       }
-    });
+    };
   }
 
   if (btnCheckout) {
@@ -861,9 +877,11 @@ function initNavigation() {
       switchPOSView("hr");
     });
 
-  // POS Expense Form
+  // POS Expense & Cash In Forms
   const formPosExp = document.getElementById("form-pos-expense");
   if (formPosExp) formPosExp.addEventListener("submit", handlePOSExpenseSubmit);
+  const formPosCashIn = document.getElementById("form-pos-cashin");
+  if (formPosCashIn) formPosCashIn.addEventListener("submit", handlePOSCashInSubmit);
 }
 
 function switchPOSView(viewName) {
@@ -1091,7 +1109,42 @@ async function updateEmployeePermission(empId, permKey, isChecked, checkboxEl) {
   }
 }
 
-// ==== POS EXPENSES ====
+// ==== POS EXPENSES & CASH IN (DRAWER FLOAT) ====
+function setPOSCashTab(mode) {
+  const expenseForm = document.getElementById("form-pos-expense");
+  const cashinForm = document.getElementById("form-pos-cashin");
+  const tabExpense = document.getElementById("tab-btn-expense");
+  const tabCashin = document.getElementById("tab-btn-cashin");
+  const title = document.getElementById("pos-cash-entry-title");
+
+  if (mode === "cashin") {
+    if (expenseForm) expenseForm.style.display = "none";
+    if (cashinForm) cashinForm.style.display = "flex";
+    if (tabExpense) {
+      tabExpense.style.background = "transparent";
+      tabExpense.style.color = "var(--text-muted)";
+    }
+    if (tabCashin) {
+      tabCashin.style.background = "#10B981";
+      tabCashin.style.color = "#fff";
+    }
+    if (title) title.innerHTML = '<i class="fa-solid fa-hand-holding-dollar" style="color:#10B981;"></i> Add Cash to Drawer';
+  } else {
+    if (expenseForm) expenseForm.style.display = "flex";
+    if (cashinForm) cashinForm.style.display = "none";
+    if (tabExpense) {
+      tabExpense.style.background = "#EF4444";
+      tabExpense.style.color = "#fff";
+    }
+    if (tabCashin) {
+      tabCashin.style.background = "transparent";
+      tabCashin.style.color = "var(--text-muted)";
+    }
+    if (title) title.innerHTML = '<i class="fa-solid fa-money-bill-transfer" style="color:#EF4444;"></i> Record Expense';
+  }
+}
+window.setPOSCashTab = setPOSCashTab;
+
 async function loadPOSExpenses() {
   const tbody = document.getElementById("pos-expenses-tbody");
   if (!tbody) return;
@@ -1102,9 +1155,9 @@ async function loadPOSExpenses() {
     const res = await fetchAuth(`${API_URL}/transactions`);
     const data = await res.json();
 
-    // Filter only EXPENSE type transactions
-    const expenses = (data.transactions || []).filter(
-      (t) => t.type === "EXPENSE",
+    // Filter EXPENSE and CASH_IN / FLOAT transactions
+    const txs = (data.transactions || []).filter(
+      (t) => t.type === "EXPENSE" || t.type === "CASH_IN" || t.type === "FLOAT_IN",
     );
 
     // Compute totals
@@ -1113,11 +1166,16 @@ async function loadPOSExpenses() {
       .toISOString()
       .split("T")[0];
 
-    let todayTotal = 0,
-      allTotal = 0;
-    expenses.forEach((t) => {
+    let todayExp = 0,
+      todayCashIn = 0,
+      allExp = 0;
+
+    txs.forEach((t) => {
       const amt = parseFloat(t.amount) || 0;
-      allTotal += amt;
+      const isCashIn = t.type === "CASH_IN" || t.type === "FLOAT_IN";
+
+      if (!isCashIn) allExp += amt;
+
       const txDate = new Date(
         String(t.transaction_date).replace(" ", "T") +
           (t.transaction_date.includes("Z") ? "" : "Z"),
@@ -1125,28 +1183,46 @@ async function loadPOSExpenses() {
       const txDateEAT = new Date(txDate.getTime() + EAT_OFFSET_MS)
         .toISOString()
         .split("T")[0];
-      if (txDateEAT === todayEAT) todayTotal += amt;
+
+      if (txDateEAT === todayEAT) {
+        if (isCashIn) {
+          todayCashIn += amt;
+        } else {
+          todayExp += amt;
+        }
+      }
     });
 
     // Update summary pills
-    const todayEl = document.getElementById("pos-exp-today");
-    const totalEl = document.getElementById("pos-exp-total");
-    if (todayEl) todayEl.textContent = `UGX ${todayTotal.toLocaleString()}`;
-    if (totalEl) totalEl.textContent = `UGX ${allTotal.toLocaleString()}`;
+    const todayExpEl = document.getElementById("pos-exp-today");
+    const todayCashinEl = document.getElementById("pos-cashin-today");
+    const totalExpEl = document.getElementById("pos-exp-total");
+    if (todayExpEl) todayExpEl.textContent = `UGX ${todayExp.toLocaleString()}`;
+    if (todayCashinEl) todayCashinEl.textContent = `UGX ${todayCashIn.toLocaleString()}`;
+    if (totalExpEl) totalExpEl.textContent = `UGX ${allExp.toLocaleString()}`;
 
     // Populate table
     tbody.innerHTML = "";
-    if (expenses.length === 0) {
+    if (txs.length === 0) {
       tbody.innerHTML =
-        '<tr><td colspan="4" style="text-align:center; padding:40px; color:#94A3B8;">No expenses recorded yet.</td></tr>';
+        '<tr><td colspan="4" style="text-align:center; padding:40px; color:#94A3B8;">No expenses or cash additions recorded yet.</td></tr>';
       return;
     }
 
-    expenses.forEach((t) => {
-      // Parse description: "Category | Note" format
-      const parts = (t.description || "").split(" | ");
-      const category = parts.length > 1 ? parts[0] : "General";
-      const desc = parts.length > 1 ? parts[1] : t.description || "—";
+    txs.forEach((t) => {
+      const isCashIn = t.type === "CASH_IN" || t.type === "FLOAT_IN";
+      const amt = parseFloat(t.amount) || 0;
+
+      let category = "General";
+      let desc = t.description || "—";
+
+      if (isCashIn) {
+        category = "Cash In";
+      } else {
+        const parts = (t.description || "").split(" | ");
+        category = parts.length > 1 ? parts[0] : "General";
+        desc = parts.length > 1 ? parts[1] : t.description || "—";
+      }
 
       const categoryColors = {
         Supplies: "#F59E0B",
@@ -1157,24 +1233,28 @@ async function loadPOSExpenses() {
         General: "#94A3B8",
         Other: "#64748B",
       };
-      const catColor = categoryColors[category] || "#94A3B8";
+      const catColor = isCashIn ? "#10B981" : (categoryColors[category] || "#94A3B8");
 
       const tr = document.createElement("tr");
       tr.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
       tr.innerHTML = `
-                <td style="padding:12px; font-size:0.82rem; color:#94A3B8; white-space:nowrap;">${formatDisplayDate(t.transaction_date, true)}</td>
-                <td style="padding:12px;">
-                    <span style="background:${catColor}22; color:${catColor}; border:1px solid ${catColor}44; padding:3px 9px; border-radius:20px; font-size:0.72rem; font-weight:600; white-space:nowrap;">${category}</span>
-                </td>
-                <td style="padding:12px; font-size:0.88rem; color:var(--text);">${desc}</td>
-                <td style="padding:12px; text-align:right; font-weight:700; color:#EF4444; white-space:nowrap;">UGX ${parseFloat(t.amount).toLocaleString()}</td>
-            `;
+        <td style="padding:12px; font-size:0.82rem; color:#94A3B8; white-space:nowrap;">${formatDisplayDate(t.transaction_date, true)}</td>
+        <td style="padding:12px;">
+          <span style="background:${catColor}22; color:${catColor}; border:1px solid ${catColor}55; padding:3px 9px; border-radius:20px; font-size:0.72rem; font-weight:700; white-space:nowrap;">
+            ${isCashIn ? '<i class="fa-solid fa-arrow-down-long"></i> Cash In' : category}
+          </span>
+        </td>
+        <td style="padding:12px; font-size:0.88rem; color:var(--text);">${desc}</td>
+        <td style="padding:12px; text-align:right; font-weight:700; color:${isCashIn ? '#10B981' : '#EF4444'}; white-space:nowrap;">
+          ${isCashIn ? '+UGX ' : '-UGX '}${amt.toLocaleString()}
+        </td>
+      `;
       tbody.appendChild(tr);
     });
   } catch (e) {
     console.error("Load POS Expenses Error:", e);
     tbody.innerHTML =
-      '<tr><td colspan="4" style="text-align:center; padding:30px; color:#EF4444;">Failed to load expenses.</td></tr>';
+      '<tr><td colspan="4" style="text-align:center; padding:30px; color:#EF4444;">Failed to load transactions.</td></tr>';
   }
 }
 
@@ -1216,7 +1296,7 @@ async function handlePOSExpenseSubmit(e) {
       );
       e.target.reset();
       loadPOSExpenses();
-      loadDashboard(); // Refresh financial intelligence cards
+      if (typeof loadDashboard === "function") loadDashboard();
     } else {
       const data = await res.json();
       showToast(data.error || "Failed to save expense.", "danger");
@@ -1231,6 +1311,64 @@ async function handlePOSExpenseSubmit(e) {
     }
   }
 }
+
+async function handlePOSCashInSubmit(e) {
+  e.preventDefault();
+  const btn = e.submitter || e.target.querySelector('[type="submit"]');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Adding Cash...";
+  }
+
+  const amount = parseFloat(document.getElementById("pos-cashin-amount")?.value);
+  const purpose = document.getElementById("pos-cashin-purpose")?.value || "Cash Drawer Float";
+  const auth = document.getElementById("pos-cashin-auth")?.value?.trim() || "Admin";
+  const notes = document.getElementById("pos-cashin-notes")?.value?.trim() || "";
+
+  if (!amount || amount <= 0) {
+    showToast("Please enter a valid cash amount.", "danger");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "+ Add Cash to Drawer";
+    }
+    return;
+  }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/pos/cash-in`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount,
+        purpose,
+        authorized_by: auth,
+        notes,
+      }),
+    });
+
+    if (res.ok) {
+      showToast(
+        `UGX ${amount.toLocaleString()} added to drawer float successfully!`,
+        "success",
+      );
+      e.target.reset();
+      loadPOSExpenses();
+      if (typeof loadDashboard === "function") loadDashboard();
+    } else {
+      const data = await res.json();
+      showToast(data.error || "Failed to add cash to drawer.", "danger");
+    }
+  } catch (err) {
+    console.error("Cash In Submit Error:", err);
+    showToast("Network error. Please check server.", "danger");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "+ Add Cash to Drawer";
+    }
+  }
+}
+window.handlePOSCashInSubmit = handlePOSCashInSubmit;
 
 async function saveBusinessConfig() {
   const config = {
@@ -4036,8 +4174,12 @@ async function confirmPayment() {
 // ── WAITER ORDER SUBMISSION ────────────────────────────────────────────────
 // Waiter places a pending order (COD) — prints invoice/token, sends order to pending queue.
 // The Cashier will see it in the Pending tab with 'Served by: [1st name]' and collect payment later.
+let _isSubmittingWaiterOrder = false;
 async function submitWaiterOrder() {
+  if (_isSubmittingWaiterOrder) return;
   if (posCart.length === 0) return alert("Cart is empty!");
+  _isSubmittingWaiterOrder = true;
+
   const total =
     parseFloat(document.getElementById("btn-checkout")?.getAttribute("data-total")) ||
     posCart.reduce((sum, item) => sum + (item.price * (item.qty || 1)), 0);
@@ -4123,6 +4265,10 @@ async function submitWaiterOrder() {
       btnWaiter.disabled = false;
       btnWaiter.innerHTML = origHtml;
     }
+  } finally {
+    setTimeout(() => {
+      _isSubmittingWaiterOrder = false;
+    }, 2000);
   }
 }
 window.submitWaiterOrder = submitWaiterOrder;
@@ -4558,6 +4704,7 @@ window.printEndShiftReport = function(report) {
         <div class="row"><span>Mobile Money:</span><span>UGX ${report.momo_sales.toLocaleString()}</span></div>
         <div class="row"><span>Total Sales:</span><span>UGX ${report.total_sales.toLocaleString()}</span></div>
         <div class="row"><span>Expenses Paid:</span><span>UGX ${report.expenses.toLocaleString()}</span></div>
+        <div class="row" style="color:#16a34a; font-weight:bold;"><span>Cash In / Float:</span><span>+UGX ${(report.cash_in || 0).toLocaleString()}</span></div>
         <div class="divider"></div>
         <div class="row bold" style="font-size:13pt;"><span>End Cash:</span><span>UGX ${report.end_cash.toLocaleString()}</span></div>
         <div class="divider"></div>
@@ -4824,33 +4971,45 @@ function _printHTMLQueue(htmlArray) {
   iframe.style.cssText = "position:absolute;width:0;height:0;border:none;left:-9999px;top:-9999px;";
   document.body.appendChild(iframe);
 
+  let printTriggered = false;
+  let nextFired = false;
+
+  const triggerNext = () => {
+    if (nextFired) return;
+    nextFired = true;
+    setTimeout(() => {
+      if (document.body.contains(iframe)) iframe.remove();
+    }, 1200);
+    _printHTMLQueue(htmlArray); // recursively print the next
+  };
+
+  const doPrintOnce = () => {
+    if (printTriggered) return;
+    printTriggered = true;
+    try {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch (e) {
+      console.warn("Print execution error:", e);
+    }
+
+    if ("onafterprint" in iframe.contentWindow) {
+      iframe.contentWindow.addEventListener("afterprint", triggerNext, { once: true });
+    }
+    setTimeout(triggerNext, 3000);
+  };
+
+  iframe.onload = doPrintOnce;
+
   const doc = iframe.contentWindow.document;
   doc.open();
   doc.write(html);
   doc.close();
 
-  iframe.onload = () => {
-    iframe.contentWindow.focus();
-    iframe.contentWindow.print();
-    
-    let nextFired = false;
-    const triggerNext = () => {
-      if (nextFired) return;
-      nextFired = true;
-      setTimeout(() => {
-        if (document.body.contains(iframe)) iframe.remove();
-      }, 2000);
-      _printHTMLQueue(htmlArray); // recursively print the next
-    };
-
-    // If browser supports afterprint, trigger next job when dialog closes
-    if ('onafterprint' in iframe.contentWindow) {
-      iframe.contentWindow.addEventListener('afterprint', triggerNext);
-    }
-    
-    // Fallback timer: in case afterprint isn't fired, wait 3 seconds before next print
-    setTimeout(triggerNext, 3000);
-  };
+  // Failsafe in case doc.close() finished immediately and onload did not fire
+  setTimeout(() => {
+    if (!printTriggered) doPrintOnce();
+  }, 250);
 }
 
 /**

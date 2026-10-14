@@ -268,7 +268,7 @@ select:focus {
 }
 
 /* ── DARK MODE SKEUOMORPHISM ── */
-body.dark-theme, html.dark-theme {
+body.dark-theme, html.dark-theme, [data-theme="dark"], html[data-theme="dark"] body {
   --background:   #1e2433;
   --surface:      #252b3b;
   --surface-2:    #2a3145;
@@ -282,18 +282,55 @@ body.dark-theme, html.dark-theme {
 }
 
 body.dark-theme .secondary-btn,
-body.dark-theme .pos-nav-links button:not(#pos-nav-finance):not([class*="primary"]) {
+html[data-theme="dark"] .secondary-btn,
+body.dark-theme .pos-nav-links button:not(#pos-nav-finance):not([class*="primary"]),
+html[data-theme="dark"] .pos-nav-links button:not(#pos-nav-finance):not([class*="primary"]) {
   background: linear-gradient(145deg, #2e3749, #1e2433) !important;
   color: var(--text) !important;
 }
 
-body.dark-theme .num-key:not(.clear-key):not(.del-key):not(.exact-key) {
+body.dark-theme .num-key:not(.clear-key):not(.del-key):not(.exact-key),
+html[data-theme="dark"] .num-key:not(.clear-key):not(.del-key):not(.exact-key) {
   background: linear-gradient(145deg, #2e3749, #1e2433) !important;
   color: var(--text) !important;
 }
 
-body.dark-theme .cart-summary {
+body.dark-theme .cart-summary,
+html[data-theme="dark"] .cart-summary {
   background: linear-gradient(160deg, #1e2433, #252b3b) !important;
+}
+
+body.dark-theme .card,
+html[data-theme="dark"] .card {
+  background: var(--surface) !important;
+  border-color: var(--border) !important;
+  box-shadow: var(--nm-out) !important;
+}
+
+body.dark-theme thead tr th,
+html[data-theme="dark"] thead tr th {
+  background: linear-gradient(145deg, #252b3b, #1e2433) !important;
+  color: var(--text-muted) !important;
+  box-shadow: 2px 2px 5px #161b27, -2px -2px 5px #2e3749 !important;
+}
+
+body.dark-theme tbody tr,
+html[data-theme="dark"] tbody tr {
+  background: var(--surface) !important;
+  box-shadow: 2px 2px 6px #161b27, -2px -2px 6px #2e3749 !important;
+}
+
+body.dark-theme tbody tr:hover,
+html[data-theme="dark"] tbody tr:hover {
+  background: var(--surface-2) !important;
+  box-shadow: 3px 3px 8px #161b27, -3px -3px 8px #2e3749 !important;
+}
+
+body.dark-theme input, body.dark-theme select, body.dark-theme textarea,
+html[data-theme="dark"] input, html[data-theme="dark"] select, html[data-theme="dark"] textarea {
+  background: var(--background) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
 }
 
 /* ── MODALS ── */
@@ -384,18 +421,72 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
   min-height: 0 !important;
 }
 
-/* ── FULL-PAGE SUB-VIEWS (Inventory, Expenses, Credits) ── */
+/* ── FULL-PAGE SUB-VIEWS (Inventory, Expenses, Credits, Pending Orders) ── */
 /* These MUST NOT force display — JS handles that with .hidden / inline style */
 /* Only control scroll & sizing when they ARE visible */
 
 #pos-stock-view:not(.hidden),
 #pos-expenses-view:not(.hidden),
-#pos-credits-view:not(.hidden) {
+#pos-credits-view:not(.hidden),
+#pos-pending-view:not(.hidden) {
   overflow-y: auto !important;
   width: 100% !important;
   height: calc(100vh - 115px) !important;
   padding: 16px !important;
   box-sizing: border-box !important;
+}
+
+/* SME Financial Portal View Scrolling */
+#sme-business.active,
+#sme-business:not(.hidden) {
+  overflow-y: auto !important;
+  width: 100% !important;
+  height: calc(100vh - 50px) !important;
+  max-height: calc(100vh - 50px) !important;
+  padding: 20px !important;
+  box-sizing: border-box !important;
+  display: block !important;
+}
+
+/* Visible, smooth scrollbars for POS views and tables */
+#pos-pending-view::-webkit-scrollbar,
+#sme-business::-webkit-scrollbar,
+#pos-stock-view::-webkit-scrollbar,
+#pos-expenses-view::-webkit-scrollbar,
+#pos-credits-view::-webkit-scrollbar,
+.pos-sub-view::-webkit-scrollbar,
+.table-container::-webkit-scrollbar {
+  width: 8px !important;
+  height: 8px !important;
+}
+#pos-pending-view::-webkit-scrollbar-track,
+#sme-business::-webkit-scrollbar-track,
+#pos-stock-view::-webkit-scrollbar-track,
+#pos-expenses-view::-webkit-scrollbar-track,
+#pos-credits-view::-webkit-scrollbar-track,
+.pos-sub-view::-webkit-scrollbar-track,
+.table-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05) !important;
+  border-radius: 4px !important;
+}
+#pos-pending-view::-webkit-scrollbar-thumb,
+#sme-business::-webkit-scrollbar-thumb,
+#pos-stock-view::-webkit-scrollbar-thumb,
+#pos-expenses-view::-webkit-scrollbar-thumb,
+#pos-credits-view::-webkit-scrollbar-thumb,
+.pos-sub-view::-webkit-scrollbar-thumb,
+.table-container::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.5) !important;
+  border-radius: 4px !important;
+}
+#pos-pending-view::-webkit-scrollbar-thumb:hover,
+#sme-business::-webkit-scrollbar-thumb:hover,
+#pos-stock-view::-webkit-scrollbar-thumb:hover,
+#pos-expenses-view::-webkit-scrollbar-thumb:hover,
+#pos-credits-view::-webkit-scrollbar-thumb:hover,
+.pos-sub-view::-webkit-scrollbar-thumb:hover,
+.table-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.8) !important;
 }
 
 /* Hidden state — stronger than inline style */
