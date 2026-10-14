@@ -2468,11 +2468,17 @@ function enforceRBAC() {
   const editBuyingPriceGroup = document.getElementById("edit-prod-buying-price")?.parentElement;
   if (editBuyingPriceGroup) editBuyingPriceGroup.style.display = canSeeAdminStuff ? "block" : "none";
 
-  // Auto-switch to first visible POS tab if currently on a hidden tab
+  // Auto-switch to first visible POS tab only when:
+  //  1. The POS terminal section is currently active (user already navigated to it), AND
+  //  2. The sub-view that is currently shown has had its nav tab hidden by RBAC.
+  // This must NOT fire on initial page load (where switchPOSView below handles the landing view).
   setTimeout(() => {
+    const posTerminal = document.getElementById("pos-terminal");
+    const isPOSActive = posTerminal && posTerminal.classList.contains("active");
+    if (!isPOSActive) return; // not on POS terminal yet — role-based init handles it
+
     const currentView = document.querySelector(".pos-sub-view:not(.hidden)[style*='display: block'], .pos-sub-view:not(.hidden):not([style*='display: none'])");
     if (currentView) {
-      // Check if the nav button for this view is visible
       const viewToNav = {
         "pos-register-view": "pos-nav-register",
         "pos-stock-view":    "pos-nav-stock",
@@ -2484,8 +2490,8 @@ function enforceRBAC() {
       const navId = viewToNav[currentView.id];
       const navBtn = navId ? document.getElementById(navId) : null;
       if (navBtn && navBtn.style.display === "none") {
-        // Current tab is now hidden — switch to first visible
-        const posNavOrder = ["pos-nav-register", "pos-nav-finance", "pos-nav-expenses", "pos-nav-stock", "pos-nav-credits", "pos-nav-hr"];
+        // Current tab is now hidden — switch to first visible POS tab
+        const posNavOrder = ["pos-nav-register", "pos-nav-stock", "pos-nav-expenses", "pos-nav-credits", "pos-nav-finance", "pos-nav-hr"];
         const firstVisibleTab = posNavOrder
           .map(id => document.getElementById(id))
           .find(btn => btn && btn.style.display !== "none");
@@ -2494,17 +2500,18 @@ function enforceRBAC() {
     }
   }, 100);
 
-  // Default POS landing view per role
+  // Default POS landing view per role — use 400ms so this always fires AFTER
+  // the auto-switch above, ensuring the correct initial sub-view wins.
   if (isTech) {
-    setTimeout(() => switchPOSView("tech"), 150);       // Tech → Tech Hub
+    setTimeout(() => switchPOSView("tech"), 400);       // Tech → Tech Hub
   } else if (isWaiter) {
-    setTimeout(() => switchPOSView("register"), 150);   // Waiter → Register only
+    setTimeout(() => switchPOSView("register"), 400);   // Waiter → Register only
   } else if (isCashier) {
-    setTimeout(() => switchPOSView("register"), 150);   // Cashier → Register
+    setTimeout(() => switchPOSView("register"), 400);   // Cashier → Register
   } else if (isAdminLike) {
-    setTimeout(() => switchPOSView("stock"), 150);      // Admin-like → Inventory
+    setTimeout(() => switchPOSView("stock"), 400);      // Admin-like → Inventory
   } else if (isSupervisor || isHRRole) {
-    setTimeout(() => switchPOSView("expenses"), 150);   // Supervisor/HR → Expenses
+    setTimeout(() => switchPOSView("expenses"), 400);   // Supervisor/HR → Expenses
   }
 }
 
