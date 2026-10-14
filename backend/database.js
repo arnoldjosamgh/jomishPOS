@@ -39,7 +39,7 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 142;
+const CURRENT_VERSION = 145;
 
 if (config.dbType === 'postgres') {
     const pool = new Pool(config.postgres);
@@ -606,6 +606,18 @@ const schema = [
         qty INTEGER,
         price REAL,
         total REAL
+    )`,
+    `CREATE TABLE IF NOT EXISTS stock_movements (
+        id SERIAL PRIMARY KEY,
+        product_id INTEGER NOT NULL,
+        product_name TEXT,
+        movement_type TEXT NOT NULL,
+        qty INTEGER NOT NULL,
+        stock_before INTEGER,
+        stock_after INTEGER,
+        note TEXT,
+        performed_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`
 ];
 
@@ -1371,6 +1383,61 @@ function runMigrations(fromVersion) {
                 db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '143'], () => {
                     console.log('Migration to v143 complete: Added served_by and waiter_id to pos_orders.');
                 });
+            });
+        });
+    }
+
+    if (fromVersion < 144) {
+        // v144: Add low_stock_threshold to products so each product can have its own alert level
+        const alterSql = config.dbType === 'postgres'
+            ? "ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INTEGER DEFAULT 10"
+            : "ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER DEFAULT 10";
+        db.run(alterSql, (err) => {
+            if (err && !err.message.includes('duplicate column') && !err.message.includes('already exists')) {
+                console.error('[Migration v144]', err.message);
+            }
+            db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '144'], () => {
+                console.log('Migration to v144 complete: Added low_stock_threshold to products.');
+            });
+        });
+    }
+
+    if (fromVersion < 145) {
+        // v145: Create stock_movements table for full inventory audit trail
+        const sql = config.dbType === 'postgres'
+            ? `CREATE TABLE IF NOT EXISTS stock_movements (
+                id SERIAL PRIMARY KEY,
+                product_id INTEGER NOT NULL,
+                product_name TEXT,
+                movement_type TEXT NOT NULL,
+                qty INTEGER NOT NULL,
+                stock_before INTEGER,
+                stock_after INTEGER,
+                note TEXT,
+                performed_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )`
+            : `CREATE TABLE IF NOT EXISTS stock_movements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                product_name TEXT,
+                movement_type TEXT NOT NULL,
+                qty INTEGER NOT NULL,
+                stock_before INTEGER,
+                stock_after INTEGER,
+                note TEXT,
+                performed_by TEXT,
+                created_at DATETIME DEFAULT (datetime('now'))
+            )`;
+        db.run(sql, (err) => {
+            if (err && !err.message.includes('already exists')) {
+                console.error('[Migration v145] Error creating stock_movements:', err.message);
+                return;
+            }
+            db.run('CREATE INDEX IF NOT EXISTS idx_sm_product ON stock_movements(product_id)');
+            db.run('CREATE INDEX IF NOT EXISTS idx_sm_created ON stock_movements(created_at)');
+            db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '145'], () => {
+                console.log('Migration to v145 complete: Created stock_movements table.');
             });
         });
     }

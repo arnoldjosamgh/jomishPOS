@@ -223,7 +223,7 @@
                                 <th>Amount</th>
                                 <th>Type</th>
                                 <th>Description</th>
-                                <th>Cashier</th>
+                                <th>Served By</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -913,6 +913,10 @@
                     <input type="checkbox" id="add-prod-track-stock" checked style="width:18px;height:18px;accent-color:var(--primary); cursor:pointer;">
                     <label for="add-prod-track-stock" style="margin:0; font-weight:600; cursor:pointer; font-size:0.9rem;">Track Stock / Inventory (uncheck for Made-To-Order items)</label>
                 </div>
+                <div class="form-group" id="add-prod-threshold-row">
+                    <label>Low Stock Alert Threshold <span style="font-size:0.75rem;color:#94A3B8;">(notify when stock falls below this)</span></label>
+                    <input type="number" id="add-prod-low-stock-threshold" value="10" min="0" placeholder="10" style="width:100px;">
+                </div>
                 <div class="form-group">
                     <label>Product Image</label>
                     <input type="file" id="add-prod-photo" accept="image/*" onchange="quickUploadPhoto(this, 'prod-photo-preview')">
@@ -1007,6 +1011,10 @@
                     <input type="checkbox" id="edit-prod-track-stock" style="width:18px;height:18px;accent-color:var(--primary); cursor:pointer;">
                     <label for="edit-prod-track-stock" style="margin:0; font-weight:600; cursor:pointer; font-size:0.9rem;">Track Stock / Inventory</label>
                 </div>
+                <div class="form-group" id="edit-prod-threshold-row">
+                    <label>Low Stock Alert Threshold <span style="font-size:0.75rem;color:#94A3B8;">(notify when stock falls below this)</span></label>
+                    <input type="number" id="edit-prod-low-stock-threshold" value="10" min="0" placeholder="10" style="width:100px;">
+                </div>
                 <div class="form-group">
                     <label>Replace Photo <span style="color:var(--text-muted); font-size:0.8rem;">(optional — leave empty to keep current)</span></label>
                     <input type="file" id="edit-prod-photo" accept="image/*" onchange="previewEditPhoto(this)" style="padding:10px; background:var(--background); border:1px solid var(--border); width:100%; border-radius:6px;">
@@ -1021,6 +1029,57 @@
             </form>
         </div>
     </div>
+
+    <!-- Stock Movements Modal -->
+    <div id="stock-movements-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:700px;">
+            <header style="display:flex; justify-content:space-between; align-items:center;">
+                <h2><i class="fa-solid fa-chart-line" style="color:var(--primary);"></i> Stock Movement History</h2>
+                <button type="button" onclick="document.getElementById('stock-movements-modal').classList.add('hidden')" style="background:none;border:none;cursor:pointer;font-size:1.5rem;color:var(--text-muted);">×</button>
+            </header>
+            <div id="stock-movement-product-info" style="margin:12px 0; padding:10px; background:var(--background); border-radius:8px; font-size:0.9rem; color:var(--text-muted);"></div>
+            <div id="stock-movements-content" style="max-height:420px; overflow-y:auto; margin-top:12px;">
+                <div style="text-align:center; padding:40px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading movements...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Pending Order Modal (Cashier) -->
+    <div id="edit-pending-order-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:650px;">
+            <header style="display:flex; justify-content:space-between; align-items:center;">
+                <h2><i class="fa-solid fa-pen-to-square" style="color:var(--primary);"></i> Edit Order</h2>
+                <button type="button" onclick="closeEditPendingOrderModal()" style="background:none;border:none;cursor:pointer;font-size:1.5rem;color:var(--text-muted);">&times;</button>
+            </header>
+            <div id="edit-order-info" style="margin:12px 0; padding:10px; background:var(--background); border-radius:8px; font-size:0.9rem; color:var(--text-muted);"></div>
+            
+            <!-- Items List -->
+            <div style="margin-bottom:12px;">
+                <label style="font-weight:600; font-size:0.9rem;">Order Items</label>
+                <div id="edit-order-items-list" style="max-height:260px; overflow-y:auto; margin-top:8px; border:1px solid var(--border); border-radius:8px; padding:8px;"></div>
+            </div>
+
+            <!-- Add Product to Order -->
+            <div style="margin-bottom:16px; padding:10px; background:var(--background); border-radius:8px;">
+                <label style="font-size:0.85rem; font-weight:600; display:block; margin-bottom:6px;">Add Product to this Order</label>
+                <div style="display:flex; gap:8px;">
+                    <select id="edit-order-add-product-select" style="flex:1; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
+                        <option value="">-- Choose Product to Add --</option>
+                    </select>
+                    <button type="button" class="secondary-btn" onclick="addSelectedProductToEditOrder()"><i class="fa-solid fa-plus"></i> Add</button>
+                </div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:14px;">
+                <div style="font-size:1.1rem; font-weight:700;">New Total: <span id="edit-order-new-total" style="color:var(--primary);">UGX 0</span></div>
+                <div style="display:flex; gap:10px;">
+                    <button type="button" class="secondary-btn" onclick="closeEditPendingOrderModal()">Cancel</button>
+                    <button type="button" class="primary-btn" id="btn-save-edit-order" onclick="saveEditedPendingOrder()"><i class="fa-solid fa-check"></i> Save Order Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Calendar Event Modal -->
     <div id="cal-event-modal" class="modal hidden">
         <div class="modal-content" style="max-width:480px;">
@@ -1455,6 +1514,6 @@
     </div>
 
     <script src="offline-db.js?v=2"></script>
-    <script src="app.js?v=36"></script>
+    <script src="app.js?v=37"></script>
 </body>
 </html>

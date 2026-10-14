@@ -33,6 +33,53 @@ let barcodeBuffer = "";
 let lastKeyTime = Date.now();
 let soldBarcodes = new Set();
 let isPrinting = false;
+const _printedReceiptNos = new Set();
+const _productPhotoCache = new Map();
+
+function lazyLoadProductImages() {
+  const imgs = document.querySelectorAll("img.lazy-prod-photo[data-photo-id]");
+  if (!imgs.length) return;
+  if ("IntersectionObserver" in window) {
+    const observer = new IntersectionObserver((entries, obs) => {
+      entries.forEach(async (entry) => {
+        if (entry.isIntersecting) {
+          const img = entry.target;
+          obs.unobserve(img);
+          const pId = img.dataset.photoId;
+          if (_productPhotoCache.has(pId)) {
+            const cachedUrl = _productPhotoCache.get(pId);
+            if (cachedUrl) img.src = cachedUrl;
+            return;
+          }
+          try {
+            const res = await fetchAuth(`${API_URL}/products/${pId}/photo`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.photo_base64) {
+                _productPhotoCache.set(pId, data.photo_base64);
+                img.src = data.photo_base64;
+              } else {
+                _productPhotoCache.set(pId, null);
+              }
+            }
+          } catch (_) {}
+        }
+      });
+    });
+    imgs.forEach((img) => observer.observe(img));
+  } else {
+    imgs.forEach(async (img) => {
+      const pId = img.dataset.photoId;
+      try {
+        const res = await fetchAuth(`${API_URL}/products/${pId}/photo`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.photo_base64) img.src = data.photo_base64;
+        }
+      } catch (_) {}
+    });
+  }
+}
 let GLOBAL_SHIFTS = [
   {
     id: "morning",
@@ -577,10 +624,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
   if (_currentRole === "WAITER") {
-    // Waiter sends order to cashier — no payment collection, no invoice printing, no shift
+    // Waiter prints kitchen token & sends order to cashier
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
-    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "block", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) {
+      btnPrintInvoice.style.setProperty("display", "block", "important");
+      btnPrintInvoice.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+    }
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (_currentRole === "CASHIER") {
     // Cashier can pay, print invoice, and end shift
@@ -603,7 +653,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnPrintInvoice) {
     btnPrintInvoice.addEventListener("click", () => {
-      if (typeof getInvoice === "function") {
+      const _role = (USER_ROLE || "").toUpperCase();
+      if (_role === "WAITER") {
+        submitWaiterOrder();
+      } else if (typeof getInvoice === "function") {
         getInvoice();
       }
     });
@@ -3442,6 +3495,10 @@ async function loadPOSProducts(searchTerm = "") {
         imageHtml = `<div class="product-img-container">
                     <img src="${p.photo_base64}" alt="${prodName}" loading="lazy">
                 </div>`;
+      } else if (p.has_photo) {
+        imageHtml = `<div class="product-img-container">
+                    <img data-photo-id="${p.id}" class="lazy-prod-photo" alt="${prodName}" loading="lazy" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3C/svg%3E">
+                </div>`;
       } else {
         const initial = prodName[0].toUpperCase();
         imageHtml = `<div class="product-img-container placeholder ${catClass}">
@@ -3471,6 +3528,7 @@ async function loadPOSProducts(searchTerm = "") {
       grid.appendChild(card);
     });
 
+    lazyLoadProductImages();
     // Run active inventory filter
     window.filterInventory();
   } catch (e) {
@@ -3991,6 +4049,13 @@ async function submitWaiterOrder() {
   const rawName = USER_NAME || localStorage.getItem("jomish_name") || "Waiter";
   const waiterFirstName = rawName.trim().split(/\s+/)[0] || "Waiter";
 
+  const btnPrintInvoice = document.getElementById("btn-print-invoice");
+  const origHtml = btnPrintInvoice ? btnPrintInvoice.innerHTML : "";
+  if (btnPrintInvoice) {
+    btnPrintInvoice.disabled = true;
+    btnPrintInvoice.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting...';
+  }
+
   try {
     const res = await fetchAuth(`${API_URL}/checkout`, {
       method: "POST",
@@ -4008,18 +4073,54 @@ async function submitWaiterOrder() {
       }),
     });
     if (res.ok) {
-      showToast(`Order sent to cashier! (Served by ${waiterFirstName})`, "success");
+      const data = await res.json();
+      showToast(`Order sent to cashier & kitchen token printed! (Served by ${waiterFirstName})`, "success");
+
+      // Print ONLY the kitchen token for waiter
+      const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
+      const orderNo = String(data.receipt_no || data.transaction_id || data.pos_order_id || Math.floor(Math.random() * 9999)).padStart(4, "0");
+      const tokenData = {
+        isInvoice: false,
+        printTokenOnly: true,
+        orderId: orderNo,
+        dateStr,
+        cashierName: waiterFirstName,
+        servedBy: waiterFirstName,
+        items: posCart.map((i) => ({ name: i.name, qty: i.qty || 1, price: i.price })),
+      };
+      _printHTMLQueue([_buildKitchenTokenHTML(tokenData)]);
+
       posCart = [];
       renderCart();
       loadPOSProducts();
       if (buyerNameEl) buyerNameEl.value = "";
       if (buyerPhoneEl) buyerPhoneEl.value = "";
+
+      if (btnPrintInvoice) {
+        btnPrintInvoice.style.opacity = "0.4";
+        btnPrintInvoice.style.pointerEvents = "none";
+        btnPrintInvoice.innerHTML = '<i class="fa-solid fa-check"></i> Printed';
+        setTimeout(() => {
+          btnPrintInvoice.disabled = false;
+          btnPrintInvoice.style.opacity = "1";
+          btnPrintInvoice.style.pointerEvents = "auto";
+          btnPrintInvoice.innerHTML = origHtml || '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+        }, 3500);
+      }
     } else {
       const data = await res.json();
       alert("Error: " + data.error);
+      if (btnPrintInvoice) {
+        btnPrintInvoice.disabled = false;
+        btnPrintInvoice.innerHTML = origHtml;
+      }
     }
   } catch (e) {
     alert("Failed to submit order: " + e.message);
+    if (btnPrintInvoice) {
+      btnPrintInvoice.disabled = false;
+      btnPrintInvoice.innerHTML = origHtml;
+    }
   }
 }
 window.submitWaiterOrder = submitWaiterOrder;
@@ -4763,12 +4864,25 @@ function doPrint() {
 
   const queue = [];
   
-  if (d.isInvoice) {
+  if (d.printTokenOnly) {
     queue.push(_buildKitchenTokenHTML(d));
+  } else {
+    queue.push(_buildReceiptHTML(d));
   }
-  queue.push(_buildReceiptHTML(d));
   
   _printHTMLQueue(queue);
+
+  if (d.orderId) {
+    _printedReceiptNos.add(Number(d.orderId));
+  }
+
+  const printBtn = document.getElementById("btn-do-print");
+  if (printBtn) {
+    printBtn.disabled = true;
+    printBtn.style.opacity = "0.4";
+    printBtn.style.pointerEvents = "none";
+    printBtn.innerHTML = '<i class="fa-solid fa-check"></i> Printed';
+  }
 }
 
 // ==== HARDWARE TEST PRINT FUNCTIONS ====
@@ -6971,9 +7085,10 @@ window.filterInventory = function(query) {
     // Check sub-tab filter (All vs Low Stock vs Out of Stock)
     const isInfinite = card.dataset.trackStock === "0";
     const stock = parseFloat(card.dataset.stock) || 0;
+    const thresh = parseFloat(card.dataset.lowStockThreshold) || 10;
     let tabMatches = true;
     if (window.currentInventoryTab === "low") {
-      tabMatches = !isInfinite && stock < 10;
+      tabMatches = !isInfinite && stock < thresh;
     } else if (window.currentInventoryTab === "out") {
       tabMatches = !isInfinite && stock <= 0;
     }
@@ -7044,7 +7159,7 @@ async function loadInventory() {
     if (totalCountBarEl) totalCountBarEl.textContent = prods.length.toLocaleString();
 
     // Update Dashboard Low Stock Count (exclude infinite-stock / made-to-order products)
-    const lowStock = prods.filter((p) => p.track_stock !== 0 && p.stock < 10);
+    const lowStock = prods.filter((p) => p.track_stock !== 0 && p.stock < (p.low_stock_threshold || 10));
     const outStock = prods.filter((p) => p.track_stock !== 0 && p.stock <= 0);
     const lowStockCountEl = document.getElementById("stat-low-stock-count");
     if (lowStockCountEl) {
@@ -7069,11 +7184,13 @@ async function loadInventory() {
 
     prods.forEach((p) => {
       const isInfinite = p.track_stock === 0;
+      const thresh = p.low_stock_threshold || 10;
       const card = document.createElement("div");
-      card.className = `product-card management-card ${!isInfinite && p.stock < 10 ? "low-stock" : ""}`;
+      card.className = `product-card management-card ${!isInfinite && p.stock < thresh ? "low-stock" : ""}`;
       card.dataset.totalSold = Number(p.total_sold) || 0;
       card.dataset.soldToday = Number(p.sold_today) || 0;
       card.dataset.stock = Number(p.stock) || 0;
+      card.dataset.lowStockThreshold = thresh;
       card.dataset.trackStock = p.track_stock === undefined ? 1 : p.track_stock;
       card.dataset.name = (p.name || '').toLowerCase();
       card.dataset.category = (p.category || '').toLowerCase();
@@ -7083,7 +7200,7 @@ async function loadInventory() {
       const imageHtml =
         p.photo_base64 && p.photo_base64.length > 50
           ? `<div class="product-img-container"><img src="${p.photo_base64}" alt="${p.name}"></div>`
-          : `<div class="product-img-container placeholder ${catClass}">${getCategoryIcon(p.category)}</div>`;
+          : (p.has_photo ? `<div class="product-img-container"><img data-photo-id="${p.id}" class="lazy-prod-photo" alt="${p.name}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3C/svg%3E"></div>` : `<div class="product-img-container placeholder ${catClass}">${getCategoryIcon(p.category)}</div>`);
 
       const showAdminProfit = ["CEO", "HR"].includes(USER_ROLE);
       let profitHtml = "";
@@ -7125,20 +7242,23 @@ async function loadInventory() {
                     ${profitHtml}
                     ${soldCounterHtml}
                     <div style="margin-top:6px; display:flex; justify-content:space-between; align-items:center;">
-                        <div class="stock" style="font-weight:bold; color:${p.track_stock === 0 ? "var(--text-muted)" : (p.stock < 10 ? "var(--danger)" : "var(--primary)")};">
-                            ${p.track_stock === 0 ? "∞ Made to Order" : "Stock: " + p.stock}
+                        <div class="stock" style="font-weight:bold; color:${p.track_stock === 0 ? "var(--text-muted)" : (p.stock < thresh ? "var(--danger)" : "var(--primary)")};">
+                            ${p.track_stock === 0 ? "∞ Made to Order" : "Stock: " + p.stock + (p.stock < thresh ? ` <small style="color:var(--danger);font-size:0.7rem;">(Alert &lt; ${thresh})</small>` : "")}
                         </div>
                         <div style="display:flex; gap:4px; align-items:center;">
                             <input type="number" id="restock-qty-${p.id}" value="10" min="1" style="width:55px; background:#fff; border:1px solid #ccc; border-radius:6px; color:#111 !important; font-size:0.8rem; padding:4px 4px; text-align:center; font-weight:700;">
                             <button class="sm-btn primary" onclick="const val = parseInt(document.getElementById('restock-qty-${p.id}').value); if(val > 0) restockProduct(${p.id}, val);" title="Add Stock & Print Labels">+</button>
+                            <button class='sm-btn' onclick='openStockMovements(${p.id}, ${JSON.stringify(p.name).replace(/"/g, "&quot;")}, ${p.stock}, ${thresh})' title="Stock Movement History" style="background:rgba(99,102,241,0.15); color:#6366f1; border:1px solid rgba(99,102,241,0.3);"><i class="fa-solid fa-chart-line"></i></button>
                             <button class='sm-btn warning' onclick='printProductLabels(${JSON.stringify(p).replace(/'/g, "&apos;")})' title="Reprint All Labels"><i class="fa-solid fa-tag"></i></button>
-                            <button class='sm-btn success' onclick="openEditProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, "&quot;")}, ${JSON.stringify(p.category || 'General').replace(/"/g, "&quot;")}, ${p.price}, ${JSON.stringify(p.barcode || '').replace(/"/g, "&quot;")}, ${JSON.stringify(p.barcode_end || '').replace(/"/g, "&quot;")}, ${p.buying_price || 0}, ${p.track_stock === undefined ? 1 : p.track_stock})" title="Edit"><i class="fa-solid fa-pencil"></i></button>
+                            <button class='sm-btn success' onclick="openEditProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, "&quot;")}, ${JSON.stringify(p.category || 'General').replace(/"/g, "&quot;")}, ${p.price}, ${JSON.stringify(p.barcode || '').replace(/"/g, "&quot;")}, ${JSON.stringify(p.barcode_end || '').replace(/"/g, "&quot;")}, ${p.buying_price || 0}, ${p.track_stock === undefined ? 1 : p.track_stock}, ${thresh})" title="Edit"><i class="fa-solid fa-pencil"></i></button>
                             <button class='sm-btn danger' onclick="deleteProduct(${p.id})" title="Delete"><i class="fa-solid fa-trash"></i></button>
                         </div>
                     </div>
                 </div>`;
       grid.appendChild(card);
     });
+
+    lazyLoadProductImages();
   } catch (e) {
     console.error(e);
   }
@@ -7254,6 +7374,7 @@ async function handleAddProduct(e) {
       parseFloat(document.getElementById("add-prod-buying-price").value) || 0,
     photo_base64: photoBase64,
     track_stock: document.getElementById("add-prod-track-stock").checked ? 1 : 0,
+    low_stock_threshold: parseInt(document.getElementById("add-prod-low-stock-threshold")?.value) || 10,
   };
 
   try {
@@ -7469,6 +7590,7 @@ function openEditProduct(
   barcodeEnd,
   buyingPrice = 0,
   trackStock = 1,
+  lowStockThreshold = 10,
 ) {
   document.getElementById("edit-prod-id").value = id;
   document.getElementById("edit-prod-name").value = name;
@@ -7482,6 +7604,8 @@ function openEditProduct(
   if (bpInput) bpInput.value = buyingPrice;
   const tsCheckbox = document.getElementById("edit-prod-track-stock");
   if (tsCheckbox) tsCheckbox.checked = (trackStock !== 0);
+  const lstInput = document.getElementById("edit-prod-low-stock-threshold");
+  if (lstInput) lstInput.value = lowStockThreshold || 10;
   document.getElementById("edit-product-modal").classList.remove("hidden");
 }
 
@@ -7558,6 +7682,7 @@ async function handleEditProduct(e) {
     barcode_end: document.getElementById("edit-prod-barcode-end").value || null,
     photo_base64,
     track_stock: document.getElementById("edit-prod-track-stock").checked ? 1 : 0,
+    low_stock_threshold: parseInt(document.getElementById("edit-prod-low-stock-threshold")?.value) || 10,
   };
 
   try {
@@ -10849,9 +10974,13 @@ window.loadPendingCOD = async function () {
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  <button onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
-                    style="background:var(--warning, #f59e0b); color:white; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
-                    <i class="fa-solid fa-print"></i> Print Invoice
+                  <button id="btn-print-pending-${d.pos_order_id}" onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
+                    style="${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'background:#94a3b8; opacity:0.4; pointer-events:none; cursor:not-allowed;' : 'background:var(--warning, #f59e0b); cursor:pointer;'} color:white; border:none; padding:10px 14px; border-radius:6px; font-weight:600; white-space:nowrap;">
+                    <i class="fa-solid fa-print"></i> ${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'Printed' : 'Print Invoice'}
+                  </button>
+                  <button onclick="openEditPendingOrder(${d.pos_order_id})"
+                    style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
+                    <i class="fa-solid fa-pen-to-square"></i> Edit Order
                   </button>
                   <button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
                     style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
@@ -10878,8 +11007,8 @@ window.loadPendingCOD = async function () {
                 el.style.fontStyle = "normal";
                 el.innerHTML = items.map(i =>
                   `<div style="display:flex; justify-content:space-between; padding:3px 0;">
-                    <span>${i.name} &times;${i.qty}</span>
-                    <span style="color:var(--text);">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
+                    <span>${i.name} &times; ${i.qty}</span>
+                    <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
                   </div>`
                 ).join("");
               } else if (el) {
@@ -10898,6 +11027,16 @@ window.loadPendingCOD = async function () {
 // Print invoice for a pending order (cashier view)
 window.printPendingInvoice = async function (posOrderId, totalAmount, clientName, servedBy) {
   try {
+    _printedReceiptNos.add(Number(posOrderId));
+    const btn = document.getElementById(`btn-print-pending-${posOrderId}`);
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = "0.4";
+      btn.style.pointerEvents = "none";
+      btn.style.background = "#94a3b8";
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> Printed';
+    }
+
     const itemsRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`);
     let items = [];
     if (itemsRes.ok) {
@@ -10933,6 +11072,237 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
     showToast("Could not load invoice details.", "error");
   }
 };
+
+// ========================================================
+// STOCK MOVEMENTS MODAL
+// ========================================================
+async function openStockMovements(productId, productName, currentStock, threshold) {
+  const modal = document.getElementById("stock-movements-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+
+  const infoEl = document.getElementById("stock-movement-product-info");
+  if (infoEl) {
+    infoEl.innerHTML = `<strong>${productName}</strong> &bull; Current Stock: <span style="font-weight:700;color:var(--primary);">${currentStock}</span> &bull; Low Stock Alert: <span style="font-weight:700;color:var(--warning);">${threshold || 10}</span>`;
+  }
+
+  const content = document.getElementById("stock-movements-content");
+  if (!content) return;
+  content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading stock history...</div>';
+
+  try {
+    const res = await fetchAuth(`${API_URL}/products/${productId}/movements`);
+    if (!res.ok) throw new Error("Failed to load");
+    const data = await res.json();
+    const movements = data.movements || [];
+
+    if (movements.length === 0) {
+      content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><i class="fa-solid fa-clock-rotate-left" style="font-size:2rem;margin-bottom:10px;opacity:0.5;display:block;"></i>No stock movements logged yet for this product.<br><small>Stock additions and sales will be recorded here automatically.</small></div>';
+      return;
+    }
+
+    let rowsHtml = movements.map((m) => {
+      const isSale = m.movement_type === "SALE";
+      const isRestock = m.movement_type === "RESTOCK";
+      const color = isSale ? "#EF4444" : isRestock ? "#10B981" : "#F59E0B";
+      const icon = isSale ? '<i class="fa-solid fa-arrow-trend-down"></i>' : isRestock ? '<i class="fa-solid fa-arrow-trend-up"></i>' : '<i class="fa-solid fa-arrow-right-arrow-left"></i>';
+      const dt = m.created_at ? new Date(m.created_at).toLocaleString("en-UG", { timeZone: "Africa/Kampala" }) : "—";
+      const qtyDisplay = (m.qty > 0 ? "+" : "") + m.qty;
+
+      return `
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:10px 8px; font-size:0.8rem; color:var(--text-muted); white-space:nowrap;">${dt}</td>
+          <td style="padding:10px 8px; font-weight:700; color:${color}; white-space:nowrap;">${icon} ${m.movement_type}</td>
+          <td style="padding:10px 8px; text-align:right; font-weight:700; color:${color}; font-size:0.95rem;">${qtyDisplay}</td>
+          <td style="padding:10px 8px; text-align:right; color:var(--text-muted);">${m.stock_before !== null && m.stock_before !== undefined ? m.stock_before : '—'}</td>
+          <td style="padding:10px 8px; text-align:right; font-weight:700; color:var(--text);">${m.stock_after !== null && m.stock_after !== undefined ? m.stock_after : '—'}</td>
+          <td style="padding:10px 8px; font-size:0.82rem; color:var(--text-muted);">${m.note || '—'}</td>
+          <td style="padding:10px 8px; font-size:0.82rem; color:var(--primary); font-weight:600;">${m.performed_by || '—'}</td>
+        </tr>
+      `;
+    }).join("");
+
+    content.innerHTML = `
+      <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+        <thead>
+          <tr style="background:var(--background); position:sticky; top:0; z-index:1; border-bottom:2px solid var(--border); text-align:left;">
+            <th style="padding:8px;">Date & Time</th>
+            <th style="padding:8px;">Type</th>
+            <th style="padding:8px; text-align:right;">Quantity</th>
+            <th style="padding:8px; text-align:right;">Before</th>
+            <th style="padding:8px; text-align:right;">After</th>
+            <th style="padding:8px;">Details / Note</th>
+            <th style="padding:8px;">By</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    `;
+  } catch (e) {
+    content.innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center;">Failed to load movements. Please try again.</div>';
+  }
+}
+window.openStockMovements = openStockMovements;
+
+// ========================================================
+// CASHIER EDIT PENDING ORDER
+// ========================================================
+let _currentEditOrder = null;
+let _editOrderItems = [];
+
+async function openEditPendingOrder(posOrderId) {
+  const modal = document.getElementById("edit-pending-order-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+
+  const infoEl = document.getElementById("edit-order-info");
+  const listEl = document.getElementById("edit-order-items-list");
+  infoEl.innerHTML = `Loading order #${posOrderId}...`;
+  listEl.innerHTML = '<div style="text-align:center;padding:20px;"><i class="fa-solid fa-spinner fa-spin"></i> Loading items...</div>';
+
+  // Populate product dropdown for adding items
+  const selectEl = document.getElementById("edit-order-add-product-select");
+  if (selectEl) {
+    selectEl.innerHTML = '<option value="">-- Choose Product to Add --</option>' +
+      (cachedProducts || []).map(p => `<option value="${p.id}" data-price="${p.price}" data-name="${(p.name||'').replace(/"/g, '&quot;')}">${p.name} (UGX ${Number(p.price).toLocaleString()}) - Stock: ${p.stock}</option>`).join('');
+  }
+
+  try {
+    const [orderRes, itemsRes] = await Promise.all([
+      fetchAuth(`${API_URL}/pos_orders/${posOrderId}`),
+      fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`),
+    ]);
+
+    if (!orderRes.ok || !itemsRes.ok) throw new Error("Failed to load order");
+    _currentEditOrder = await orderRes.json();
+    _editOrderItems = (await itemsRes.json()).map(i => ({
+      id: i.id || i.product_id,
+      product_id: i.id || i.product_id,
+      name: i.name || i.product_name,
+      price: Number(i.price) || 0,
+      qty: Number(i.qty) || 1,
+    }));
+
+    infoEl.innerHTML = `<strong>Order #${posOrderId}</strong> &bull; Customer: <strong>${_currentEditOrder.buyer_name || 'Walk-in'}</strong> &bull; Served by: <strong>${_currentEditOrder.served_by || '—'}</strong>`;
+    renderEditOrderItems();
+  } catch (e) {
+    infoEl.innerHTML = `<span style="color:var(--danger)">Error loading order: ${e.message}</span>`;
+  }
+}
+window.openEditPendingOrder = openEditPendingOrder;
+
+function closeEditPendingOrderModal() {
+  const modal = document.getElementById("edit-pending-order-modal");
+  if (modal) modal.classList.add("hidden");
+  _currentEditOrder = null;
+  _editOrderItems = [];
+}
+window.closeEditPendingOrderModal = closeEditPendingOrderModal;
+
+function renderEditOrderItems() {
+  const listEl = document.getElementById("edit-order-items-list");
+  if (!listEl) return;
+
+  if (_editOrderItems.length === 0) {
+    listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Order is empty. Add products below.</div>';
+    document.getElementById("edit-order-new-total").textContent = "UGX 0";
+    return;
+  }
+
+  let total = 0;
+  listEl.innerHTML = _editOrderItems.map((item, idx) => {
+    const lineTotal = item.qty * item.price;
+    total += lineTotal;
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:8px; border-bottom:1px solid var(--border);">
+        <div style="flex:1;">
+          <div style="font-weight:600; font-size:0.9rem;">${item.name}</div>
+          <div style="font-size:0.8rem; color:var(--text-muted);">UGX ${item.price.toLocaleString()} each &bull; Line: <strong>UGX ${lineTotal.toLocaleString()}</strong></div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button type="button" class="sm-btn secondary" onclick="changeEditOrderItemQty(${idx}, -1)" style="width:28px;height:28px;padding:0;">-</button>
+          <span style="font-weight:700; min-width:24px; text-align:center;">${item.qty}</span>
+          <button type="button" class="sm-btn secondary" onclick="changeEditOrderItemQty(${idx}, 1)" style="width:28px;height:28px;padding:0;">+</button>
+          <button type="button" class="sm-btn danger" onclick="removeEditOrderItem(${idx})" style="padding:4px 8px;margin-left:6px;" title="Remove"><i class="fa-solid fa-trash"></i></button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  document.getElementById("edit-order-new-total").textContent = `UGX ${total.toLocaleString()}`;
+}
+window.renderEditOrderItems = renderEditOrderItems;
+
+function changeEditOrderItemQty(idx, delta) {
+  if (!_editOrderItems[idx]) return;
+  _editOrderItems[idx].qty += delta;
+  if (_editOrderItems[idx].qty <= 0) {
+    _editOrderItems.splice(idx, 1);
+  }
+  renderEditOrderItems();
+}
+window.changeEditOrderItemQty = changeEditOrderItemQty;
+
+function removeEditOrderItem(idx) {
+  _editOrderItems.splice(idx, 1);
+  renderEditOrderItems();
+}
+window.removeEditOrderItem = removeEditOrderItem;
+
+function addSelectedProductToEditOrder() {
+  const select = document.getElementById("edit-order-add-product-select");
+  if (!select || !select.value) return;
+  const opt = select.selectedOptions[0];
+  const pId = parseInt(select.value);
+  const name = opt.dataset.name;
+  const price = parseFloat(opt.dataset.price) || 0;
+
+  const existing = _editOrderItems.find(i => i.product_id === pId || i.id === pId);
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    _editOrderItems.push({ id: pId, product_id: pId, name, price, qty: 1 });
+  }
+  select.value = "";
+  renderEditOrderItems();
+}
+window.addSelectedProductToEditOrder = addSelectedProductToEditOrder;
+
+async function saveEditedPendingOrder() {
+  if (!_currentEditOrder) return;
+  if (_editOrderItems.length === 0) {
+    alert("Cannot save an empty order. Please add at least one item or cancel.");
+    return;
+  }
+
+  const btn = document.getElementById("btn-save-edit-order");
+  const origText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+  try {
+    const res = await fetchAuth(`${API_URL}/pos_orders/${_currentEditOrder.id}/items`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: _editOrderItems }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Failed to update order");
+    }
+
+    showToast("Order updated successfully!", "success");
+    closeEditPendingOrderModal();
+    if (typeof loadPendingCOD === "function") loadPendingCOD();
+  } catch (e) {
+    alert("Error updating order: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origText;
+  }
+}
+window.saveEditedPendingOrder = saveEditedPendingOrder;
 
 // Opens the standard payment panel pre-filled for a pending order (Cashier collects payment)
 window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName, servedBy) {

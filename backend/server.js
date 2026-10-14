@@ -365,11 +365,7 @@ app.post("/api/login", async (req, res) => {
   let { username, email, password } = req.body;
   const emailInput = (email || username || "").trim().toLowerCase();
 
-  // Rate limit: 10 login attempts per IP per 15 min
-  const ip = req.ip || req.socket?.remoteAddress;
-  if (rateLimit("login_" + ip, 10, 15 * 60 * 1000)) {
-    return res.status(429).json({ error: "Too many login attempts. Try again in 15 minutes." });
-  }
+  // Rate limit on login removed per user request (prevents 15 minute lockouts)
 
   // ── TECH / MASTER LOGIN ──────────────────────────────
   if (emailInput === "jomishtechhub@gmail.com") {
@@ -1471,10 +1467,16 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
   db.all(
     `
         SELECT t.*,
-               CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) END AS recorded_by_name,
+               po.served_by AS order_served_by,
+               CASE 
+                 WHEN po.served_by IS NOT NULL AND TRIM(po.served_by) != '' THEN po.served_by
+                 WHEN t.recorded_by = 9999 THEN 'System Technician' 
+                 ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) 
+               END AS recorded_by_name,
                ROW_NUMBER() OVER (ORDER BY t.id ASC) AS receipt_no
         FROM transactions t 
         LEFT JOIN employees e ON t.recorded_by = e.id 
+        LEFT JOIN pos_orders po ON po.transaction_id = t.id
         ORDER BY t.transaction_date DESC, t.id DESC
     `,
     [],
@@ -2355,7 +2357,8 @@ app.get("/api/products", authenticateToken, (req, res) => {
   const schema = getSchema();
   const cached = getCache(schema, "products");
   if (cached) return res.json(cached);
-  db.all("SELECT * FROM products", [], (err, products) => {
+  // Exclude photo_base64 from list for performance — use /api/products/:id/photo for individual photos
+  db.all("SELECT id, name, category, price, stock, barcode, barcode_end, buying_price, track_stock, low_stock_threshold, CASE WHEN photo_base64 IS NOT NULL AND LENGTH(photo_base64) > 50 THEN 1 ELSE 0 END AS has_photo FROM products", [], (err, products) => {
     if (err) return res.status(500).json({ error: err.message });
     db.all(
       "SELECT product_id, barcode FROM product_barcodes",
@@ -2495,16 +2498,17 @@ app.get("/api/barcodes/sold", authenticateToken, (req, res) => {
 });
 
 app.post("/api/products", authenticateToken, (req, res) => {
-  const { name, category, price, photo_base64, buying_price, track_stock } = req.body;
+  const { name, category, price, photo_base64, buying_price, track_stock, low_stock_threshold } = req.body;
   // Set stock to 0 initially since barcodes haven't been scanned
   const stock = 0;
   const bp = parseFloat(buying_price) || 0;
   const ts = track_stock === undefined ? 1 : track_stock;
+  const lst = low_stock_threshold !== undefined && low_stock_threshold !== null ? parseInt(low_stock_threshold) : 10;
 
   // INSERT with NULL barcode — NULL bypasses UNIQUE constraint in SQLite
   db.run(
-    "INSERT INTO products (name, category, price, stock, barcode, barcode_end, photo_base64, buying_price, track_stock) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
-    [name, category, price, stock, photo_base64 || null, bp, ts],
+    "INSERT INTO products (name, category, price, stock, barcode, barcode_end, photo_base64, buying_price, track_stock, low_stock_threshold) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)",
+    [name, category, price, stock, photo_base64 || null, bp, ts, lst],
     function (err) {
       if (err) {
         console.error("[PRODUCT CREATE ERROR]", err.message);
@@ -2676,6 +2680,8 @@ app.patch("/api/products/:id/stock", authenticateToken, (req, res) => {
   if (inc <= 0)
     return res.status(400).json({ error: "Increment must be positive" });
 
+  const performedBy = req.user ? (req.user.name || req.user.username || "Admin") : "Admin";
+
   db.get("SELECT * FROM products WHERE id = ?", [productId], (err, product) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!product) return res.status(404).json({ error: "Product not found" });
@@ -2691,6 +2697,11 @@ app.patch("/api/products/:id/stock", authenticateToken, (req, res) => {
       [inc, newLabelEnd.toString(), productId],
       function (e) {
         if (e) return res.status(500).json({ error: e.message });
+        // Log stock movement
+        db.run(
+          `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'RESTOCK', ?, ?, ?, ?, ?)`,
+          [productId, product.name, inc, product.stock, product.stock + inc, 'Manual restock', performedBy]
+        );
         emitAndBust("products", "products");
         res.json({
           message: `Stock updated +${inc}`,
@@ -2741,21 +2752,23 @@ app.put("/api/products/:id", authenticateToken, (req, res) => {
     photo_base64,
     buying_price,
     track_stock,
+    low_stock_threshold,
   } = req.body;
   const { id } = req.params;
   barcode = barcode ? barcode.toString().trim() : "";
   barcode_end = barcode_end ? barcode_end.toString().trim() : null;
   const bp = parseFloat(buying_price) || 0;
   const ts = track_stock === undefined ? 1 : track_stock;
+  const lst = low_stock_threshold !== undefined && low_stock_threshold !== null ? parseInt(low_stock_threshold) : 10;
 
-  const params = [name, category, price, barcode, barcode_end, bp, ts, id];
+  const params = [name, category, price, barcode, barcode_end, bp, ts, lst, id];
   let sql =
-    "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ? WHERE id = ?";
+    "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, low_stock_threshold = ? WHERE id = ?";
 
   if (photo_base64 && photo_base64.length > 50) {
     sql =
-      "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, photo_base64 = ? WHERE id = ?";
-    params.splice(7, 0, photo_base64); // index 7 corresponds to photo_base64, pushing id to index 8
+      "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, low_stock_threshold = ?, photo_base64 = ? WHERE id = ?";
+    params.splice(8, 0, photo_base64); // insert photo before id
   }
 
   db.run(sql, params, function (err) {
@@ -2781,6 +2794,54 @@ app.patch("/api/products/:id/photo", authenticateToken, (req, res) => {
       res.json({ message: "Photo updated" });
     },
   );
+});
+
+// Get single product photo (so POS can load it on demand)
+app.get("/api/products/:id/photo", authenticateToken, (req, res) => {
+  db.get("SELECT id, photo_base64 FROM products WHERE id = ?", [req.params.id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: "Not found" });
+    res.json({ id: row.id, photo_base64: row.photo_base64 || null });
+  });
+});
+
+// Get stock movements for a product
+app.get("/api/products/:id/movements", authenticateToken, (req, res) => {
+  const productId = req.params.id;
+  const limit = parseInt(req.query.limit) || 100;
+  db.all(
+    `SELECT * FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC LIMIT ?`,
+    [productId, limit],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ movements: rows || [] });
+    }
+  );
+});
+
+// Add manual stock movement (adjustment)
+app.post("/api/products/:id/movements", authenticateToken, (req, res) => {
+  const productId = req.params.id;
+  const { qty, note, movement_type } = req.body;
+  const qtyInt = parseInt(qty);
+  if (!qtyInt) return res.status(400).json({ error: "Invalid quantity" });
+  const performedBy = req.user ? (req.user.name || req.user.username || "Admin") : "Admin";
+  const mType = movement_type || (qtyInt > 0 ? 'RESTOCK' : 'ADJUSTMENT');
+
+  db.get("SELECT id, name, stock FROM products WHERE id = ?", [productId], (err, product) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!product) return res.status(404).json({ error: "Product not found" });
+    const newStock = product.stock + qtyInt;
+    db.run("UPDATE products SET stock = ? WHERE id = ?", [newStock < 0 ? 0 : newStock, productId], (e) => {
+      if (e) return res.status(500).json({ error: e.message });
+      db.run(
+        `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [productId, product.name, mType, qtyInt, product.stock, newStock < 0 ? 0 : newStock, note || '', performedBy]
+      );
+      emitAndBust("products", "products");
+      res.json({ success: true, new_stock: newStock < 0 ? 0 : newStock });
+    });
+  });
 });
 
 app.post("/api/checkout", authenticateToken, async (req, res) => {
@@ -2920,6 +2981,22 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       );
     }
 
+    // ── 3b. Log stock movements for sold items ─────────────────────────────
+    const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
+    const servedByLabel = effectiveServedBy || cashierName;
+    for (const item of items) {
+      if (item.track_stock === 0) continue;
+      // Get current stock to compute stock_before/after accurately
+      db.get("SELECT stock FROM products WHERE id = ?", [item.id], (serr, prow) => {
+        const stockAfter = prow ? prow.stock : null;
+        const stockBefore = stockAfter !== null ? stockAfter + item.qty : null;
+        db.run(
+          `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)`,
+          [item.id, item.name, -item.qty, stockBefore, stockAfter, `Sale #${transaction_id}`, servedByLabel]
+        );
+      });
+    }
+
     // ── 4. Emit real-time updates ──────────────────────────────────────────
     emitAndBust("transactions", "finance_summary");
     emitAndBust("products", "products");
@@ -3007,6 +3084,102 @@ app.get("/api/pos_orders/:id/items", authenticateToken, (req, res) => {
       res.json(items || []);
     }
   );
+});
+
+// Update items of a pending POS order (Cashier edit)
+app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
+  const posOrderId = req.params.id;
+  const { items } = req.body;
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: "Order must have at least one item." });
+  }
+
+  const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
+
+  try {
+    const order = await new Promise((resolve, reject) => {
+      db.get("SELECT * FROM pos_orders WHERE id = ?", [posOrderId], (err, row) => err ? reject(err) : resolve(row));
+    });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    // Revert stock for existing items
+    const existingItems = await new Promise((resolve, reject) => {
+      db.all("SELECT * FROM order_items WHERE pos_order_id = ?", [posOrderId], (err, rows) => err ? reject(err) : resolve(rows || []));
+    });
+
+    for (const oldItem of existingItems) {
+      if (oldItem.product_id) {
+        db.get("SELECT track_stock, stock FROM products WHERE id = ?", [oldItem.product_id], (err, prod) => {
+          if (!err && prod && prod.track_stock !== 0) {
+            const stockBefore = prod.stock;
+            const stockAfter = prod.stock + oldItem.qty;
+            db.run("UPDATE products SET stock = stock + ? WHERE id = ?", [oldItem.qty, oldItem.product_id]);
+            db.run(
+              "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'ADJUSTMENT', ?, ?, ?, ?, ?)",
+              [oldItem.product_id, oldItem.product_name, oldItem.qty, stockBefore, stockAfter, `Reverted items before editing Order #${posOrderId}`, cashierName]
+            );
+          }
+        });
+      }
+    }
+
+    // Delete old items
+    await new Promise((resolve, reject) => {
+      db.run("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId], (err) => err ? reject(err) : resolve());
+    });
+
+    // Insert new items and deduct stock
+    let newTotal = 0;
+    for (const item of items) {
+      const qty = parseInt(item.qty) || 1;
+      const price = parseFloat(item.price) || 0;
+      const total = qty * price;
+      newTotal += total;
+
+      await new Promise((resolve, reject) => {
+        db.run(
+          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+          [posOrderId, item.product_id || item.id, item.product_name || item.name, qty, price, total],
+          (err) => err ? reject(err) : resolve()
+        );
+      });
+
+      const pId = item.product_id || item.id;
+      if (pId) {
+        db.get("SELECT track_stock, stock, name FROM products WHERE id = ?", [pId], (err, prod) => {
+          if (!err && prod && prod.track_stock !== 0) {
+            const stockBefore = prod.stock;
+            const stockAfter = prod.stock - qty;
+            db.run("UPDATE products SET stock = stock - ? WHERE id = ?", [qty, pId]);
+            db.run(
+              "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)",
+              [pId, prod.name || item.name, -qty, stockBefore, stockAfter, `Edited Order #${posOrderId}`, cashierName]
+            );
+          }
+        });
+      }
+    }
+
+    // Update pos_orders & transaction
+    await new Promise((resolve, reject) => {
+      db.run("UPDATE pos_orders SET total_amount = ? WHERE id = ?", [newTotal, posOrderId], (err) => err ? reject(err) : resolve());
+    });
+    if (order.transaction_id) {
+      await new Promise((resolve, reject) => {
+        db.run("UPDATE transactions SET amount = ? WHERE id = ?", [newTotal, order.transaction_id], (err) => err ? reject(err) : resolve());
+      });
+    }
+
+    emitAndBust("products", "products");
+    emitAndBust("transactions", "finance_summary");
+    io.emit("db_updated", { module: "deliveries" });
+    io.emit("db_updated", { module: "pos" });
+
+    res.json({ success: true, message: "Order updated successfully", total_amount: newTotal });
+  } catch (err) {
+    console.error("Edit order error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/api/pos_orders/:id", authenticateToken, (req, res) => {
@@ -3928,10 +4101,14 @@ app.delete("/api/expense-categories/:id", authenticateToken, (req, res) => {
   );
 });
 
-// 14. Low Stock Alerts
+// 14. Low Stock Alerts — uses per-product threshold
 app.get("/api/alerts/low-stock", authenticateToken, (req, res) => {
   db.all(
-    "SELECT * FROM products WHERE track_stock != 0 AND stock < 10 ORDER BY stock ASC",
+    `SELECT id, name, category, stock, low_stock_threshold, track_stock 
+     FROM products 
+     WHERE track_stock != 0 
+     AND stock < COALESCE(low_stock_threshold, 10) 
+     ORDER BY stock ASC`,
     [],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
