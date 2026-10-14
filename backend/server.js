@@ -2861,7 +2861,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   } = req.body;
   const cashier_id = req.user.id;
 
-  const isReqUserWaiter = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
+  const isReqUserWaiter = req.user && req.user.role && (req.user.role.toUpperCase() === "WAITER" || req.user.role.toUpperCase() === "SUPERVISOR");
   const userFirstName = (req.user && req.user.name ? req.user.name : "").trim().split(/\s+/)[0] || "";
   const effectiveServedBy = (served_by ? String(served_by).trim().split(/\s+/)[0] : "") || (isReqUserWaiter ? userFirstName : null);
   const effectiveWaiterId = waiter_id || (isReqUserWaiter ? req.user.id : null);

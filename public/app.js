@@ -408,8 +408,10 @@ document.addEventListener("DOMContentLoaded", () => {
         switchPOSView("register");   // Waiter → Register only
       } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
         switchPOSView("stock");      // Admin-like → Inventory
-      } else if (_role === "SUPERVISOR" || _role === "HR") {
-        switchPOSView("expenses");   // Supervisor/HR → Expenses
+      } else if (_role === "SUPERVISOR") {
+        switchPOSView("register");   // Supervisor → Register
+      } else if (_role === "HR") {
+        switchPOSView("expenses");   // HR → Expenses
       } else {
         switchPOSView("stock");      // fallback
       }
@@ -639,8 +641,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnEndShift = document.getElementById("btn-end-shift");
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
-  if (_currentRole === "WAITER") {
-    // Waiter prints kitchen token & sends order to cashier
+  const isWaiterLevel = _currentRole === "WAITER" || _currentRole === "SUPERVISOR";
+  if (isWaiterLevel) {
+    // Waiter & Supervisor print kitchen token & send order to cashier (cannot pay)
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) {
@@ -670,7 +673,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnPrintInvoice) {
     btnPrintInvoice.onclick = () => {
       const _role = (USER_ROLE || "").toUpperCase();
-      if (_role === "WAITER") {
+      if (_role === "WAITER" || _role === "SUPERVISOR") {
         submitWaiterOrder();
       } else if (typeof getInvoice === "function") {
         getInvoice();
@@ -682,8 +685,8 @@ document.addEventListener("DOMContentLoaded", () => {
     btnCheckout.addEventListener("click", () => {
       if (posCart.length === 0) return alert("Cart is empty!");
       const _roleNow = (USER_ROLE || "").toUpperCase();
-      if (_roleNow === "WAITER") {
-        alert("Waiters cannot collect payment. Please click 'SEND TO CASHIER'.");
+      if (_roleNow === "WAITER" || _roleNow === "SUPERVISOR") {
+        alert("Waiters and Supervisors cannot collect payment. Please click 'PRINT INVOICE'.");
         return;
       }
       const total = parseFloat(btnCheckout.getAttribute("data-total"));
@@ -705,9 +708,41 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
           panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
         }
+        const payInput = document.getElementById("pay-amount");
+        if (payInput) {
+          payInput.focus();
+          payInput.select();
+        }
       }, 100);
     });
   }
+
+  // Keyboard Enter support on pay-amount to confirm payment
+  const payAmountInputEl = document.getElementById("pay-amount");
+  if (payAmountInputEl) {
+    payAmountInputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const btnConfirm = document.getElementById("btn-confirm-pay");
+        if (btnConfirm && btnConfirm.hasAttribute("data-pending-id")) {
+          const pendingId = btnConfirm.getAttribute("data-pending-id");
+          const paid = parseInt(payAmountInputEl.value) || 0;
+          if (typeof collectPendingPayment === "function") {
+            collectPendingPayment(pendingId, paid);
+          }
+        } else {
+          confirmPayment();
+        }
+      }
+    });
+  }
+
+  // Prevent mouse-wheel scroll from altering number inputs
+  document.addEventListener("wheel", (e) => {
+    if (document.activeElement && document.activeElement.type === "number") {
+      document.activeElement.blur();
+    }
+  }, { passive: true });
 
   // Offline mode support
   function updateAppOnlineStatus() {
@@ -794,12 +829,12 @@ function initNavigation() {
             const _role = (USER_ROLE || "").toUpperCase();
             if (_role === "TECH") {
               switchPOSView("tech");       // Tech → Tech Hub
-            } else if (_role === "CASHIER" || _role === "WAITER") {
-              switchPOSView("register");   // Cashier / Waiter → Register
+            } else if (_role === "CASHIER" || _role === "WAITER" || _role === "SUPERVISOR") {
+              switchPOSView("register");   // Cashier / Waiter / Supervisor → Register
             } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
               switchPOSView("stock");      // Admin-like → Inventory
-            } else if (_role === "SUPERVISOR" || _role === "HR") {
-              switchPOSView("expenses");   // Supervisor/HR → Expenses
+            } else if (_role === "HR") {
+              switchPOSView("expenses");   // HR → Expenses
             } else {
               switchPOSView("stock");      // fallback
             }
@@ -2400,9 +2435,9 @@ function enforceRBAC() {
   const isWaiter    = role === "WAITER";
 
   const posNavMap = {
-    // Register — Cashier + Tech + Waiter
-    "pos-nav-register": isCashier || isTech || isWaiter,
-    // Pending Sales — Cashier + Tech ONLY (Waiter excluded)
+    // Register — Cashier + Tech + Waiter + Supervisor
+    "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor,
+    // Pending Sales — Cashier + Tech ONLY (Waiter and Supervisor excluded)
     "pos-nav-pending":  isCashier || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
@@ -2438,15 +2473,20 @@ function enforceRBAC() {
   });
 
   // Sync POS cart buttons according to role
+  // Supervisor is at waiter level for register: cannot pay, only prints invoice
   const btnCheckout = document.getElementById("btn-checkout");
   const btnSendToCashier = document.getElementById("btn-send-to-cashier");
   const btnPrintInvoice = document.getElementById("btn-print-invoice") || document.getElementById("btn-waiter-invoice");
   const btnEndShift = document.getElementById("btn-end-shift");
 
-  if (isWaiter) {
+  const isWaiterLevel = isWaiter || isSupervisor;
+  if (isWaiterLevel) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
-    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "block", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) {
+      btnPrintInvoice.style.setProperty("display", "block", "important");
+      btnPrintInvoice.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+    }
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (isCashier) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
@@ -2510,8 +2550,10 @@ function enforceRBAC() {
     setTimeout(() => switchPOSView("register"), 400);   // Cashier → Register
   } else if (isAdminLike) {
     setTimeout(() => switchPOSView("stock"), 400);      // Admin-like → Inventory
-  } else if (isSupervisor || isHRRole) {
-    setTimeout(() => switchPOSView("expenses"), 400);   // Supervisor/HR → Expenses
+  } else if (isSupervisor) {
+    setTimeout(() => switchPOSView("register"), 400);   // Supervisor → Register
+  } else if (isHRRole) {
+    setTimeout(() => switchPOSView("expenses"), 400);   // HR → Expenses
   }
 }
 
@@ -8142,7 +8184,7 @@ async function handleUpdateAccess(e) {
 
 function autoRedirect() {
   const _r = (USER_ROLE || "").toUpperCase();
-  if (_r === "CASHIER" || _r === "FINANCE MANAGER" || _r === "WAITER") {
+  if (_r === "CASHIER" || _r === "FINANCE MANAGER" || _r === "WAITER" || _r === "SUPERVISOR") {
     const posBtn = document.querySelector('[data-target="pos-terminal"]');
     if (posBtn && posBtn.style.display !== "none") {
       posBtn.click();
@@ -8181,29 +8223,6 @@ function autoRedirect() {
 }
 
 async function handleLogout() {
-  // Use custom modal instead of confirm() — native dialogs may be blocked in Electron/kiosk
-  const confirmed = await new Promise((resolve) => {
-    // Create overlay
-    const overlay = document.createElement("div");
-    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;";
-
-    const box = document.createElement("div");
-    box.style.cssText = "background:var(--surface,#fff);border-radius:12px;padding:28px 32px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.25);min-width:260px;";
-    box.innerHTML = `
-      <p style="font-size:1.05rem;font-weight:600;margin-bottom:18px;color:var(--text,#222);">Are you sure you want to logout?</p>
-      <div style="display:flex;gap:12px;justify-content:center;">
-        <button id="_logout-yes" style="padding:8px 22px;background:#ef4444;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:0.97rem;">Yes, Logout</button>
-        <button id="_logout-no" style="padding:8px 22px;background:var(--border,#e5e7eb);color:var(--text,#222);border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:0.97rem;">Cancel</button>
-      </div>`;
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
-
-    overlay.querySelector("#_logout-yes").onclick = () => { document.body.removeChild(overlay); resolve(true); };
-    overlay.querySelector("#_logout-no").onclick  = () => { document.body.removeChild(overlay); resolve(false); };
-    overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(false); } };
-  });
-
-  if (!confirmed) return;
   try {
     await fetch(`${API_URL}/logout`, { method: "POST" });
   } catch (e) {}
@@ -12163,12 +12182,12 @@ function toggleSmeFinanceMode() {
     const role = (USER_ROLE || "").toUpperCase();
     if (role === "TECH") {
       switchPOSView("tech");       // Tech → Tech Hub
-    } else if (role === "CASHIER") {
-      switchPOSView("register");   // Cashier → Register
+    } else if (role === "CASHIER" || role === "WAITER" || role === "SUPERVISOR") {
+      switchPOSView("register");   // Cashier / Waiter / Supervisor → Register
     } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role)) {
       switchPOSView("stock");      // Admin-like → Inventory
-    } else if (role === "SUPERVISOR" || role === "HR") {
-      switchPOSView("expenses");   // Supervisor/HR → Expenses
+    } else if (role === "HR") {
+      switchPOSView("expenses");   // HR → Expenses
     } else {
       switchPOSView("stock");      // fallback
     }

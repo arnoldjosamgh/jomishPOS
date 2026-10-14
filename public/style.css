@@ -1885,3 +1885,14 @@ tr:hover td {
 
 /* JomishPOS: push all content below fixed 50px topbar */
 .app-container { padding-top: 50px !important; }
+
+/* Remove spin buttons / scroll arrows from all number inputs */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none !important;
+    margin: 0 !important;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield !important;
+}

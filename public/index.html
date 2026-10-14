@@ -465,7 +465,7 @@
 
                                 <div style="margin:10px 0;">
                                     <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Amount Paid</label>
-                                    <input type="number" inputmode="numeric" id="pay-amount" style="width:100%;padding:14px;font-size:1.4rem;font-weight:700;text-align:right;background:var(--background);border:2px solid var(--primary);border-radius:8px;color:var(--text);letter-spacing:1px;" value="0" min="0" oninput="updateChange()" onclick="this.select()">
+                                    <input type="number" inputmode="numeric" id="pay-amount" style="width:100%;padding:14px;font-size:1.4rem;font-weight:700;text-align:right;background:var(--background);border:2px solid var(--primary);border-radius:8px;color:var(--text);letter-spacing:1px;" value="0" min="0" oninput="updateChange()" onclick="this.select()" onfocus="this.select()">
                                 </div>
                                 <div class="pay-row" style="font-size:1.1rem;">
                                     <span>Change:</span>
@@ -958,11 +958,11 @@
                 </div>
                 <div class="form-group">
                     <label>Price (UGX)</label>
-                    <input type="number" id="add-prod-price" placeholder="5000" required>
+                    <input type="number" id="add-prod-price" placeholder="5000" required inputmode="numeric" onfocus="this.select()" onclick="this.select()">
                 </div>
                 <div class="form-group">
                     <label>Buying Price (UGX, Optional)</label>
-                    <input type="number" id="add-prod-buying-price" placeholder="4000">
+                    <input type="number" id="add-prod-buying-price" placeholder="4000" inputmode="numeric" onfocus="this.select()" onclick="this.select()">
                 </div>
                 <div class="form-group" style="display:flex; align-items:center; gap:8px; background:var(--background); padding:10px; border-radius:6px;">
                     <input type="checkbox" id="add-prod-track-stock" checked style="width:18px;height:18px;accent-color:var(--primary); cursor:pointer;">
@@ -1056,11 +1056,11 @@
                 </div>
                 <div class="form-group">
                     <label>Price (UGX)</label>
-                    <input type="number" id="edit-prod-price" placeholder="5000" required>
+                    <input type="number" id="edit-prod-price" placeholder="5000" required inputmode="numeric" onfocus="this.select()" onclick="this.select()">
                 </div>
                 <div class="form-group">
                     <label>CEO Buying Price (UGX) <span style="font-size:0.75rem; color:#94A3B8;">(Admin Only)</span></label>
-                    <input type="number" id="edit-prod-buying-price" placeholder="e.g. 3500" value="0">
+                    <input type="number" id="edit-prod-buying-price" placeholder="e.g. 3500" value="0" inputmode="numeric" onfocus="this.select()" onclick="this.select()">
                 </div>
                 <div class="form-group" style="display:flex; align-items:center; gap:8px; background:var(--background); padding:10px; border-radius:6px;">
                     <input type="checkbox" id="edit-prod-track-stock" style="width:18px;height:18px;accent-color:var(--primary); cursor:pointer;">

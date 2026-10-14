@@ -867,3 +867,14 @@ body.dark-theme #pos-search-wrap input {
   flex-shrink: 0 !important;
 }
 
+/* Remove spin buttons / scroll arrows from all number inputs */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield !important;
+}
+
