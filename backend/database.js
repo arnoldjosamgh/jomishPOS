@@ -473,7 +473,8 @@ const schema = [
         id SERIAL PRIMARY KEY, name TEXT, category TEXT, 
         price REAL, stock INTEGER, barcode TEXT,
         barcode_end TEXT, photo_base64 TEXT, buying_price REAL DEFAULT 0,
-        track_stock INTEGER DEFAULT 1
+        track_stock INTEGER DEFAULT 1,
+        low_stock_threshold INTEGER DEFAULT 10
     )`,
     `CREATE TABLE IF NOT EXISTS pos_orders (
         id SERIAL PRIMARY KEY, cashier_id INTEGER, total_amount REAL,
@@ -1456,7 +1457,6 @@ if (config.dbType === 'postgres') {
                 `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\'`
             );
             client.release();
-            pool.end();
 
             const tenantSchemas = result.rows.map(r => r.schema_name);
             console.log(`[STARTUP] Found ${tenantSchemas.length} tenant schema(s) — running migrations...`);
@@ -1471,6 +1471,56 @@ if (config.dbType === 'postgres') {
                 });
                 console.log(`[STARTUP] Migrations complete for schema: ${schema}`);
             }
+
+            // ── SAFETY PATCH: ensure critical columns exist in ALL tenant schemas ──
+            // Runs unconditionally regardless of version counter, using IF NOT EXISTS.
+            // This fixes tenants where version was bumped but the ALTER didn't apply.
+            setTimeout(async () => {
+                try {
+                    const safetyPool = new Pool(config.postgres);
+                    // Re-fetch tenant list
+                    const tResult = await safetyPool.query(
+                        `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\'`
+                    );
+                    for (const row of tResult.rows) {
+                        const sc = row.schema_name;
+                        const sc_client = await safetyPool.connect();
+                        try {
+                            await sc_client.query(`SET search_path TO "${sc}"`);
+                            // Ensure low_stock_threshold column exists
+                            await sc_client.query(
+                                `ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INTEGER DEFAULT 10`
+                            );
+                            // Ensure stock_movements table exists
+                            await sc_client.query(`
+                                CREATE TABLE IF NOT EXISTS stock_movements (
+                                    id SERIAL PRIMARY KEY,
+                                    product_id INTEGER NOT NULL,
+                                    product_name TEXT,
+                                    movement_type TEXT NOT NULL,
+                                    qty INTEGER NOT NULL,
+                                    stock_before INTEGER,
+                                    stock_after INTEGER,
+                                    note TEXT,
+                                    performed_by TEXT,
+                                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                                )
+                            `);
+                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold & stock_movements OK.`);
+                        } catch (patchErr) {
+                            if (!patchErr.message.includes('already exists') && !patchErr.message.includes('duplicate column')) {
+                                console.error(`[SAFETY PATCH] ${sc}:`, patchErr.message);
+                            }
+                        } finally {
+                            sc_client.release();
+                        }
+                    }
+                    await safetyPool.end();
+                } catch (safetyErr) {
+                    console.error('[SAFETY PATCH] Failed:', safetyErr.message);
+                }
+            }, 2000); // run 2s after tenant migrations finish
+
         } catch (e) {
             console.error('[STARTUP] Failed to run tenant migrations:', e.message);
         }

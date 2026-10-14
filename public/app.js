@@ -4033,7 +4033,7 @@ async function confirmPayment() {
 }
 
 // ── WAITER ORDER SUBMISSION ────────────────────────────────────────────────
-// Waiter places a pending order (COD) — sends to cashier, no payment panel, NO receipt printing.
+// Waiter places a pending order (COD) — prints invoice/token, sends order to pending queue.
 // The Cashier will see it in the Pending tab with 'Served by: [1st name]' and collect payment later.
 async function submitWaiterOrder() {
   if (posCart.length === 0) return alert("Cart is empty!");
@@ -4049,11 +4049,12 @@ async function submitWaiterOrder() {
   const rawName = USER_NAME || localStorage.getItem("jomish_name") || "Waiter";
   const waiterFirstName = rawName.trim().split(/\s+/)[0] || "Waiter";
 
-  const btnPrintInvoice = document.getElementById("btn-print-invoice");
-  const origHtml = btnPrintInvoice ? btnPrintInvoice.innerHTML : "";
-  if (btnPrintInvoice) {
-    btnPrintInvoice.disabled = true;
-    btnPrintInvoice.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting...';
+  // The waiter sees btn-send-to-cashier (now labelled "PRINT INVOICE")
+  const btnWaiter = document.getElementById("btn-send-to-cashier") || document.getElementById("btn-print-invoice");
+  const origHtml = btnWaiter ? btnWaiter.innerHTML : "";
+  if (btnWaiter) {
+    btnWaiter.disabled = true;
+    btnWaiter.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Printing...';
   }
 
   try {
@@ -4074,7 +4075,7 @@ async function submitWaiterOrder() {
     });
     if (res.ok) {
       const data = await res.json();
-      showToast(`Order sent to cashier & kitchen token printed! (Served by ${waiterFirstName})`, "success");
+      showToast(`Invoice printed! Order #${String(data.receipt_no || data.transaction_id || "").padStart(4,"0")} — Served by ${waiterFirstName}`, "success");
 
       // Print ONLY the kitchen token for waiter
       const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
@@ -4096,30 +4097,30 @@ async function submitWaiterOrder() {
       if (buyerNameEl) buyerNameEl.value = "";
       if (buyerPhoneEl) buyerPhoneEl.value = "";
 
-      if (btnPrintInvoice) {
-        btnPrintInvoice.style.opacity = "0.4";
-        btnPrintInvoice.style.pointerEvents = "none";
-        btnPrintInvoice.innerHTML = '<i class="fa-solid fa-check"></i> Printed';
+      if (btnWaiter) {
+        btnWaiter.style.opacity = "0.4";
+        btnWaiter.style.pointerEvents = "none";
+        btnWaiter.innerHTML = '<i class="fa-solid fa-check"></i> Printed';
         setTimeout(() => {
-          btnPrintInvoice.disabled = false;
-          btnPrintInvoice.style.opacity = "1";
-          btnPrintInvoice.style.pointerEvents = "auto";
-          btnPrintInvoice.innerHTML = origHtml || '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+          btnWaiter.disabled = false;
+          btnWaiter.style.opacity = "1";
+          btnWaiter.style.pointerEvents = "auto";
+          btnWaiter.innerHTML = origHtml || '<i class="fa-solid fa-print"></i> PRINT INVOICE';
         }, 3500);
       }
     } else {
       const data = await res.json();
       alert("Error: " + data.error);
-      if (btnPrintInvoice) {
-        btnPrintInvoice.disabled = false;
-        btnPrintInvoice.innerHTML = origHtml;
+      if (btnWaiter) {
+        btnWaiter.disabled = false;
+        btnWaiter.innerHTML = origHtml;
       }
     }
   } catch (e) {
     alert("Failed to submit order: " + e.message);
-    if (btnPrintInvoice) {
-      btnPrintInvoice.disabled = false;
-      btnPrintInvoice.innerHTML = origHtml;
+    if (btnWaiter) {
+      btnWaiter.disabled = false;
+      btnWaiter.innerHTML = origHtml;
     }
   }
 }
