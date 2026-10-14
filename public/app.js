@@ -3764,11 +3764,12 @@ function renderCart() {
 
 function numpadPress(key) {
   const input = document.getElementById("pay-amount");
-  let val = input.value || "0";
+  // Strip any non-digit chars in case user typed directly
+  let val = String(input.value || "0").replace(/[^0-9]/g, "") || "0";
 
   if (key === "C") {
     val = "0";
-  } else if (key === "\u232b") {
+  } else if (key === "\u232b" || key === "?") {
     val = val.length > 1 ? val.slice(0, -1) : "0";
   } else {
     val = val === "0" ? key : val + key;
@@ -11146,164 +11147,148 @@ async function openStockMovements(productId, productName, currentStock, threshol
 window.openStockMovements = openStockMovements;
 
 // ========================================================
-// CASHIER EDIT PENDING ORDER
+// CASHIER EDIT PENDING ORDER — Register-based flow
 // ========================================================
 let _currentEditOrder = null;
 let _editOrderItems = [];
 
 async function openEditPendingOrder(posOrderId) {
-  const modal = document.getElementById("edit-pending-order-modal");
-  if (!modal) return;
-  modal.classList.remove("hidden");
-
-  const infoEl = document.getElementById("edit-order-info");
-  const listEl = document.getElementById("edit-order-items-list");
-  infoEl.innerHTML = `Loading order #${posOrderId}...`;
-  listEl.innerHTML = '<div style="text-align:center;padding:20px;"><i class="fa-solid fa-spinner fa-spin"></i> Loading items...</div>';
-
-  // Populate product dropdown for adding items
-  const selectEl = document.getElementById("edit-order-add-product-select");
-  if (selectEl) {
-    selectEl.innerHTML = '<option value="">-- Choose Product to Add --</option>' +
-      (cachedProducts || []).map(p => `<option value="${p.id}" data-price="${p.price}" data-name="${(p.name||'').replace(/"/g, '&quot;')}">${p.name} (UGX ${Number(p.price).toLocaleString()}) - Stock: ${p.stock}</option>`).join('');
-  }
-
   try {
+    showToast('Loading order...', 'info');
+
     const [orderRes, itemsRes] = await Promise.all([
       fetchAuth(`${API_URL}/pos_orders/${posOrderId}`),
       fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`),
     ]);
 
-    if (!orderRes.ok || !itemsRes.ok) throw new Error("Failed to load order");
+    if (!orderRes.ok || !itemsRes.ok) throw new Error('Failed to load order');
     _currentEditOrder = await orderRes.json();
-    _editOrderItems = (await itemsRes.json()).map(i => ({
+    const items = await itemsRes.json();
+
+    // Load items into register cart
+    posCart = items.map(i => ({
       id: i.id || i.product_id,
       product_id: i.id || i.product_id,
       name: i.name || i.product_name,
       price: Number(i.price) || 0,
       qty: Number(i.qty) || 1,
+      track_stock: 0,
     }));
 
-    infoEl.innerHTML = `<strong>Order #${posOrderId}</strong> &bull; Customer: <strong>${_currentEditOrder.buyer_name || 'Walk-in'}</strong> &bull; Served by: <strong>${_currentEditOrder.served_by || '—'}</strong>`;
-    renderEditOrderItems();
+    // Switch to Register view
+    switchPOSView('register');
+    renderCart();
+
+    // Show editing banner in cart panel
+    _showEditOrderBanner(posOrderId, _currentEditOrder);
+
+    showToast(`Editing Order #${posOrderId} — add/remove items then tap Save`, 'warning');
   } catch (e) {
-    infoEl.innerHTML = `<span style="color:var(--danger)">Error loading order: ${e.message}</span>`;
+    alert('Error loading order: ' + e.message);
   }
 }
 window.openEditPendingOrder = openEditPendingOrder;
 
-function closeEditPendingOrderModal() {
-  const modal = document.getElementById("edit-pending-order-modal");
-  if (modal) modal.classList.add("hidden");
+function _showEditOrderBanner(posOrderId, order) {
+  // Remove any existing banner
+  const existing = document.getElementById('edit-order-banner');
+  if (existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'edit-order-banner';
+  banner.style.cssText = 'background:#f59e0b;color:#000;padding:10px 14px;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700;font-size:0.85rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-wrap:wrap;';
+  banner.innerHTML = `
+    <span style="display:flex;align-items:center;gap:7px;">
+      <i class="fa-solid fa-pen-to-square"></i>
+      EDITING Order #${posOrderId}&nbsp;&bull;&nbsp;${order.buyer_name || 'Walk-in'}
+    </span>
+    <span style="display:flex;gap:8px;">
+      <button onclick="saveEditedPendingOrder()" id="btn-save-edit-order" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
+        <i class="fa-solid fa-floppy-disk"></i> Save Changes
+      </button>
+      <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
+        <i class="fa-solid fa-xmark"></i> Cancel
+      </button>
+    </span>
+  `;
+
+  // Insert before #cart-items inside .pos-cart
+  const cartItems = document.getElementById('cart-items');
+  if (cartItems && cartItems.parentNode) {
+    cartItems.parentNode.insertBefore(banner, cartItems);
+  }
+}
+window._showEditOrderBanner = _showEditOrderBanner;
+
+function cancelEditOrder() {
+  const banner = document.getElementById('edit-order-banner');
+  if (banner) banner.remove();
   _currentEditOrder = null;
   _editOrderItems = [];
+  posCart = [];
+  renderCart();
+  switchPOSView('pending');
+}
+window.cancelEditOrder = cancelEditOrder;
+
+// kept for backward compat
+function closeEditPendingOrderModal() {
+  cancelEditOrder();
 }
 window.closeEditPendingOrderModal = closeEditPendingOrderModal;
 
-function renderEditOrderItems() {
-  const listEl = document.getElementById("edit-order-items-list");
-  if (!listEl) return;
-
-  if (_editOrderItems.length === 0) {
-    listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">Order is empty. Add products below.</div>';
-    document.getElementById("edit-order-new-total").textContent = "UGX 0";
-    return;
-  }
-
-  let total = 0;
-  listEl.innerHTML = _editOrderItems.map((item, idx) => {
-    const lineTotal = item.qty * item.price;
-    total += lineTotal;
-    return `
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:8px; border-bottom:1px solid var(--border);">
-        <div style="flex:1;">
-          <div style="font-weight:600; font-size:0.9rem;">${item.name}</div>
-          <div style="font-size:0.8rem; color:var(--text-muted);">UGX ${item.price.toLocaleString()} each &bull; Line: <strong>UGX ${lineTotal.toLocaleString()}</strong></div>
-        </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <button type="button" class="sm-btn secondary" onclick="changeEditOrderItemQty(${idx}, -1)" style="width:28px;height:28px;padding:0;">-</button>
-          <span style="font-weight:700; min-width:24px; text-align:center;">${item.qty}</span>
-          <button type="button" class="sm-btn secondary" onclick="changeEditOrderItemQty(${idx}, 1)" style="width:28px;height:28px;padding:0;">+</button>
-          <button type="button" class="sm-btn danger" onclick="removeEditOrderItem(${idx})" style="padding:4px 8px;margin-left:6px;" title="Remove"><i class="fa-solid fa-trash"></i></button>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  document.getElementById("edit-order-new-total").textContent = `UGX ${total.toLocaleString()}`;
-}
-window.renderEditOrderItems = renderEditOrderItems;
-
-function changeEditOrderItemQty(idx, delta) {
-  if (!_editOrderItems[idx]) return;
-  _editOrderItems[idx].qty += delta;
-  if (_editOrderItems[idx].qty <= 0) {
-    _editOrderItems.splice(idx, 1);
-  }
-  renderEditOrderItems();
-}
-window.changeEditOrderItemQty = changeEditOrderItemQty;
-
-function removeEditOrderItem(idx) {
-  _editOrderItems.splice(idx, 1);
-  renderEditOrderItems();
-}
-window.removeEditOrderItem = removeEditOrderItem;
-
-function addSelectedProductToEditOrder() {
-  const select = document.getElementById("edit-order-add-product-select");
-  if (!select || !select.value) return;
-  const opt = select.selectedOptions[0];
-  const pId = parseInt(select.value);
-  const name = opt.dataset.name;
-  const price = parseFloat(opt.dataset.price) || 0;
-
-  const existing = _editOrderItems.find(i => i.product_id === pId || i.id === pId);
-  if (existing) {
-    existing.qty += 1;
-  } else {
-    _editOrderItems.push({ id: pId, product_id: pId, name, price, qty: 1 });
-  }
-  select.value = "";
-  renderEditOrderItems();
-}
-window.addSelectedProductToEditOrder = addSelectedProductToEditOrder;
-
 async function saveEditedPendingOrder() {
   if (!_currentEditOrder) return;
-  if (_editOrderItems.length === 0) {
-    alert("Cannot save an empty order. Please add at least one item or cancel.");
+  if (posCart.length === 0) {
+    alert('Cannot save an empty order. Add at least one item or cancel.');
     return;
   }
 
-  const btn = document.getElementById("btn-save-edit-order");
-  const origText = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+  const banner = document.getElementById('edit-order-banner');
+  const saveBtn = banner ? banner.querySelector('button') : null;
+  const origText = saveBtn ? saveBtn.innerHTML : '';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+  }
 
   try {
+    const items = posCart.map(i => ({
+      id: i.product_id || i.id,
+      product_id: i.product_id || i.id,
+      name: i.name,
+      price: i.price,
+      qty: i.qty || 1,
+    }));
+
     const res = await fetchAuth(`${API_URL}/pos_orders/${_currentEditOrder.id}/items`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: _editOrderItems }),
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
     });
 
     if (!res.ok) {
       const err = await res.json();
-      throw new Error(err.error || "Failed to update order");
+      throw new Error(err.error || 'Failed to update order');
     }
 
-    showToast("Order updated successfully!", "success");
-    closeEditPendingOrderModal();
-    if (typeof loadPendingCOD === "function") loadPendingCOD();
+    showToast('Order updated successfully!', 'success');
+    if (banner) banner.remove();
+    _currentEditOrder = null;
+    posCart = [];
+    renderCart();
+    switchPOSView('pending');
+    if (typeof loadPendingCOD === 'function') loadPendingCOD();
   } catch (e) {
-    alert("Error updating order: " + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = origText;
+    alert('Error updating order: ' + e.message);
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = origText;
+    }
   }
 }
 window.saveEditedPendingOrder = saveEditedPendingOrder;
+
 
 // Opens the standard payment panel pre-filled for a pending order (Cashier collects payment)
 window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName, servedBy) {
