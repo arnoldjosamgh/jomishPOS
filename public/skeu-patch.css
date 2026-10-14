@@ -436,9 +436,8 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
   box-sizing: border-box !important;
 }
 
-/* SME Financial Portal View Scrolling */
-#sme-business.active,
-#sme-business:not(.hidden) {
+/* SME Financial Portal View Scrolling (only when active) */
+#sme-business.active {
   overflow-y: auto !important;
   width: 100% !important;
   height: calc(100vh - 50px) !important;
