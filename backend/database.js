@@ -418,6 +418,9 @@ function translateSql(sql) {
     // Convert SQLite INSERT OR IGNORE -> Postgres INSERT ... ON CONFLICT DO NOTHING
     const hadInsertOrIgnore = /INSERT\s+OR\s+IGNORE\s+INTO/gi.test(sql);
     newSql = newSql.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
+    if (hadInsertOrIgnore && !newSql.toUpperCase().includes('ON CONFLICT')) {
+        newSql += ' ON CONFLICT DO NOTHING';
+    }
 
     // Convert SQLite INSERT OR REPLACE -> Postgres INSERT ... ON CONFLICT (...) DO UPDATE SET
     newSql = newSql.replace(/INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*(\([^)]+\))/gi, (_, table, cols, vals) => {
