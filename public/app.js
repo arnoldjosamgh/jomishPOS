@@ -671,18 +671,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (btnPrintInvoice) {
-    btnPrintInvoice.onclick = () => {
-      if (_currentEditOrder) {
-        printEditOrderKitchenToken();
-      } else {
-        const _role = (USER_ROLE || "").toUpperCase();
-        if (_role === "WAITER") {
-          submitWaiterOrder();
-        } else if (typeof getInvoice === "function") {
-          getInvoice();
-        }
-      }
-    };
+    // Always use submitWaiterOrder: handles edit-mode (PUT existing order) and
+    // fresh cart (new COD pending order). Both cases print a kitchen token only.
+    btnPrintInvoice.onclick = () => submitWaiterOrder();
   }
 
   if (btnCheckout) {
@@ -4385,7 +4376,8 @@ async function submitWaiterOrder() {
 
   if (_currentEditOrder && _currentEditOrder.id) {
     _isSubmittingWaiterOrder = true;
-    const btnWaiter = document.getElementById("btn-send-to-cashier");
+    // Target whichever button is visible — cashier sees btn-print-invoice, waiter sees btn-send-to-cashier
+    const btnWaiter = document.getElementById("btn-print-invoice") || document.getElementById("btn-send-to-cashier");
     const origHtml = btnWaiter ? btnWaiter.innerHTML : "";
     if (btnWaiter) {
       btnWaiter.disabled = true;
@@ -4411,21 +4403,21 @@ async function submitWaiterOrder() {
         throw new Error(err.error || "Failed to update order");
       }
 
-      const rawName = USER_NAME || localStorage.getItem("jomish_name") || "Waiter";
-      const waiterFirstName = rawName.trim().split(/\s+/)[0] || "Waiter";
+      const rawName = USER_NAME || localStorage.getItem("jomish_name") || "Staff";
+      const staffFirstName = rawName.trim().split(/\s+/)[0] || "Staff";
       const orderNo = _currentEditOrder.invoice_number || _currentEditOrder.id;
 
-      showToast(`Order #${String(orderNo).padStart(4, "0")} updated & sent to cashier!`, "success");
+      showToast(`Order #${String(orderNo).padStart(4, "0")} updated!`, "success");
 
-      // Print updated kitchen token
+      // Print updated kitchen token for the SAME existing order
       const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
       const tokenData = {
         isInvoice: false,
         printTokenOnly: true,
         orderId: String(orderNo).padStart(4, "0"),
         dateStr,
-        cashierName: waiterFirstName,
-        servedBy: _currentEditOrder.served_by || waiterFirstName,
+        cashierName: staffFirstName,
+        servedBy: _currentEditOrder.served_by || staffFirstName,
         items: posCart.map((i) => ({ name: i.name, qty: i.qty || 1, price: i.price })),
       };
       _printHTMLQueue([_buildKitchenTokenHTML(tokenData)]);
@@ -4443,13 +4435,14 @@ async function submitWaiterOrder() {
       if (buyerNameEl) buyerNameEl.value = "";
       if (buyerPhoneEl) buyerPhoneEl.value = "";
 
-      switchPOSView("register");
+      switchPOSView("pending");
+      if (typeof loadPendingCOD === "function") loadPendingCOD();
     } catch (e) {
       alert("Error updating order: " + e.message);
     } finally {
       if (btnWaiter) {
         btnWaiter.disabled = false;
-        btnWaiter.innerHTML = origHtml || '<i class="fa-solid fa-paper-plane"></i> SEND TO CASHIER';
+        btnWaiter.innerHTML = origHtml || '<i class="fa-solid fa-print"></i> PRINT TOKEN';
       }
       _isSubmittingWaiterOrder = false;
     }
