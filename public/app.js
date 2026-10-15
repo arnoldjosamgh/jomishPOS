@@ -2525,7 +2525,7 @@ function enforceRBAC() {
   const btnPrintInvoice = document.getElementById("btn-print-invoice") || document.getElementById("btn-waiter-invoice");
   const btnEndShift = document.getElementById("btn-end-shift");
 
-  const isWaiterLevel = isWaiter; // Supervisor has full admin privileges
+  const isWaiterLevel = isWaiter || isSupervisor; // Supervisor: make order only, no payment
   if (isWaiterLevel) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) {
