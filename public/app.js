@@ -4074,20 +4074,17 @@ window.handleDeliveryCheckboxChange = function () {
   const isDelivery = document.getElementById("send-to-transport-chk").checked;
   const deliveryContainer = document.getElementById("delivery-info-container");
   const btnConfirmPay = document.getElementById("btn-confirm-pay");
-  const btnGetInvoice = document.getElementById("btn-get-invoice");
 
   if (isDelivery) {
     deliveryContainer.style.display = "block";
     if (btnConfirmPay)
       btnConfirmPay.innerHTML =
         '<i class="fa-solid fa-truck"></i> CONFIRM & DISPATCH';
-    if (btnGetInvoice) btnGetInvoice.style.display = "none"; // Only allow proper payment confirm for dispatch
   } else {
     deliveryContainer.style.display = "none";
     if (btnConfirmPay)
       btnConfirmPay.innerHTML =
         '<i class="fa-solid fa-check"></i> CONFIRM PAYMENT';
-    if (btnGetInvoice) btnGetInvoice.style.display = "flex";
   }
 };
 
