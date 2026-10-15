@@ -745,7 +745,7 @@ app.post("/api/system/initialize", async (req, res) => {
             ["Admin", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             ["HR", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             ["System Technician", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ["Supervisor", 0, 0, 1, 0, 0, 0, 0, 0, 0, 1],
+            ["Supervisor", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             ["Cashier", 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
             ["Security", 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
             ["Receptionist", 1, 0, 1, 0, 0, 1, 0, 0, 0, 0],
@@ -1489,6 +1489,11 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
 
 app.post("/api/transactions", authenticateToken, (req, res) => {
   const { amount, type, description, recorded_by, transaction_date } = req.body;
+  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  const isCashier = userRole === "CASHIER" || userRole === "TECH" || req.user.name === "System Technician";
+  if (type === "EXPENSE" && !isCashier) {
+    return res.status(403).json({ error: "Only cashiers on duty can record cash expenses paid from the till." });
+  }
   const dateToRecord = transaction_date
     ? new Date(transaction_date).toISOString()
     : new Date().toISOString();
@@ -2869,10 +2874,13 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   } = req.body;
   const cashier_id = req.user.id;
 
-  const isReqUserWaiter = req.user && req.user.role && (req.user.role.toUpperCase() === "WAITER" || req.user.role.toUpperCase() === "SUPERVISOR");
+  const isReqUserWaiter = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
   const userFirstName = (req.user && req.user.name ? req.user.name : "").trim().split(/\s+/)[0] || "";
   const effectiveServedBy = (served_by ? String(served_by).trim().split(/\s+/)[0] : "") || (isReqUserWaiter ? userFirstName : null);
   const effectiveWaiterId = waiter_id || (isReqUserWaiter ? req.user.id : null);
+  const discount_amount = payment_method === "DISCOUNT"
+    ? Math.max(0, (parseFloat(req.body.original_total || total_amount) || 0) - (parseFloat(amount_paid) || 0))
+    : 0;
 
   if (!items || items.length === 0)
     return res.status(400).json({ error: "Cart is empty" });
@@ -2951,8 +2959,8 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       }
 
       const orderResult = await q(
-        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number]
+        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount]
       );
       const pos_order_id = orderResult.lastID;
 
@@ -3054,9 +3062,10 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
   // 1. Get last end_time and end_cash for this cashier (or any cashier if global drawer)
   db.run(`CREATE TABLE IF NOT EXISTS cashier_shifts (
       id SERIAL PRIMARY KEY, cashier_id INTEGER, end_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      start_cash REAL, end_cash REAL, cash_sales REAL, momo_sales REAL, total_sales REAL, expenses REAL, cash_in REAL DEFAULT 0
+      start_cash REAL, end_cash REAL, cash_sales REAL, momo_sales REAL, total_sales REAL, expenses REAL, cash_in REAL DEFAULT 0, discount_amount REAL DEFAULT 0
   )`, () => {
     db.run("ALTER TABLE cashier_shifts ADD COLUMN cash_in REAL DEFAULT 0", () => {});
+    db.run("ALTER TABLE cashier_shifts ADD COLUMN discount_amount REAL DEFAULT 0", () => {});
     db.get("SELECT end_time, end_cash FROM cashier_shifts ORDER BY id DESC LIMIT 1", [], (err, lastShift) => {
       let startTime = lastShift ? lastShift.end_time : new Date(new Date().setHours(0,0,0,0)).toISOString();
       let startCash = lastShift ? Number(lastShift.end_cash || 0) : 0;
@@ -3075,7 +3084,9 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         // Cash In = all cash/float added into drawer during this shift window (treated as INCOME/addition)
         cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // COD/Invoice collections during this shift
-        invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+        invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        // Total discount amount given during this shift
+        discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
       };
       
       Promise.all(Object.values(queries)).then(results => {
@@ -3085,11 +3096,12 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         const expenses = results[3];
         const cashIn = results[4];  // float / income given to drawer — treated as INCOME
         const invoiceCollected = results[5];
+        const discountAmount = results[6];
         // End cash = what cashier started with + cash sales + cash-in float - expenses paid out
         const endCash = startCash + cashSales + cashIn - expenses;
         
-        db.run("INSERT INTO cashier_shifts (cashier_id, start_cash, end_cash, cash_sales, momo_sales, total_sales, expenses, cash_in) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-          [cashierId, startCash, endCash, cashSales, momoSales, totalSales, expenses, cashIn], function(err) {
+        db.run("INSERT INTO cashier_shifts (cashier_id, start_cash, end_cash, cash_sales, momo_sales, total_sales, expenses, cash_in, discount_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [cashierId, startCash, endCash, cashSales, momoSales, totalSales, expenses, cashIn, discountAmount], function(err) {
             res.json({
               start_time: startTime,
               end_time: new Date().toISOString(),
@@ -3100,6 +3112,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
               total_sales: totalSales,
               expenses: expenses,
               cash_in: cashIn,
+              discount_amount: discountAmount,
               invoice_collected: invoiceCollected,
               cashier_name: req.user.name || "Cashier"
             });
@@ -3109,8 +3122,14 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
   });
 });
 
-// Record Cash Addition / Float to Drawer (Admin gives cashier money for change or expenses)
+// Record Cash Addition / Float to Drawer (Cashier receives money for change or float)
 app.post("/api/pos/cash-in", authenticateToken, (req, res) => {
+  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  const isCashier = userRole === "CASHIER" || userRole === "TECH" || req.user.name === "System Technician";
+  if (!isCashier) {
+    return res.status(403).json({ error: "Only cashiers on duty can add cash float to the till." });
+  }
+
   const { amount, purpose, authorized_by, notes } = req.body;
   const numAmount = parseFloat(amount);
   if (!numAmount || numAmount <= 0) {
@@ -5650,11 +5669,16 @@ app.delete("/api/notices/:id", authenticateToken, (req, res) => {
 
 // ---- Deliveries API ----
 app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
-  const sql = `
+  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  const rawName = req.user && req.user.name ? req.user.name : "";
+  const userFirstName = rawName.trim().split(/\s+/)[0] || "";
+
+  // The POS Pending tab only shows Waiter / COD table orders (Customer Invoices are moved to Financial Hub)
+  let sql = `
         SELECT 
             p.id as pos_order_id,
             d.id as delivery_id,
-            COALESCE(d.client_name, p.buyer_name, 'Walk-in / Invoice') as client_name, 
+            COALESCE(d.client_name, p.buyer_name, 'Table / Walk-in') as client_name, 
             COALESCE(d.client_phone, p.buyer_phone, '') as client_phone, 
             COALESCE(d.client_location, 'In-Store') as client_location,
             p.id as order_id, 
@@ -5671,12 +5695,55 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
         LEFT JOIN deliveries d ON d.order_id = p.id
         LEFT JOIN employees ew ON p.waiter_id = ew.id
         LEFT JOIN employees ec ON p.cashier_id = ec.id
-        WHERE p.payment_method IN ('COD', 'INVOICE') AND t.payment_status = 'PENDING'
+        WHERE p.payment_method = 'COD' AND t.payment_status = 'PENDING'
+  `;
+  const params = [];
+
+  // Waiters only get the orders they personally created/worked on
+  if (userRole === "WAITER") {
+    sql += ` AND (p.waiter_id = ? OR LOWER(p.served_by) = LOWER(?)) `;
+    params.push(req.user.id, userFirstName);
+  }
+
+  sql += ` ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC`;
+
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows || []);
+  });
+});
+
+// Customer Invoices API (Unpaid invoices moved to Financial Tab — Supervisor, CEO, Admin only)
+app.get("/api/customer-invoices", authenticateToken, (req, res) => {
+  const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  const isAllowed = ["CEO", "SUPERVISOR", "ADMIN", "MANAGER", "TECH"].includes(role) || req.user.name === "System Technician";
+  if (!isAllowed) {
+    return res.status(403).json({ error: "Access denied. Only Supervisor and CEO can access Customer Invoices." });
+  }
+
+  const sql = `
+        SELECT 
+            p.id as pos_order_id,
+            COALESCE(p.buyer_name, 'Customer') as client_name, 
+            COALESCE(p.buyer_phone, '') as client_phone, 
+            p.id as order_id, 
+            p.total_amount, 
+            p.transaction_id, 
+            p.invoice_number,
+            t.payment_status,
+            t.transaction_date,
+            p.order_date,
+            COALESCE(p.served_by, ew.first_name, ec.first_name, 'Cashier') as served_by
+        FROM pos_orders p
+        JOIN transactions t ON p.transaction_id = t.id
+        LEFT JOIN employees ew ON p.waiter_id = ew.id
+        LEFT JOIN employees ec ON p.cashier_id = ec.id
+        WHERE p.payment_method = 'INVOICE' AND t.payment_status = 'PENDING'
         ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC
-    `;
+  `;
   db.all(sql, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    res.json(rows || []);
   });
 });
 

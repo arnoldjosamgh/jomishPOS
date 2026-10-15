@@ -389,9 +389,8 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (_role === "CASHIER") {
         switchPOSView("register");   // Cashier → Register
       } else if (_role === "WAITER") {
-        // Waiter: Register only — hide all other POS nav tabs
+        // Waiter sees Register and Pending (orders they worked on)
         [
-          "pos-nav-pending",
           "pos-nav-stock",
           "pos-nav-lowstock",
           "pos-nav-expenses",
@@ -405,7 +404,7 @@ document.addEventListener("DOMContentLoaded", () => {
             el.classList.add("hidden");
           }
         });
-        switchPOSView("register");   // Waiter → Register only
+        switchPOSView("pending");    // Waiter → Pending tab (their orders)
       } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
         switchPOSView("stock");      // Admin-like → Inventory
       } else if (_role === "SUPERVISOR") {
@@ -1235,6 +1234,36 @@ async function loadPOSExpenses() {
     if (todayExpEl) todayExpEl.textContent = `UGX ${todayExp.toLocaleString()}`;
     if (todayCashinEl) todayCashinEl.textContent = `UGX ${todayCashIn.toLocaleString()}`;
     if (totalExpEl) totalExpEl.textContent = `UGX ${allExp.toLocaleString()}`;
+
+    // Enforce Admin Read-Only for Expense/Float Entry
+    const _expUserRole = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+    const isCashierAtTill = _expUserRole === "CASHIER" || _expUserRole === "TECH" || USER_NAME === "System Technician";
+    const formExp = document.getElementById("form-pos-expense");
+    const formCashin = document.getElementById("form-pos-cashin");
+    const tabsContainer = document.getElementById("tab-btn-expense")?.parentElement;
+    const entryTitle = document.getElementById("pos-cash-entry-title");
+    let notice = document.getElementById("pos-admin-exp-notice");
+
+    if (!isCashierAtTill) {
+      if (formExp) formExp.style.display = "none";
+      if (formCashin) formCashin.style.display = "none";
+      if (tabsContainer) tabsContainer.style.display = "none";
+      if (entryTitle) {
+        entryTitle.innerHTML = '<i class="fa-solid fa-lock" style="color:var(--primary);"></i> Expense & Float (Read-Only)';
+      }
+      if (!notice) {
+        notice = document.createElement("div");
+        notice.id = "pos-admin-exp-notice";
+        notice.style.cssText = "background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.25); border-radius:10px; padding:14px; font-size:0.85rem; color:var(--text-muted); line-height:1.4; margin-top:10px;";
+        notice.innerHTML = '<i class="fa-solid fa-circle-info" style="color:var(--primary); margin-right:6px;"></i> <strong>View Only:</strong> Only the cashier on duty at the till can record drawer expenses or add cash float.';
+        const leftCard = document.querySelector("#pos-expenses-view .card");
+        if (leftCard) leftCard.appendChild(notice);
+      }
+    } else {
+      if (notice) notice.remove();
+      if (tabsContainer) tabsContainer.style.display = "flex";
+      if (typeof setPOSCashTab === "function") setPOSCashTab("expense");
+    }
 
     // Populate table
     tbody.innerHTML = "";
@@ -2426,7 +2455,7 @@ function enforceRBAC() {
 
   // uRole already computed above — reuse it here
   const role        = uRole;
-  const isAdminLike = ["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(role);
+  const isAdminLike = ["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER", "SUPERVISOR"].includes(role);
   const isHRRole    = role === "HR";
   const isSupervisor = role === "SUPERVISOR";
   const isCashier   = role === "CASHIER";
@@ -2438,13 +2467,13 @@ function enforceRBAC() {
     // Register — Cashier + Tech + Waiter + Supervisor
     "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor,
     // Pending Sales — Cashier + Tech ONLY (Waiter and Supervisor excluded)
-    "pos-nav-pending":  isCashier || isTech,
+    "pos-nav-pending":  isCashier || isWaiter || isTech || isAdminLike,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
     // Low Stock — Admin-like + Tech
     "pos-nav-lowstock": isAdminLike || isTech,
     // Expenses — Admin-like + HR + Supervisor + Tech (NOT Cashier or Waiter)
-    "pos-nav-expenses": isAdminLike || isHRRole || isSupervisor || isTech,
+    "pos-nav-expenses": isCashier || isAdminLike || isHRRole || isSupervisor || isTech,
     // Credits — Admin-like + Tech
     "pos-nav-credits":  isAdminLike || isTech,
     // Finance Hub — Admin-like + HR + Supervisor + Cashier + Tech
@@ -2479,7 +2508,7 @@ function enforceRBAC() {
   const btnPrintInvoice = document.getElementById("btn-print-invoice") || document.getElementById("btn-waiter-invoice");
   const btnEndShift = document.getElementById("btn-end-shift");
 
-  const isWaiterLevel = isWaiter || isSupervisor;
+  const isWaiterLevel = isWaiter; // Supervisor has full admin privileges
   if (isWaiterLevel) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
@@ -4793,9 +4822,11 @@ window.printEndShiftReport = function(report) {
         <div class="row"><span>Mobile Money:</span><span>UGX ${(report.momo_sales || 0).toLocaleString()}</span></div>
         <div class="row bold"><span>Total Sales (All):</span><span>UGX ${(report.total_sales || 0).toLocaleString()}</span></div>
         ${report.invoice_collected ? `<div class="row"><span>Invoices/COD Paid:</span><span>UGX ${Number(report.invoice_collected).toLocaleString()}</span></div>` : ''}
+        ${report.discount_amount ? `<div class="row" style="color:#f59e0b; font-weight:bold;"><span>(-) Discounts Given:</span><span>-UGX ${Number(report.discount_amount).toLocaleString()}</span></div>` : ''}
         <div class="divider"></div>
         <div style="font-size:8.5pt; color:#444; margin-top:5px; line-height:1.3;">
           Open (${(report.start_cash || 0).toLocaleString()}) + Cash Sales (${(report.cash_sales || 0).toLocaleString()}) + Cash In (${(report.cash_in || 0).toLocaleString()}) - Expenses (${(report.expenses || 0).toLocaleString()}) = <strong>UGX ${(report.end_cash || 0).toLocaleString()}</strong>
+          ${report.discount_amount ? ` &nbsp;|&nbsp; Discounts: -UGX ${Number(report.discount_amount).toLocaleString()}` : ''}
         </div>
         <div class="center" style="margin-top: 20px;">Cashier: ____________________</div>
         <div class="center" style="margin-top: 12px;">Supervisor: _________________</div>
@@ -5928,10 +5959,12 @@ function toggleSmeView(view) {
   const txView = document.getElementById("sme-view-transactions");
   const repView = document.getElementById("sme-view-reports");
   const prodView = document.getElementById("sme-view-products");
+  const invView = document.getElementById("sme-view-invoices");
 
   if (txView) txView.style.display = "none";
   if (repView) repView.style.display = "none";
   if (prodView) prodView.style.display = "none";
+  if (invView) invView.style.display = "none";
 
   if (view === "transactions") {
     if (txView) txView.style.display = "block";
@@ -5941,6 +5974,9 @@ function toggleSmeView(view) {
   } else if (view === "products") {
     if (prodView) prodView.style.display = "block";
     loadSmeProductSales();
+  } else if (view === "invoices") {
+    if (invView) invView.style.display = "block";
+    loadCustomerInvoices();
   }
 }
 
@@ -11159,12 +11195,7 @@ window.closeCodModal = function () {
 
 window.loadPendingCOD = async function () {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  if (_role === "WAITER") {
-    // Waiters should never load or see pending orders or badge
-    const badge = document.getElementById("cod-badge-count");
-    if (badge) badge.style.display = "none";
-    return;
-  }
+  const isWaiterUser = _role === "WAITER";
   try {
     const res = await fetchAuth(`${API_URL}/deliveries/pending-cod`);
     if (res.ok) {
@@ -11221,10 +11252,10 @@ window.loadPendingCOD = async function () {
                     style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-pen-to-square"></i> Edit Order
                   </button>
-                  <button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
+                  ${isWaiterUser ? '' : `<button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
                     style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-cash-register"></i> Collect Payment
-                  </button>
+                  </button>`}
                 </div>
               </div>
               <div id="items-${d.pos_order_id}" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:0.83rem; color:var(--text-muted); font-style:italic;">
@@ -11613,7 +11644,10 @@ async function saveEditedPendingOrder() {
       throw new Error(err.error || 'Failed to update order');
     }
 
-    showToast('Order updated successfully!', 'success');
+    if (_currentEditOrder && _currentEditOrder.id) {
+      _printedReceiptNos.delete(Number(_currentEditOrder.id));
+    }
+    showToast('Order updated! You can now print the updated invoice with new products.', 'success');
     if (banner) banner.remove();
     _currentEditOrder = null;
     posCart = [];
@@ -12350,7 +12384,12 @@ function toggleSmeFinanceMode() {
   } else {
     pos.classList.remove("active");
     sme.classList.add("active");
+    const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+    const canSeeInvoices = ["CEO", "SUPERVISOR", "ADMIN", "TECH"].includes(_role) || USER_NAME === "System Technician";
+    const btnInv = document.getElementById("btn-sme-invoices");
+    if (btnInv) btnInv.style.display = canSeeInvoices ? "inline-flex" : "none";
     loadTransactions();
+    if (canSeeInvoices) loadCustomerInvoices();
   }
 }
 
@@ -12575,3 +12614,86 @@ async function submitChangePin() {
   }
 }
 
+
+
+// ── CUSTOMER INVOICES IN FINANCIAL HUB (Supervisor & CEO only) ─────────────
+let _allCustomerInvoices = [];
+
+window.loadCustomerInvoices = async function(searchTerm = "") {
+  try {
+    const res = await fetchAuth(`${API_URL}/customer-invoices`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn("Customer invoices load:", err.error);
+      return;
+    }
+    const invoices = await res.json();
+    _allCustomerInvoices = invoices || [];
+    
+    // Update badge in SME portal header
+    const badge = document.getElementById("sme-invoice-badge");
+    if (badge) {
+      if (_allCustomerInvoices.length > 0) {
+        badge.style.display = "inline-block";
+        badge.textContent = _allCustomerInvoices.length;
+      } else {
+        badge.style.display = "none";
+      }
+    }
+
+    renderCustomerInvoicesTable(searchTerm);
+  } catch (e) {
+    console.error("loadCustomerInvoices error:", e);
+  }
+};
+
+window.renderCustomerInvoicesTable = function(searchTerm = "") {
+  const tbody = document.getElementById("customer-invoices-tbody");
+  if (!tbody) return;
+
+  let list = _allCustomerInvoices;
+  if (searchTerm) {
+    const q = searchTerm.toLowerCase();
+    list = list.filter(i => 
+      String(i.invoice_number || i.pos_order_id || "").includes(q) ||
+      (i.client_name || "").toLowerCase().includes(q) ||
+      (i.client_phone || "").includes(q) ||
+      (i.served_by || "").toLowerCase().includes(q)
+    );
+  }
+
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:30px; color:var(--text-muted);">No unpaid customer invoices found.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.map(inv => {
+    const invNum = inv.invoice_number || inv.pos_order_id;
+    const safeClient = (inv.client_name || "").replace(/'/g, "\\'");
+    const safeServer = (inv.served_by || "").replace(/'/g, "\\'");
+    const dStr = formatDisplayDate ? formatDisplayDate(inv.order_date || inv.transaction_date, true) : (new Date(inv.order_date || Date.now()).toLocaleDateString());
+    return `
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+        <td style="font-weight:700; color:var(--primary);">INV-#${invNum}</td>
+        <td style="font-size:0.83rem; color:var(--text-muted); white-space:nowrap;">${dStr}</td>
+        <td style="font-weight:600;">${inv.client_name || 'Customer'}</td>
+        <td style="color:var(--text-muted); font-size:0.85rem;">${inv.client_phone || '—'}</td>
+        <td style="font-size:0.85rem;"><span style="background:rgba(79,70,229,0.1); color:var(--primary); padding:2px 8px; border-radius:10px; font-weight:600;">${inv.served_by || 'Cashier'}</span></td>
+        <td style="font-weight:800; color:var(--text); white-space:nowrap;">UGX ${Number(inv.total_amount || 0).toLocaleString()}</td>
+        <td><span style="background:rgba(245,158,11,0.15); color:#f59e0b; border:1px solid rgba(245,158,11,0.3); padding:3px 9px; border-radius:12px; font-size:0.75rem; font-weight:700;">UNPAID</span></td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button onclick="printPendingInvoice(${inv.pos_order_id}, ${inv.total_amount}, '${safeClient}', '${safeServer}', ${inv.invoice_number || 'null'})" class="sm-btn secondary" style="padding:4px 10px; font-size:0.78rem; margin-right:4px;">
+            <i class="fa-solid fa-print"></i> Print
+          </button>
+          <button onclick="openPendingOrderCheckout(${inv.pos_order_id}, ${inv.total_amount}, '${safeClient}', '${safeServer}')" class="sm-btn primary" style="padding:4px 12px; font-size:0.78rem;">
+            <i class="fa-solid fa-cash-register"></i> Collect Payment
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+};
+
+window.filterCustomerInvoices = function(term) {
+  renderCustomerInvoicesTable(term);
+};

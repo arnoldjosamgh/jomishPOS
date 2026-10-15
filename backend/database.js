@@ -1476,6 +1476,31 @@ function runMigrations(fromVersion) {
             );
         });
     }
+
+    if (fromVersion < 147) {
+        // v147: discount_amount on pos_orders & cashier_shifts, and equalize Supervisor privileges with Admin
+        const alterOrder = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0"
+            : "ALTER TABLE pos_orders ADD COLUMN discount_amount REAL DEFAULT 0";
+        db.run(alterOrder, () => {
+            const alterShift = config.dbType === 'postgres'
+                ? "ALTER TABLE cashier_shifts ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0"
+                : "ALTER TABLE cashier_shifts ADD COLUMN discount_amount REAL DEFAULT 0";
+            db.run(alterShift, () => {
+                db.run(`
+                    UPDATE roles_config SET
+                        can_see_dashboard=1, can_see_hr=1, can_see_attendance=1, can_see_sme=1,
+                        can_see_pos=1, can_see_secretary=1, can_see_transport=1, can_see_hardware=1,
+                        can_see_system_users=1, can_see_schedules=1
+                    WHERE LOWER(role_name) = 'supervisor'
+                `, () => {
+                    db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '147'], () => {
+                        console.log('Migration to v147 complete: Added discount_amount and elevated Supervisor to full Admin privileges.');
+                    });
+                });
+            });
+        });
+    }
 }
 
 initDb();
@@ -1555,7 +1580,22 @@ if (config.dbType === 'postgres') {
                                 FROM numbered
                                 WHERE pos_orders.id = numbered.id AND pos_orders.invoice_number IS NULL
                             `).catch(() => {});
-                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements & invoice_number OK.`);
+                            // Ensure discount_amount exists on pos_orders & cashier_shifts
+                            await sc_client.query(
+                                `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0`
+                            ).catch(() => {});
+                            await sc_client.query(
+                                `ALTER TABLE cashier_shifts ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0`
+                            ).catch(() => {});
+                            // Ensure Supervisor has full admin privileges in roles_config
+                            await sc_client.query(`
+                                UPDATE roles_config SET
+                                    can_see_dashboard=1, can_see_hr=1, can_see_attendance=1, can_see_sme=1,
+                                    can_see_pos=1, can_see_secretary=1, can_see_transport=1, can_see_hardware=1,
+                                    can_see_system_users=1, can_see_schedules=1
+                                WHERE LOWER(role_name) = 'supervisor'
+                            `).catch(() => {});
+                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements, invoice_number & discount_amount OK.`);
                         } catch (patchErr) {
                             if (!patchErr.message.includes('already exists') && !patchErr.message.includes('duplicate column')) {
                                 console.error(`[SAFETY PATCH] ${sc}:`, patchErr.message);

@@ -213,6 +213,7 @@
                         <button onclick="toggleSmeFinanceMode()" class="secondary-btn"><i class="fa-solid fa-arrow-left"></i> Back to POS</button>
                         <input type="text" id="sme-search" placeholder="Search Receipt No or Item..." style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); width: 220px;">
                         <button id="btn-sme-transactions" class="secondary-btn" onclick="toggleSmeView('transactions')"><i class="fa-solid fa-money-bill-transfer"></i> Transactions</button>
+                        <button id="btn-sme-invoices" class="secondary-btn" onclick="toggleSmeView('invoices')"><i class="fa-solid fa-file-invoice-dollar"></i> Customer Invoices <span id="sme-invoice-badge" style="background:#EF4444; color:#fff; border-radius:10px; padding:1px 6px; font-size:0.72rem; margin-left:4px; display:none;">0</span></button>
                         <button id="btn-sme-reports" class="secondary-btn" onclick="toggleSmeView('reports')"><i class="fa-solid fa-user-tie"></i> Cashier Reports</button>
                         <button id="btn-sme-product-sales" class="secondary-btn" onclick="toggleSmeView('products')"><i class="fa-solid fa-chart-pie"></i> Products Sold Counter</button>
                         <button id="btn-add-tx" class="primary-btn">+ New Transaction</button>
@@ -301,6 +302,36 @@
                         </thead>
                         <tbody id="sme-products-tbody">
                             <tr><td colspan="7" style="text-align:center; padding:20px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Customer Invoices Sub-View for CEO & Supervisor -->
+                <div id="sme-view-invoices" class="table-container" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
+                        <h3 style="margin:0; font-size:1.1rem; display:flex; align-items:center; gap:8px;">
+                            <i class="fa-solid fa-file-invoice-dollar" style="color:var(--primary);"></i> Unpaid Customer Invoices
+                        </h3>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <input type="text" id="sme-invoice-search" placeholder="Search by Client or Inv #..." onkeyup="filterCustomerInvoices(this.value)" style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); width:230px;">
+                            <button class="secondary-btn" onclick="loadCustomerInvoices()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                        </div>
+                    </div>
+                    <table id="customer-invoices-table" style="width:100%;">
+                        <thead>
+                            <tr>
+                                <th>Invoice #</th>
+                                <th>Date</th>
+                                <th>Customer Name</th>
+                                <th>Phone</th>
+                                <th>Issued By</th>
+                                <th>Total (UGX)</th>
+                                <th>Status</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="customer-invoices-tbody">
+                            <tr><td colspan="8" style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading customer invoices...</td></tr>
                         </tbody>
                     </table>
                 </div>
