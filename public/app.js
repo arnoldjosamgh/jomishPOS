@@ -651,15 +651,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (_currentRole === "CASHIER") {
-    // Cashier can pay and end shift. Print invoice only appears in edit mode
+    // Cashier can pay, print invoices, and end shift
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
   } else {
-    if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment
+    if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   }
 
@@ -1205,12 +1206,37 @@ async function loadPOSExpenses() {
   }
 
   try {
-    const res = await fetchAuth(`${API_URL}/transactions?type=EXPENSE,CASH_IN,FLOAT_IN`);
+    const res = await fetchAuth(`${API_URL}/transactions?type=EXPENSE,CASH_IN,FLOAT_IN&force_refresh=1&t=${Date.now()}`);
     const data = await res.json();
 
-    // Filter EXPENSE and CASH_IN / FLOAT transactions
+    function isCashInTx(t) {
+      if (!t) return false;
+      const type = (t.type || "").toUpperCase();
+      if (type === "CASH_IN" || type === "FLOAT_IN") return true;
+      const desc = (t.description || "").toLowerCase();
+      if (
+        (type === "INCOME" || type === "GENERAL" || !type) &&
+        (desc.includes("cash in") ||
+          desc.includes("cash-in") ||
+          desc.includes("float") ||
+          desc.includes("drawer") ||
+          desc.includes("top up") ||
+          desc.includes("top-up") ||
+          desc.includes("addition"))
+      ) {
+        return true;
+      }
+      return false;
+    }
+
+    function isExpenseTx(t) {
+      if (!t) return false;
+      return (t.type || "").toUpperCase() === "EXPENSE";
+    }
+
+    // Filter EXPENSE and CASH_IN / FLOAT transactions (including from Financial Hub)
     const txs = (data.transactions || []).filter(
-      (t) => t.type === "EXPENSE" || t.type === "CASH_IN" || t.type === "FLOAT_IN",
+      (t) => isExpenseTx(t) || isCashInTx(t),
     );
 
     // Compute totals
@@ -1225,7 +1251,7 @@ async function loadPOSExpenses() {
 
     txs.forEach((t) => {
       const amt = parseFloat(t.amount) || 0;
-      const isCashIn = t.type === "CASH_IN" || t.type === "FLOAT_IN";
+      const isCashIn = isCashInTx(t);
 
       if (!isCashIn) allExp += amt;
 
@@ -1254,16 +1280,16 @@ async function loadPOSExpenses() {
     if (todayCashinEl) todayCashinEl.textContent = `UGX ${todayCashIn.toLocaleString()}`;
     if (totalExpEl) totalExpEl.textContent = `UGX ${allExp.toLocaleString()}`;
 
-    // Enforce Admin Read-Only for Expense/Float Entry
+    // Enforce Permission for Expense/Float Entry (Cashiers, Supervisors, Admins, Managers, Tech)
     const _expUserRole = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-    const isCashierAtTill = _expUserRole === "CASHIER" || _expUserRole === "TECH" || USER_NAME === "System Technician";
+    const canRecord = ["CASHIER", "SUPERVISOR", "MANAGER", "ADMIN", "CEO", "TECH"].includes(_expUserRole) || USER_NAME === "System Technician";
     const formExp = document.getElementById("form-pos-expense");
     const formCashin = document.getElementById("form-pos-cashin");
     const tabsContainer = document.getElementById("tab-btn-expense")?.parentElement;
     const entryTitle = document.getElementById("pos-cash-entry-title");
     let notice = document.getElementById("pos-admin-exp-notice");
 
-    if (!isCashierAtTill) {
+    if (!canRecord) {
       if (formExp) formExp.style.display = "none";
       if (formCashin) formCashin.style.display = "none";
       if (tabsContainer) tabsContainer.style.display = "none";
@@ -1296,7 +1322,7 @@ async function loadPOSExpenses() {
     }
 
     txs.forEach((t) => {
-      const isCashIn = t.type === "CASH_IN" || t.type === "FLOAT_IN";
+      const isCashIn = isCashInTx(t);
       const amt = parseFloat(t.amount) || 0;
 
       let category = "General";
@@ -1380,7 +1406,9 @@ async function handlePOSExpenseSubmit(e) {
         `Expense of UGX ${amount.toLocaleString()} recorded.`,
         "success",
       );
-      e.target.reset();
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        await window.OfflineDB.bustCache("/transactions").catch(() => {});
+      }
       loadPOSExpenses();
       if (typeof loadDashboard === "function") loadDashboard();
     } else {
@@ -1446,6 +1474,9 @@ async function handlePOSCashInSubmit(e) {
         todayCashinEl.textContent = `UGX ${(cur + amount).toLocaleString()}`;
       }
 
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        await window.OfflineDB.bustCache("/transactions").catch(() => {});
+      }
       await loadPOSExpenses();
       if (typeof loadDashboard === "function") loadDashboard();
     } else {
@@ -2014,9 +2045,16 @@ function initSockets() {
         loadDashboard();
       }
     } else if (data.module === "transactions") {
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        window.OfflineDB.bustCache("/transactions").catch(() => {});
+      }
       if (USER_PERMISSIONS.can_see_sme) {
         loadTransactions();
         loadDashboard();
+      }
+      const expView = document.getElementById("pos-expenses-view");
+      if (expView && !expView.classList.contains("hidden")) {
+        loadPOSExpenses();
       }
     } else if (
       data.module === "schedules" ||
@@ -2550,12 +2588,13 @@ function enforceRBAC() {
   } else if (isCashier) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
   } else {
-    if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
+    // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment
+    if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   }
 
@@ -2732,6 +2771,8 @@ async function fetchAuth(url, options = {}) {
         { pattern: "/employees",      busts: ["/api/employees"] },
         { pattern: "/users/",         busts: ["/api/employees"] },
         { pattern: "/roles",          busts: ["/api/roles"] },
+        { pattern: "/pos/cash-in",    busts: ["/api/transactions", "/api/finance"] },
+        { pattern: "/cash-in",        busts: ["/api/transactions", "/api/finance"] },
         { pattern: "/transactions",   busts: ["/api/transactions", "/api/finance"] },
         { pattern: "/pos_orders",     busts: ["/api/pos_orders", "/api/transactions", "/api/deliveries"] },
         { pattern: "/checkout",       busts: ["/api/products", "/api/pos_orders", "/api/transactions", "/api/deliveries"] },
@@ -4004,6 +4045,23 @@ function renderCart() {
   document
     .getElementById("btn-checkout")
     .setAttribute("data-total", total.toFixed(0));
+
+  // Re-enable Print Invoice button when cart has items (new order started or edit loaded)
+  // Disable/grey it when cart is empty so it can't be double-tapped after printing
+  const _btnPI = document.getElementById("btn-print-invoice");
+  if (_btnPI && !_currentEditOrder) {
+    if (posCart.length > 0) {
+      _btnPI.disabled = false;
+      _btnPI.style.opacity = "";
+      _btnPI.style.pointerEvents = "";
+      _btnPI.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+    } else {
+      _btnPI.disabled = true;
+      _btnPI.style.opacity = "0.45";
+      _btnPI.style.pointerEvents = "none";
+      _btnPI.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+    }
+  }
 }
 
 // ==== CASH PAYMENT NUMPAD ENGINE ====
@@ -4149,6 +4207,12 @@ window.handlePaymentMethodChange = async function () {
 };
 
 async function confirmPayment() {
+  // Block: only Cashier role can collect direct payment
+  const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_roleNow !== "CASHIER") {
+    alert("Only a Cashier can collect direct payment. Use 'PRINT INVOICE' instead.");
+    return;
+  }
   // Block: if we are in edit-order mode, save the edit instead of creating a new order
   if (_currentEditOrder && _currentEditOrder.id) {
     alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
@@ -4431,15 +4495,16 @@ async function submitWaiterOrder() {
     });
     if (res.ok) {
       const data = await res.json();
-      showToast(`Invoice printed! Order #${String(data.receipt_no || data.transaction_id || "").padStart(4,"0")} — Served by ${waiterFirstName}`, "success");
+      // Always use pos_order_id for kitchen token so edited orders show the same number
+      const kitchenOrderNo = String(data.pos_order_id || data.receipt_no || data.transaction_id || "").padStart(4, "0");
+      showToast(`Invoice printed! Order #${kitchenOrderNo} — Served by ${waiterFirstName}`, "success");
 
       // Print ONLY the kitchen token for waiter
       const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
-      const orderNo = String(data.receipt_no || data.transaction_id || data.pos_order_id || Math.floor(Math.random() * 9999)).padStart(4, "0");
       const tokenData = {
         isInvoice: false,
         printTokenOnly: true,
-        orderId: orderNo,
+        orderId: kitchenOrderNo,
         dateStr,
         cashierName: waiterFirstName,
         servedBy: waiterFirstName,
@@ -4548,6 +4613,15 @@ async function getInvoice() {
         null,
         true,
       );
+
+      // Disable print invoice button after successful print — re-enables when new items are added
+      const _btnPI = document.getElementById("btn-print-invoice");
+      if (_btnPI) {
+        _btnPI.disabled = true;
+        _btnPI.style.opacity = "0.45";
+        _btnPI.style.pointerEvents = "none";
+        _btnPI.innerHTML = '<i class="fa-solid fa-check"></i> Printed';
+      }
 
       posCart = [];
       renderCart();
@@ -11782,7 +11856,9 @@ function cancelEditOrder() {
   posCart = [];
   renderCart();
   const btnPrintInvoice = document.getElementById("btn-print-invoice");
-  if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  const isWaiterLevel = _role === "WAITER" || _role === "SUPERVISOR";
+  if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", isWaiterLevel ? "none" : "block", "important");
   switchPOSView('pending');
 }
 window.cancelEditOrder = cancelEditOrder;
@@ -11837,7 +11913,9 @@ async function saveEditedPendingOrder() {
     posCart = [];
     renderCart();
     const btnPrintInvoice = document.getElementById("btn-print-invoice");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+    const isWaiterLevel = _role === "WAITER" || _role === "SUPERVISOR";
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", isWaiterLevel ? "none" : "block", "important");
     switchPOSView('pending');
     if (typeof loadPendingCOD === 'function') loadPendingCOD();
   } catch (e) {
