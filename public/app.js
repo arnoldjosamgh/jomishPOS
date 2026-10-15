@@ -11318,7 +11318,7 @@ window.closeCodModal = function () {
 
 window.loadPendingCOD = async function () {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isWaiterUser = _role === "WAITER";
+  const isWaiterUser = _role === "WAITER" || _role === "CASHIER"; // Cashier: edit-only in pending, no collect payment
   const listContainer = document.getElementById("cod-list-container");
   if (listContainer) {
     listContainer.innerHTML =
