@@ -2859,12 +2859,19 @@ app.get("/api/products/:id/movements", authenticateToken, async (req, res) => {
 
   try {
     // 1. Fetch all explicit stock_movements rows
-    const smRows = await new Promise((resolve, reject) => {
+    const smRows = await new Promise((resolve) => {
       db.all(
         `SELECT id, product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by, created_at
          FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC`,
         [productId],
-        (err, rows) => err ? reject(err) : resolve(rows || [])
+        (err, rows) => {
+          if (err) {
+            console.warn('[movements GET] stock_movements query error:', err.message);
+            resolve([]);
+          } else {
+            resolve(rows || []);
+          }
+        }
       );
     });
 
@@ -2878,16 +2885,23 @@ app.get("/api/products/:id/movements", authenticateToken, async (req, res) => {
     });
 
     // 2. Fetch all sales from order_items not already in stock_movements
-    const salesRows = await new Promise((resolve, reject) => {
+    const salesRows = await new Promise((resolve) => {
       db.all(
         `SELECT oi.pos_order_id, oi.product_id, oi.product_name, oi.qty,
-                po.created_at, po.served_by, po.invoice_number
+                po.order_date as created_at, po.served_by, po.invoice_number
          FROM order_items oi
          LEFT JOIN pos_orders po ON po.id = oi.pos_order_id
          WHERE oi.product_id = ?
-         ORDER BY po.created_at DESC`,
+         ORDER BY po.order_date DESC`,
         [productId],
-        (err, rows) => err ? reject(err) : resolve(rows || [])
+        (err, rows) => {
+          if (err) {
+            console.warn('[movements GET] salesRows query error:', err.message);
+            resolve([]);
+          } else {
+            resolve(rows || []);
+          }
+        }
       );
     });
 
@@ -2899,17 +2913,17 @@ app.get("/api/products/:id/movements", authenticateToken, async (req, res) => {
         product_id: r.product_id,
         product_name: r.product_name,
         movement_type: 'SALE',
-        qty: -Math.abs(r.qty),
+        qty: -Math.abs(r.qty || 1),
         stock_before: null,
         stock_after: null,
         note: `Sale #${r.pos_order_id}${r.invoice_number ? ' (Inv: ' + r.invoice_number + ')' : ''}`,
         performed_by: r.served_by || 'Cashier',
-        created_at: r.created_at
+        created_at: r.created_at || new Date().toISOString()
       }));
 
     // 3. Merge, sort newest-first, apply limit
     const all = [...smRows, ...syntheticSales]
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
       .slice(0, limit);
 
     res.json({ movements: all });

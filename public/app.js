@@ -11761,7 +11761,8 @@ async function _loadStockMovements() {
       </table>
     `;
   } catch (e) {
-    content.innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center;">Failed to load movements. Please try again.</div>';
+    console.error("Failed to load movements:", e);
+    content.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center;">Failed to load movements: ${e.message || 'Please try again.'}</div>`;
   }
 }
 window._loadStockMovements = _loadStockMovements;
