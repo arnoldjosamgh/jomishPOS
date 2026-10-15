@@ -640,7 +640,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnEndShift = document.getElementById("btn-end-shift");
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
-  const isWaiterLevel = _currentRole === "WAITER";
+  const isWaiterLevel = _currentRole === "WAITER" || _currentRole === "SUPERVISOR";
   if (isWaiterLevel) {
     // Waiter sends order to cashier (cannot pay)
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
@@ -11722,13 +11722,13 @@ function _showEditOrderBanner(posOrderId, order) {
   if (existing) existing.remove();
 
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isWaiter = _role === "WAITER";
+  const isWaiterOrSupervisor = _role === "WAITER" || _role === "SUPERVISOR";
 
   const banner = document.createElement('div');
   banner.id = 'edit-order-banner';
   banner.style.cssText = 'background:#f59e0b;color:#000;padding:10px 14px;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700;font-size:0.85rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-wrap:wrap;';
 
-  const buttonsHtml = isWaiter
+  const buttonsHtml = isWaiterOrSupervisor
     ? `
       <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
         <i class="fa-solid fa-xmark"></i> Cancel
