@@ -2700,7 +2700,8 @@ app.patch("/api/products/:id/stock", authenticateToken, (req, res) => {
         // Log stock movement
         db.run(
           `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'RESTOCK', ?, ?, ?, ?, ?)`,
-          [productId, product.name, inc, product.stock, product.stock + inc, 'Manual restock', performedBy]
+          [productId, product.name, inc, product.stock, product.stock + inc, 'Manual restock', performedBy],
+          (smErr) => { if (smErr) console.error('[stock_movements] RESTOCK insert error:', smErr.message); }
         );
         emitAndBust("products", "products");
         res.json({
@@ -2836,7 +2837,8 @@ app.post("/api/products/:id/movements", authenticateToken, (req, res) => {
       if (e) return res.status(500).json({ error: e.message });
       db.run(
         `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [productId, product.name, mType, qtyInt, product.stock, newStock < 0 ? 0 : newStock, note || '', performedBy]
+        [productId, product.name, mType, qtyInt, product.stock, newStock < 0 ? 0 : newStock, note || '', performedBy],
+        (smErr) => { if (smErr) console.error('[stock_movements] Manual adjust insert error:', smErr.message); }
       );
       emitAndBust("products", "products");
       res.json({ success: true, new_stock: newStock < 0 ? 0 : newStock });
@@ -2942,12 +2944,27 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       const pos_order_id = orderResult.lastID;
 
       // Stock deductions (skip for Made-To-Order items where track_stock = 0)
+      const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
+      const servedByLabel = effectiveServedBy || cashierName;
       for (const item of items) {
         if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
+        // Fetch current stock BEFORE deduction using db.get() (works on both SQLite and Postgres)
+        // Must be done before the UPDATE inside withTransaction
+        const stockBeforeVal = await new Promise((resolve) => {
+          db.get("SELECT stock FROM products WHERE id = ?", [item.id], (err, row) => {
+            resolve(row ? row.stock : null);
+          });
+        });
         await q(
           "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
           [item.qty, item.id, item.qty]
         );
+        const stockAfter = stockBeforeVal !== null ? Math.max(0, stockBeforeVal - item.qty) : null;
+        // Log stock movement INSIDE the transaction (correct schema context guaranteed)
+        await q(
+          `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)`,
+          [item.id, item.name, -item.qty, stockBeforeVal, stockAfter, `Sale #${transaction_id}`, servedByLabel]
+        ).catch(e => console.error('[stock_movements] SALE insert error:', e.message));
         if (item.barcodes && Array.isArray(item.barcodes)) {
           for (const bc of item.barcodes) {
             await q(
@@ -2987,22 +3004,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         (err) => { if (err) console.error("Failed to insert order_item:", err.message); }
       );
     }
-
-    // ── 3b. Log stock movements for sold items ─────────────────────────────
-    const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
-    const servedByLabel = effectiveServedBy || cashierName;
-    for (const item of items) {
-      if (item.track_stock === 0) continue;
-      // Get current stock to compute stock_before/after accurately
-      db.get("SELECT stock FROM products WHERE id = ?", [item.id], (serr, prow) => {
-        const stockAfter = prow ? prow.stock : null;
-        const stockBefore = stockAfter !== null ? stockAfter + item.qty : null;
-        db.run(
-          `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)`,
-          [item.id, item.name, -item.qty, stockBefore, stockAfter, `Sale #${transaction_id}`, servedByLabel]
-        );
-      });
-    }
+    // NOTE: stock_movements for SALE are now logged INSIDE the withTransaction block above
 
     // ── 4. Emit real-time updates ──────────────────────────────────────────
     emitAndBust("transactions", "finance_summary");

@@ -11300,28 +11300,131 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
 // ========================================================
 // STOCK MOVEMENTS MODAL
 // ========================================================
+let _smProductId = null;
+let _smProductName = "";
+let _smCurrentStock = 0;
+let _smThreshold = 10;
+
 async function openStockMovements(productId, productName, currentStock, threshold) {
   const modal = document.getElementById("stock-movements-modal");
   if (!modal) return;
   modal.classList.remove("hidden");
 
+  _smProductId = productId;
+  _smProductName = productName || "Product";
+  _smCurrentStock = Number(currentStock) || 0;
+  _smThreshold = threshold !== undefined && threshold !== null ? threshold : 10;
+
+  renderStockMovementsHeader();
+  await _loadStockMovements();
+}
+window.openStockMovements = openStockMovements;
+
+function renderStockMovementsHeader() {
   const infoEl = document.getElementById("stock-movement-product-info");
-  if (infoEl) {
-    infoEl.innerHTML = `<strong>${productName}</strong> &bull; Current Stock: <span style="font-weight:700;color:var(--primary);">${currentStock}</span> &bull; Low Stock Alert: <span style="font-weight:700;color:var(--warning);">${threshold || 10}</span>`;
+  if (!infoEl) return;
+  infoEl.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+      <div>
+        <strong style="font-size:1.05rem; color:var(--text);">${_smProductName}</strong>
+        <span style="display:inline-block; margin-left:8px; padding:2px 8px; border-radius:6px; font-weight:700; background:rgba(99,102,241,0.12); color:var(--primary); font-size:0.85rem;">
+          Current Stock: <span id="sm-badge-stock">${_smCurrentStock}</span>
+        </span>
+        <span style="display:inline-block; margin-left:4px; padding:2px 8px; border-radius:6px; font-weight:600; background:rgba(245,158,11,0.12); color:#f59e0b; font-size:0.85rem;">
+          Low Stock Alert &lt; ${_smThreshold}
+        </span>
+      </div>
+      <button type="button" onclick="_loadStockMovements()" class="btn-secondary" style="padding:4px 10px; font-size:0.8rem; border-radius:6px; display:inline-flex; align-items:center; gap:5px;">
+        <i class="fa-solid fa-arrows-rotate"></i> Refresh
+      </button>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 12px; background:var(--surface); border:1px solid var(--border); border-radius:8px;">
+      <span style="font-size:0.82rem; font-weight:700; color:var(--text-muted); white-space:nowrap;">
+        <i class="fa-solid fa-sliders"></i> Manual Adjust:
+      </span>
+      <input type="number" id="sm-adj-qty" placeholder="Qty (+5 or -3)" style="width:115px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--background); color:var(--text); font-size:0.85rem;" oninput="this.style.color=this.value<0?'#EF4444':(this.value>0?'#10B981':'inherit')">
+      <input type="text" id="sm-adj-note" placeholder="Reason (e.g. Damaged, Expired, Inventory audit, Return)" style="flex:1; min-width:160px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--background); color:var(--text); font-size:0.85rem;">
+      <button type="button" id="sm-adj-btn" onclick="submitStockAdjustment()" style="background:var(--primary); color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:0.85rem; font-weight:600; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;">
+        <i class="fa-solid fa-plus-minus"></i> Apply
+      </button>
+    </div>
+  `;
+}
+
+async function submitStockAdjustment() {
+  if (!_smProductId) return;
+  const qtyInput = document.getElementById("sm-adj-qty");
+  const noteInput = document.getElementById("sm-adj-note");
+  const btn = document.getElementById("sm-adj-btn");
+  const qty = parseInt(qtyInput ? qtyInput.value : 0, 10);
+  const note = noteInput ? noteInput.value.trim() : "";
+
+  if (!qty || isNaN(qty) || qty === 0) {
+    showToast("Please enter a non-zero quantity (+5 to add, -3 to deduct)", "error");
+    if (qtyInput) qtyInput.focus();
+    return;
   }
 
-  const content = document.getElementById("stock-movements-content");
-  if (!content) return;
-  content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading stock history...</div>';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+  }
 
   try {
-    const res = await fetchAuth(`${API_URL}/products/${productId}/movements`);
+    const res = await fetchAuth(`${API_URL}/products/${_smProductId}/movements`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        qty,
+        note: note || "Manual adjustment",
+        movement_type: qty > 0 ? "RESTOCK" : "ADJUSTMENT"
+      })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || "Failed to record adjustment");
+    }
+    const result = await res.json();
+    if (result && result.new_stock !== undefined) {
+      _smCurrentStock = result.new_stock;
+    } else {
+      _smCurrentStock = Math.max(0, _smCurrentStock + qty);
+    }
+    const badgeEl = document.getElementById("sm-badge-stock");
+    if (badgeEl) badgeEl.textContent = _smCurrentStock;
+
+    showToast("Stock adjustment recorded successfully", "success");
+    if (qtyInput) qtyInput.value = "";
+    if (noteInput) noteInput.value = "";
+    await _loadStockMovements();
+    if (typeof loadInventory === "function") {
+      loadInventory();
+    }
+  } catch (err) {
+    console.error("Stock adjustment error:", err);
+    showToast(err.message || "Failed to apply adjustment", "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-plus-minus"></i> Apply';
+    }
+  }
+}
+window.submitStockAdjustment = submitStockAdjustment;
+
+async function _loadStockMovements() {
+  const content = document.getElementById("stock-movements-content");
+  if (!content || !_smProductId) return;
+  content.innerHTML = '<div style="text-align:center;padding:36px;color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading stock history...</div>';
+
+  try {
+    const res = await fetchAuth(`${API_URL}/products/${_smProductId}/movements`);
     if (!res.ok) throw new Error("Failed to load");
     const data = await res.json();
     const movements = data.movements || [];
 
     if (movements.length === 0) {
-      content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><i class="fa-solid fa-clock-rotate-left" style="font-size:2rem;margin-bottom:10px;opacity:0.5;display:block;"></i>No stock movements logged yet for this product.<br><small>Stock additions and sales will be recorded here automatically.</small></div>';
+      content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><i class="fa-solid fa-clock-rotate-left" style="font-size:2rem;margin-bottom:10px;opacity:0.5;display:block;"></i>No stock movements logged yet for this product.<br><small style="opacity:0.8;">Sales, restocks, and manual adjustments will appear here automatically.</small></div>';
       return;
     }
 
@@ -11329,18 +11432,19 @@ async function openStockMovements(productId, productName, currentStock, threshol
       const isSale = m.movement_type === "SALE";
       const isRestock = m.movement_type === "RESTOCK";
       const color = isSale ? "#EF4444" : isRestock ? "#10B981" : "#F59E0B";
+      const bg = isSale ? "rgba(239,68,68,0.08)" : isRestock ? "rgba(16,185,129,0.08)" : "rgba(245,158,11,0.08)";
       const icon = isSale ? '<i class="fa-solid fa-arrow-trend-down"></i>' : isRestock ? '<i class="fa-solid fa-arrow-trend-up"></i>' : '<i class="fa-solid fa-arrow-right-arrow-left"></i>';
       const dt = m.created_at ? new Date(m.created_at).toLocaleString("en-UG", { timeZone: "Africa/Kampala" }) : "—";
       const qtyDisplay = (m.qty > 0 ? "+" : "") + m.qty;
 
       return `
         <tr style="border-bottom:1px solid var(--border);">
-          <td style="padding:10px 8px; font-size:0.8rem; color:var(--text-muted); white-space:nowrap;">${dt}</td>
-          <td style="padding:10px 8px; font-weight:700; color:${color}; white-space:nowrap;">${icon} ${m.movement_type}</td>
-          <td style="padding:10px 8px; text-align:right; font-weight:700; color:${color}; font-size:0.95rem;">${qtyDisplay}</td>
+          <td style="padding:10px 8px; font-size:0.78rem; color:var(--text-muted); white-space:nowrap;">${dt}</td>
+          <td style="padding:10px 8px; white-space:nowrap;"><span style="background:${bg}; color:${color}; border-radius:5px; padding:3px 8px; font-weight:700; font-size:0.78rem;">${icon} ${m.movement_type}</span></td>
+          <td style="padding:10px 8px; text-align:right; font-weight:800; color:${color}; font-size:0.95rem;">${qtyDisplay}</td>
           <td style="padding:10px 8px; text-align:right; color:var(--text-muted);">${m.stock_before !== null && m.stock_before !== undefined ? m.stock_before : '—'}</td>
           <td style="padding:10px 8px; text-align:right; font-weight:700; color:var(--text);">${m.stock_after !== null && m.stock_after !== undefined ? m.stock_after : '—'}</td>
-          <td style="padding:10px 8px; font-size:0.82rem; color:var(--text-muted);">${m.note || '—'}</td>
+          <td style="padding:10px 8px; font-size:0.82rem; color:var(--text-muted); max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(m.note || '').replace(/"/g, '&quot;')}">${m.note || '—'}</td>
           <td style="padding:10px 8px; font-size:0.82rem; color:var(--primary); font-weight:600;">${m.performed_by || '—'}</td>
         </tr>
       `;
@@ -11350,9 +11454,9 @@ async function openStockMovements(productId, productName, currentStock, threshol
       <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
         <thead>
           <tr style="background:var(--background); position:sticky; top:0; z-index:1; border-bottom:2px solid var(--border); text-align:left;">
-            <th style="padding:8px;">Date & Time</th>
+            <th style="padding:8px; white-space:nowrap;">Date & Time</th>
             <th style="padding:8px;">Type</th>
-            <th style="padding:8px; text-align:right;">Quantity</th>
+            <th style="padding:8px; text-align:right;">Change</th>
             <th style="padding:8px; text-align:right;">Before</th>
             <th style="padding:8px; text-align:right;">After</th>
             <th style="padding:8px;">Details / Note</th>
@@ -11366,7 +11470,7 @@ async function openStockMovements(productId, productName, currentStock, threshol
     content.innerHTML = '<div style="color:var(--danger);padding:20px;text-align:center;">Failed to load movements. Please try again.</div>';
   }
 }
-window.openStockMovements = openStockMovements;
+window._loadStockMovements = _loadStockMovements;
 
 // ========================================================
 // CASHIER EDIT PENDING ORDER — Register-based flow
