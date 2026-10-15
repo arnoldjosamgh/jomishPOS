@@ -36,6 +36,15 @@ let isPrinting = false;
 const _printedReceiptNos = new Set();
 const _productPhotoCache = new Map();
 
+function formatDocNo(prefix, num) {
+  if (!num && num !== 0) return "";
+  const raw = String(num).replace(/^(INV|RCPT)[-#\s]*/i, "");
+  const n = parseInt(raw, 10);
+  const padded = isNaN(n) ? raw : String(n).padStart(3, "0");
+  return `${prefix}${padded}`;
+}
+window.formatDocNo = formatDocNo;
+
 function lazyLoadProductImages() {
   const imgs = document.querySelectorAll("img.lazy-prod-photo[data-photo-id]");
   if (!imgs.length) return;
@@ -4405,16 +4414,17 @@ async function submitWaiterOrder() {
 
       const rawName = USER_NAME || localStorage.getItem("jomish_name") || "Staff";
       const staffFirstName = rawName.trim().split(/\s+/)[0] || "Staff";
-      const orderNo = _currentEditOrder.invoice_number || _currentEditOrder.id;
+      const rawOrderNo = _currentEditOrder.invoice_number || _currentEditOrder.id;
+      const invLabel = formatDocNo("INV", rawOrderNo);
 
-      showToast(`Order #${String(orderNo).padStart(4, "0")} updated!`, "success");
+      showToast(`Order ${invLabel} updated!`, "success");
 
       // Print updated kitchen token for the SAME existing order
       const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
       const tokenData = {
         isInvoice: false,
         printTokenOnly: true,
-        orderId: String(orderNo).padStart(4, "0"),
+        orderId: invLabel,
         dateStr,
         cashierName: staffFirstName,
         servedBy: _currentEditOrder.served_by || staffFirstName,
@@ -4442,7 +4452,7 @@ async function submitWaiterOrder() {
     } finally {
       if (btnWaiter) {
         btnWaiter.disabled = false;
-        btnWaiter.innerHTML = origHtml || '<i class="fa-solid fa-print"></i> PRINT TOKEN';
+        btnWaiter.innerHTML = origHtml || '<i class="fa-solid fa-print"></i> PRINT INVOICE';
       }
       _isSubmittingWaiterOrder = false;
     }
@@ -4488,16 +4498,17 @@ async function submitWaiterOrder() {
     });
     if (res.ok) {
       const data = await res.json();
-      // Always use pos_order_id for kitchen token so edited orders show the same number
-      const kitchenOrderNo = String(data.pos_order_id || data.receipt_no || data.transaction_id || "").padStart(4, "0");
-      showToast(`Invoice printed! Order #${kitchenOrderNo} — Served by ${waiterFirstName}`, "success");
+      // Use invoice_number as the single consistent order number across all prints
+      const rawOrderNo = data.invoice_number || data.pos_order_id || data.receipt_no || data.transaction_id || "";
+      const invLabel = formatDocNo("INV", rawOrderNo);
+      showToast(`Order ${invLabel} sent to kitchen — Served by ${waiterFirstName}`, "success");
 
       // Print ONLY the kitchen token for waiter
       const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
       const tokenData = {
         isInvoice: false,
         printTokenOnly: true,
-        orderId: kitchenOrderNo,
+        orderId: invLabel,
         dateStr,
         cashierName: waiterFirstName,
         servedBy: waiterFirstName,
@@ -4784,10 +4795,8 @@ function printReceipt(
     paymentMethod === "CREDIT" || paymentMethod === "INVOICE"
       ? Math.max(0, total - paid)
       : 0;
-  const orderNo = String(orderId || Math.floor(Math.random() * 9999)).padStart(
-    4,
-    "0",
-  );
+  const docPrefix = isInvoice ? "INV" : "RCPT";
+  const orderNo = formatDocNo(docPrefix, orderId || Math.floor(Math.random() * 999));
   const dateStr = new Date().toLocaleString("en-UG", {
     timeZone: "Africa/Kampala",
   });
@@ -4830,7 +4839,7 @@ function printReceipt(
   set("receipt-addr", bizLoc);
   set("receipt-contact", bizTel);
   set("receipt-date", "Date: " + dateStr);
-  set("receipt-no", (isInvoice ? "INVOICE" : "RECEIPT") + " #" + orderNo);
+  set("receipt-no", orderNo);
   set("receipt-cashier", "Cashier: " + (USER_NAME || "Cashier"));
   const servedByEl = document.getElementById("receipt-served-by");
   if (servedByEl) {
@@ -5049,7 +5058,7 @@ function _buildKitchenTokenHTML(d) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>KITCHEN TOKEN #${d.orderId}</title>
+<title>KITCHEN TOKEN ${d.orderId}</title>
 <style>
 /* ─── 80mm thermal roll paper ─── */
 @page { size: 80mm auto; margin: 3mm 2mm; }
@@ -5065,7 +5074,7 @@ table { width: 100%; border-collapse: collapse; }
 </head>
 <body>
     <div class="center heading" style="font-size:16pt;">KITCHEN TOKEN</div>
-    <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: #${d.orderId}</span></div>
+    <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: ${d.orderId}</span></div>
     <div class="row"><span>Date: ${d.dateStr}</span></div>
     ${d.servedBy ? `<div class="row"><span>Served by: ${d.servedBy}</span></div>` : ""}
     <div class="divider"></div>
@@ -5147,7 +5156,7 @@ function _buildReceiptHTML(d) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>${heading} #${d.orderId}</title>
+<title>${heading} ${d.orderId}</title>
 <style>
 /* ─── 80mm thermal roll paper ─── */
 @page {
@@ -5213,7 +5222,7 @@ th         { border-bottom: 1px dashed #888; padding: 3px 0; }
 <div class="divider"></div>
 
 <!-- Receipt heading -->
-<div class="heading">${heading} #${d.orderId}</div>
+<div class="heading">${heading} ${d.orderId}</div>
 <div class="row">
     <span>Date: ${d.dateStr}</span>
 </div>
@@ -6055,7 +6064,7 @@ async function loadTransactions(searchTerm = "") {
     filtered.forEach((tx) => {
       const isIncome = tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN";
       const color = isIncome ? "var(--success)" : "var(--danger)";
-      const receiptNo = String(tx.receipt_no || tx.id).padStart(4, "0");
+      const receiptNo = formatDocNo("RCPT", tx.order_invoice_number || tx.receipt_no || tx.id);
       const tr = document.createElement("tr");
 
       // Payment method badge based on type & description
@@ -6117,7 +6126,7 @@ async function loadTransactions(searchTerm = "") {
 
       const cashierName = tx.recorded_by_name || "—";
 
-      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">RCPT-${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
+      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
       tr.dataset.txId = tx.id;
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function(e) {
@@ -6406,7 +6415,7 @@ async function viewReceiptDetails(txId) {
     const order = await res.json();
 
     document.getElementById("rd-tx-id").textContent =
-      `RCPT-${String(order.receipt_no || txId).padStart(4, "0")}`;
+      formatDocNo("RCPT", order.invoice_number || order.receipt_no || txId);
     document.getElementById("rd-cashier").textContent =
       order.cashier_name || "System";
     document.getElementById("rd-date").textContent = formatDisplayDate(
@@ -6556,10 +6565,10 @@ async function loadCashierReport() {
     txList.forEach((tx) => {
       const color = tx.type === "INCOME" ? "#10b981" : "#ef4444";
       const sign = tx.type === "INCOME" ? "+" : "-";
-      const rn = String(tx.receipt_no || tx.id).padStart(4, "0");
+      const rn = formatDocNo("RCPT", tx.order_invoice_number || tx.receipt_no || tx.id);
       txRows += `
         <tr>
-          <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">RCPT-${rn}</td>
+          <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">${rn}</td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${formatDisplayDate(tx.transaction_date, true)}</td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${tx.cashier_name || "—"}</td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border);">${tx.description || "—"}</td>
@@ -11431,9 +11440,7 @@ window.loadPendingCOD = async function () {
           const safeClient = (d.client_name || "").replace(/'/g, "\\'");
           const safeServer = (d.served_by || "").replace(/'/g, "\\'");
           const invNum = d.invoice_number || d.pos_order_id;
-          const invoiceLabel = `Invoice #${invNum}`;
-          // Clean invoice label using sequential invoice_number
-
+          const invoiceLabel = formatDocNo("INV", invNum);
 
           const waiterBadge = d.served_by
             ? `<div style="display:inline-flex; align-items:center; gap:5px; background:rgba(79, 70, 229, 0.12); color:var(--primary, #4F46E5); padding:3px 9px; border-radius:12px; font-size:0.83rem; font-weight:700; margin-top:4px;">
@@ -11451,6 +11458,10 @@ window.loadPendingCOD = async function () {
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <button onclick="printPendingOrderToken(${d.pos_order_id})"
+                    style="background:var(--warning, #f59e0b); color:white; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
+                    <i class="fa-solid fa-print"></i> Print Token
+                  </button>
                   <button onclick="openEditPendingOrder(${d.pos_order_id})"
                     style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-pen-to-square"></i> Edit Order
@@ -11505,6 +11516,36 @@ window.loadPendingCOD = async function () {
   }
 };
 
+// Print kitchen token for a pending order
+window.printPendingOrderToken = async function (posOrderId) {
+  try {
+    showToast("Printing kitchen token...", "info");
+    const [orderRes, itemsRes] = await Promise.all([
+      fetchAuth(`${API_URL}/pos_orders/${posOrderId}`),
+      fetchAuth(`${API_URL}/pos_orders/${posOrderId}/items`),
+    ]);
+    if (!orderRes.ok) throw new Error("Order not found");
+    const order = await orderRes.json();
+    const items = itemsRes.ok ? await itemsRes.json() : [];
+    const invLabel = formatDocNo("INV", order.invoice_number || order.id);
+    const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
+    const tokenData = {
+      isInvoice: false,
+      printTokenOnly: true,
+      orderId: invLabel,
+      dateStr,
+      cashierName: USER_NAME || "Staff",
+      servedBy: order.served_by || USER_NAME || "Staff",
+      items: items.map((i) => ({ name: i.name, qty: i.qty || 1, price: i.price })),
+    };
+    _printHTMLQueue([_buildKitchenTokenHTML(tokenData)]);
+    showToast(`Token for ${invLabel} printed!`, "success");
+  } catch (e) {
+    console.error("Print token error:", e);
+    showToast("Error printing token: " + e.message, "error");
+  }
+};
+
 // Print invoice for a pending order (cashier view)
 window.printPendingInvoice = async function (posOrderId, totalAmount, clientName, servedBy, invoiceNumber) {
   try {
@@ -11526,14 +11567,14 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
     if (!items || items.length === 0) {
       items = [{ name: "Invoice Payment", qty: 1, price: totalAmount }];
     }
-    // Fetch a transaction_id if available
+    // Fetch a transaction_id / invoice_number if available
     let invNum = invoiceNumber || null;
     let orderServer = servedBy || null;
     try {
       const txRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}`);
       if (txRes.ok) {
         const txData = await txRes.json();
-        if (!invNum) invNum = txData.invoice_number || txData.transaction_id || null;
+        if (!invNum) invNum = txData.invoice_number || txData.id || null;
         if (!orderServer && txData.served_by) orderServer = txData.served_by;
       }
     } catch (_) {}
@@ -11765,13 +11806,31 @@ async function openEditPendingOrder(posOrderId) {
     // Show editing banner in cart panel
     _showEditOrderBanner(posOrderId, _currentEditOrder);
 
-    // Ensure print invoice button stays hidden
+    // Make sure the action button is visible and active for edit mode
     const btnPrintInvoice = document.getElementById("btn-print-invoice");
-    if (btnPrintInvoice) {
-      btnPrintInvoice.style.setProperty("display", "none", "important");
+    const btnSendToCashier = document.getElementById("btn-send-to-cashier");
+    const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+    const isWaiterLevel = _role === "WAITER" || _role === "SUPERVISOR";
+    if (isWaiterLevel) {
+      if (btnSendToCashier) {
+        btnSendToCashier.style.setProperty("display", "block", "important");
+        btnSendToCashier.disabled = false;
+        btnSendToCashier.style.opacity = "";
+        btnSendToCashier.style.pointerEvents = "";
+        btnSendToCashier.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+      }
+    } else {
+      if (btnPrintInvoice) {
+        btnPrintInvoice.style.setProperty("display", "block", "important");
+        btnPrintInvoice.disabled = false;
+        btnPrintInvoice.style.opacity = "";
+        btnPrintInvoice.style.pointerEvents = "";
+        btnPrintInvoice.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+      }
     }
 
-    showToast(`Editing Order #${posOrderId} — add/remove items then tap Send to Cashier`, 'warning');
+    const invLabel = formatDocNo("INV", _currentEditOrder.invoice_number || posOrderId);
+    showToast(`Editing Order ${invLabel} — add/remove items then tap PRINT INVOICE or Save`, 'warning');
   } catch (e) {
     alert('Error loading order: ' + e.message);
   }
@@ -11779,21 +11838,7 @@ async function openEditPendingOrder(posOrderId) {
 window.openEditPendingOrder = openEditPendingOrder;
 
 window.printEditOrderKitchenToken = function () {
-  if (posCart.length === 0) return alert("Cart is empty! Add products first.");
-  const orderNo = _currentEditOrder ? (_currentEditOrder.invoice_number || _currentEditOrder.id) : "TOKEN";
-  const serverName = _currentEditOrder?.served_by || USER_NAME || "Staff";
-  const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
-  const tokenData = {
-    isInvoice: false,
-    printTokenOnly: true,
-    orderId: String(orderNo).padStart(4, "0"),
-    dateStr,
-    cashierName: USER_NAME || "Staff",
-    servedBy: serverName,
-    items: posCart.map((i) => ({ name: i.name, qty: i.qty || 1, price: i.price })),
-  };
-  _printHTMLQueue([_buildKitchenTokenHTML(tokenData)]);
-  showToast("Kitchen token printed!", "success");
+  return submitWaiterOrder();
 };
 
 function _showEditOrderBanner(posOrderId, order) {
@@ -11801,32 +11846,25 @@ function _showEditOrderBanner(posOrderId, order) {
   const existing = document.getElementById('edit-order-banner');
   if (existing) existing.remove();
 
-  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isWaiterOrSupervisor = _role === "WAITER" || _role === "SUPERVISOR";
+  const invLabel = formatDocNo("INV", order.invoice_number || posOrderId);
 
   const banner = document.createElement('div');
   banner.id = 'edit-order-banner';
   banner.style.cssText = 'background:#f59e0b;color:#000;padding:10px 14px;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700;font-size:0.85rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-wrap:wrap;';
 
-  const buttonsHtml = isWaiterOrSupervisor
-    ? `
-      <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
-        <i class="fa-solid fa-xmark"></i> Cancel
-      </button>
-    `
-    : `
-      <button onclick="saveEditedPendingOrder()" id="btn-save-edit-order" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
-        <i class="fa-solid fa-floppy-disk"></i> Save Changes
-      </button>
-      <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
-        <i class="fa-solid fa-xmark"></i> Cancel
-      </button>
-    `;
+  const buttonsHtml = `
+    <button onclick="submitWaiterOrder()" id="btn-save-edit-order" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
+      <i class="fa-solid fa-floppy-disk"></i> Save & Print Token
+    </button>
+    <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
+      <i class="fa-solid fa-xmark"></i> Cancel
+    </button>
+  `;
 
   banner.innerHTML = `
     <span style="display:flex;align-items:center;gap:7px;">
       <i class="fa-solid fa-pen-to-square"></i>
-      EDITING Order #${order.invoice_number || posOrderId}&nbsp;&bull;&nbsp;${order.buyer_name || 'Walk-in'}
+      EDITING Order ${invLabel}&nbsp;&bull;&nbsp;${order.buyer_name || 'Walk-in'}
     </span>
     <span style="display:flex;gap:8px;flex-wrap:wrap;">
       ${buttonsHtml}
@@ -11864,60 +11902,7 @@ window.closeEditPendingOrderModal = closeEditPendingOrderModal;
 
 async function saveEditedPendingOrder() {
   if (!_currentEditOrder) return;
-  if (posCart.length === 0) {
-    alert('Cannot save an empty order. Add at least one item or cancel.');
-    return;
-  }
-
-  const banner = document.getElementById('edit-order-banner');
-  const saveBtn = banner ? banner.querySelector('button') : null;
-  const origText = saveBtn ? saveBtn.innerHTML : '';
-  if (saveBtn) {
-    saveBtn.disabled = true;
-    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-  }
-
-  try {
-    const items = posCart.map(i => ({
-      id: i.product_id || i.id,
-      product_id: i.product_id || i.id,
-      name: i.name,
-      price: i.price,
-      qty: i.qty || 1,
-    }));
-
-    const res = await fetchAuth(`${API_URL}/pos_orders/${_currentEditOrder.id}/items`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to update order');
-    }
-
-    if (_currentEditOrder && _currentEditOrder.id) {
-      _printedReceiptNos.delete(Number(_currentEditOrder.id));
-    }
-    showToast('Order updated! You can now print the updated invoice with new products.', 'success');
-    if (banner) banner.remove();
-    _currentEditOrder = null;
-    posCart = [];
-    renderCart();
-    const btnPrintInvoice = document.getElementById("btn-print-invoice");
-    const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-    const isWaiterLevel = _role === "WAITER" || _role === "SUPERVISOR";
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", isWaiterLevel ? "none" : "block", "important");
-    switchPOSView('pending');
-    if (typeof loadPendingCOD === 'function') loadPendingCOD();
-  } catch (e) {
-    alert('Error updating order: ' + e.message);
-    if (saveBtn) {
-      saveBtn.disabled = false;
-      saveBtn.innerHTML = origText;
-    }
-  }
+  return submitWaiterOrder();
 }
 window.saveEditedPendingOrder = saveEditedPendingOrder;
 
@@ -12022,10 +12007,12 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
       renderCart();
 
       if (data.transaction_id && data.total_amount) {
+        // Use invoice_number for RCPT so number matches the original INV number
+        const rcptNo = data.invoice_number || data.receipt_no || data.transaction_id;
         printReceipt(
           receiptItems,
           data.total_amount,
-          data.receipt_no || data.transaction_id,
+          rcptNo,
           "CASH",
           paid,
           data.client_name || "",
@@ -12931,7 +12918,7 @@ window.renderCustomerInvoicesTable = function(searchTerm = "") {
     const dStr = formatDisplayDate ? formatDisplayDate(inv.order_date || inv.transaction_date, true) : (new Date(inv.order_date || Date.now()).toLocaleDateString());
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
-        <td style="font-weight:700; color:var(--primary);">INV-#${invNum}</td>
+        <td style="font-weight:700; color:var(--primary);">${formatDocNo("INV", invNum)}</td>
         <td style="font-size:0.83rem; color:var(--text-muted); white-space:nowrap;">${dStr}</td>
         <td style="font-weight:600;">${inv.client_name || 'Customer'}</td>
         <td style="color:var(--text-muted); font-size:0.85rem;">${inv.client_phone || '—'}</td>

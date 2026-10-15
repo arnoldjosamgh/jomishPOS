@@ -1470,7 +1470,20 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
 
   if (type) {
     const types = type.split(",").map((t) => t.trim().toUpperCase());
-    whereClauses.push(`t.type IN (${types.map(() => "?").join(",")})`);
+    const hasCashIn = types.includes("CASH_IN") || types.includes("FLOAT_IN");
+    if (hasCashIn) {
+      whereClauses.push(`(t.type IN (${types.map(() => "?").join(",")}) OR (t.type = 'INCOME' AND (
+        LOWER(t.description) LIKE '%cash in%' OR 
+        LOWER(t.description) LIKE '%cash-in%' OR 
+        LOWER(t.description) LIKE '%float%' OR 
+        LOWER(t.description) LIKE '%drawer%' OR 
+        LOWER(t.description) LIKE '%top up%' OR 
+        LOWER(t.description) LIKE '%top-up%' OR 
+        LOWER(t.description) LIKE '%addition%'
+      )))`);
+    } else {
+      whereClauses.push(`t.type IN (${types.map(() => "?").join(",")})`);
+    }
     params.push(...types);
   }
 
@@ -1512,9 +1525,9 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
 app.post("/api/transactions", authenticateToken, (req, res) => {
   const { amount, type, description, recorded_by, transaction_date } = req.body;
   const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  const isCashier = userRole === "CASHIER" || userRole === "TECH" || req.user.name === "System Technician";
-  if (type === "EXPENSE" && !isCashier) {
-    return res.status(403).json({ error: "Only cashiers on duty can record cash expenses paid from the till." });
+  const isAuthorized = ["CASHIER", "SUPERVISOR", "MANAGER", "ADMIN", "CEO", "TECH"].includes(userRole) || req.user.name === "System Technician";
+  if (type === "EXPENSE" && !isAuthorized) {
+    return res.status(403).json({ error: "Only cashiers or supervisors on duty can record cash expenses paid from the till." });
   }
   const dateToRecord = transaction_date
     ? new Date(transaction_date).toISOString()
@@ -3200,9 +3213,9 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
 // Record Cash Addition / Float to Drawer (Cashier receives money for change or float)
 app.post("/api/pos/cash-in", authenticateToken, (req, res) => {
   const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  const isCashier = userRole === "CASHIER" || userRole === "TECH" || req.user.name === "System Technician";
-  if (!isCashier) {
-    return res.status(403).json({ error: "Only cashiers on duty can add cash float to the till." });
+  const isAuthorized = ["CASHIER", "SUPERVISOR", "MANAGER", "ADMIN", "CEO", "TECH"].includes(userRole) || req.user.name === "System Technician";
+  if (!isAuthorized) {
+    return res.status(403).json({ error: "Only authorized staff on duty can add cash float to the till." });
   }
 
   const { amount, purpose, authorized_by, notes } = req.body;
@@ -5828,7 +5841,7 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
     let transactionData = null;
     await db.withTransaction(async (q) => {
       const rowRes = await q(
-        "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, served_by FROM pos_orders WHERE id = ?",
+        "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, served_by, invoice_number FROM pos_orders WHERE id = ?",
         [req.params.id]
       );
       if (!rowRes.rows || rowRes.rows.length === 0) {
@@ -5860,6 +5873,7 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       success: true,
       transaction_id: transactionData.transaction_id,
       receipt_no,
+      invoice_number: transactionData.invoice_number || transactionData.pos_order_id,
       total_amount: transactionData.total_amount,
       client_name: transactionData.buyer_name || "Customer",
       client_location: "",
