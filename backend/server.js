@@ -1464,6 +1464,22 @@ app.post("/api/attendance/manual-out", authenticateToken, (req, res) => {
 
 // 4. SME Transactions
 app.get("/api/transactions", authenticateToken, (req, res) => {
+  const { type, limit } = req.query;
+  const whereClauses = [];
+  const params = [];
+
+  if (type) {
+    const types = type.split(",").map((t) => t.trim().toUpperCase());
+    whereClauses.push(`t.type IN (${types.map(() => "?").join(",")})`);
+    params.push(...types);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+  const limitSql = limit ? `LIMIT ${parseInt(limit)}` : "";
+  const receiptNoCol = type
+    ? "t.id AS receipt_no"
+    : "ROW_NUMBER() OVER (ORDER BY t.id ASC) AS receipt_no";
+
   db.all(
     `
         SELECT t.*,
@@ -1477,16 +1493,18 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
                  WHEN t.recorded_by = 9999 THEN 'System Technician' 
                  ELSE COALESCE(NULLIF(CAST(e.nickname AS TEXT),''), e.first_name || ' ' || e.last_name) 
                END AS recorded_by_name,
-               ROW_NUMBER() OVER (ORDER BY t.id ASC) AS receipt_no
+               ${receiptNoCol}
         FROM transactions t 
         LEFT JOIN employees e ON t.recorded_by = e.id 
         LEFT JOIN pos_orders po ON po.transaction_id = t.id
+        ${whereSql}
         ORDER BY t.transaction_date DESC, t.id DESC
+        ${limitSql}
     `,
-    [],
+    params,
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ transactions: rows });
+      res.json({ transactions: rows || [] });
     },
   );
 });

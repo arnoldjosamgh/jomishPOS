@@ -1199,11 +1199,13 @@ window.setPOSCashTab = setPOSCashTab;
 async function loadPOSExpenses() {
   const tbody = document.getElementById("pos-expenses-tbody");
   if (!tbody) return;
-  tbody.innerHTML =
-    '<tr><td colspan="4" style="text-align:center; padding:30px; color:#94A3B8;">Loading...</td></tr>';
+  if (!tbody.children.length || tbody.innerText.includes("Loading")) {
+    tbody.innerHTML =
+      '<tr><td colspan="4" style="text-align:center; padding:30px; color:#94A3B8;"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</td></tr>';
+  }
 
   try {
-    const res = await fetchAuth(`${API_URL}/transactions`);
+    const res = await fetchAuth(`${API_URL}/transactions?type=EXPENSE,CASH_IN,FLOAT_IN`);
     const data = await res.json();
 
     // Filter EXPENSE and CASH_IN / FLOAT transactions
@@ -1279,7 +1281,10 @@ async function loadPOSExpenses() {
     } else {
       if (notice) notice.remove();
       if (tabsContainer) tabsContainer.style.display = "flex";
-      if (typeof setPOSCashTab === "function") setPOSCashTab("expense");
+      const isCashinActive = formCashin && formCashin.style.display === "flex";
+      if (!isCashinActive && typeof setPOSCashTab === "function") {
+        setPOSCashTab("expense");
+      }
     }
 
     // Populate table
@@ -1433,7 +1438,15 @@ async function handlePOSCashInSubmit(e) {
         "success",
       );
       e.target.reset();
-      loadPOSExpenses();
+
+      // Immediately update Today's Cash In pill optimistically
+      const todayCashinEl = document.getElementById("pos-cashin-today");
+      if (todayCashinEl) {
+        const cur = parseFloat((todayCashinEl.textContent || "0").replace(/[^0-9.]/g, "")) || 0;
+        todayCashinEl.textContent = `UGX ${(cur + amount).toLocaleString()}`;
+      }
+
+      await loadPOSExpenses();
       if (typeof loadDashboard === "function") loadDashboard();
     } else {
       const data = await res.json();
