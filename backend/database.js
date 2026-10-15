@@ -483,7 +483,8 @@ const schema = [
         id SERIAL PRIMARY KEY, cashier_id INTEGER, total_amount REAL,
         order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, transaction_id INTEGER,
         payment_method TEXT DEFAULT 'CASH', amount_paid REAL DEFAULT 0,
-        buyer_name TEXT, buyer_phone TEXT, served_by TEXT, waiter_id INTEGER
+        buyer_name TEXT, buyer_phone TEXT, served_by TEXT, waiter_id INTEGER,
+        invoice_number INTEGER
     )`,
     `CREATE TABLE IF NOT EXISTS schedules (
         id SERIAL PRIMARY KEY, employee_id INTEGER, shift_date TEXT,
@@ -1445,6 +1446,36 @@ function runMigrations(fromVersion) {
             });
         });
     }
+
+    if (fromVersion < 146) {
+        // v146: Add sequential invoice_number to pos_orders for COD/Invoices
+        const alterSql = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS invoice_number INTEGER"
+            : "ALTER TABLE pos_orders ADD COLUMN invoice_number INTEGER";
+        db.run(alterSql, (err) => {
+            if (err && !err.message.includes('duplicate column') && !err.message.includes('already exists')) {
+                console.error('[Migration v146]', err.message);
+            }
+            // Backfill sequential invoice numbers for existing orders
+            db.all(
+                "SELECT id FROM pos_orders WHERE payment_method IN ('COD', 'INVOICE') ORDER BY order_date ASC, id ASC",
+                [],
+                (bErr, rows) => {
+                    if (!bErr && rows && rows.length > 0) {
+                        rows.forEach((r, idx) => {
+                            db.run(
+                                "UPDATE pos_orders SET invoice_number = ? WHERE id = ? AND invoice_number IS NULL",
+                                [idx + 1, r.id]
+                            );
+                        });
+                    }
+                    db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '146'], () => {
+                        console.log('Migration to v146 complete: Added invoice_number and backfilled sequential invoices.');
+                    });
+                }
+            );
+        });
+    }
 }
 
 initDb();
@@ -1509,7 +1540,22 @@ if (config.dbType === 'postgres') {
                                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                                 )
                             `);
-                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold & stock_movements OK.`);
+                            // Ensure invoice_number column exists on pos_orders & backfill
+                            await sc_client.query(
+                                `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS invoice_number INTEGER`
+                            );
+                            await sc_client.query(`
+                                WITH numbered AS (
+                                    SELECT id, ROW_NUMBER() OVER (ORDER BY order_date ASC, id ASC) as rn
+                                    FROM pos_orders
+                                    WHERE payment_method IN ('COD', 'INVOICE')
+                                )
+                                UPDATE pos_orders
+                                SET invoice_number = numbered.rn
+                                FROM numbered
+                                WHERE pos_orders.id = numbered.id AND pos_orders.invoice_number IS NULL
+                            `).catch(() => {});
+                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements & invoice_number OK.`);
                         } catch (patchErr) {
                             if (!patchErr.message.includes('already exists') && !patchErr.message.includes('duplicate column')) {
                                 console.error(`[SAFETY PATCH] ${sc}:`, patchErr.message);

@@ -4401,7 +4401,7 @@ async function getInvoice() {
       printReceipt(
         posCart,
         total,
-        result.receipt_no || result.transaction_id,
+        result.invoice_number || result.receipt_no || result.transaction_id,
         "INVOICE",
         0,
         buyerName,
@@ -4780,16 +4780,25 @@ window.printEndShiftReport = function(report) {
         <div class="row"><span>Started:</span><span>${new Date(report.start_time).toLocaleString("en-UG")}</span></div>
         <div class="row"><span>Ended:</span><span>${new Date(report.end_time).toLocaleString("en-UG")}</span></div>
         <div class="divider"></div>
-        <div class="row"><span>Start Cash:</span><span>UGX ${report.start_cash.toLocaleString()}</span></div>
-        <div class="row"><span>Cash Sales:</span><span>UGX ${report.cash_sales.toLocaleString()}</span></div>
-        <div class="row"><span>Mobile Money:</span><span>UGX ${report.momo_sales.toLocaleString()}</span></div>
-        <div class="row"><span>Total Sales:</span><span>UGX ${report.total_sales.toLocaleString()}</span></div>
-        <div class="row"><span>Expenses Paid:</span><span>UGX ${report.expenses.toLocaleString()}</span></div>
-        <div class="row" style="color:#16a34a; font-weight:bold;"><span>Cash In / Float:</span><span>+UGX ${(report.cash_in || 0).toLocaleString()}</span></div>
+        <div style="font-weight:bold; font-size:11pt; margin-bottom:5px;">CASH DRAWER RECONCILIATION</div>
+        <div class="row"><span>Opening Cash (Float):</span><span>UGX ${(report.start_cash || 0).toLocaleString()}</span></div>
+        <div class="row"><span>(+) Cash Sales:</span><span>UGX ${(report.cash_sales || 0).toLocaleString()}</span></div>
+        <div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Cash In (Float):</span><span>+UGX ${(report.cash_in || 0).toLocaleString()}</span></div>
+        <div class="row" style="color:#dc2626; font-weight:bold;"><span>(-) Cashier Expenses:</span><span>-UGX ${(report.expenses || 0).toLocaleString()}</span></div>
         <div class="divider"></div>
-        <div class="row bold" style="font-size:13pt;"><span>End Cash:</span><span>UGX ${report.end_cash.toLocaleString()}</span></div>
+        <div class="row bold" style="font-size:12.5pt;"><span>Expected In Drawer:</span><span>UGX ${(report.end_cash || 0).toLocaleString()}</span></div>
         <div class="divider"></div>
-        <div class="center" style="margin-top: 20px;">Signature: __________________</div>
+        <div style="font-weight:bold; margin-bottom:4px;">SALES BREAKDOWN</div>
+        <div class="row"><span>Cash Sales:</span><span>UGX ${(report.cash_sales || 0).toLocaleString()}</span></div>
+        <div class="row"><span>Mobile Money:</span><span>UGX ${(report.momo_sales || 0).toLocaleString()}</span></div>
+        <div class="row bold"><span>Total Sales (All):</span><span>UGX ${(report.total_sales || 0).toLocaleString()}</span></div>
+        ${report.invoice_collected ? `<div class="row"><span>Invoices/COD Paid:</span><span>UGX ${Number(report.invoice_collected).toLocaleString()}</span></div>` : ''}
+        <div class="divider"></div>
+        <div style="font-size:8.5pt; color:#444; margin-top:5px; line-height:1.3;">
+          Open (${(report.start_cash || 0).toLocaleString()}) + Cash Sales (${(report.cash_sales || 0).toLocaleString()}) + Cash In (${(report.cash_in || 0).toLocaleString()}) - Expenses (${(report.expenses || 0).toLocaleString()}) = <strong>UGX ${(report.end_cash || 0).toLocaleString()}</strong>
+        </div>
+        <div class="center" style="margin-top: 20px;">Cashier: ____________________</div>
+        <div class="center" style="margin-top: 12px;">Supervisor: _________________</div>
       </body>
     </html>
   `;
@@ -5835,7 +5844,8 @@ async function loadTransactions(searchTerm = "") {
     }
 
     filtered.forEach((tx) => {
-      const color = tx.type === "INCOME" ? "var(--success)" : "var(--danger)";
+      const isIncome = tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN";
+      const color = isIncome ? "var(--success)" : "var(--danger)";
       const receiptNo = String(tx.receipt_no || tx.id).padStart(4, "0");
       const tr = document.createElement("tr");
 
@@ -5866,6 +5876,9 @@ async function loadTransactions(searchTerm = "") {
       } else if (_desc.includes("invoice") || _desc.includes("pending invoice")) {
         _badge = "⏳ Pending Payment";
         _bColor = "#8b5cf6";
+      } else if (tx.type === "CASH_IN" || tx.type === "FLOAT_IN") {
+        _badge = "📥 Cash In (Float)";
+        _bColor = "#10b981";
       } else if (tx.type === "EXPENSE") {
         _badge = "💸 Expense";
         _bColor = "#ef4444";
@@ -5892,7 +5905,7 @@ async function loadTransactions(searchTerm = "") {
 
       const cashierName = tx.recorded_by_name || "—";
 
-      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">RCPT-${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${tx.type === "INCOME" ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
+      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">RCPT-${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
       tr.dataset.txId = tx.id;
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function(e) {
@@ -11179,9 +11192,11 @@ window.loadPendingCOD = async function () {
         deliveries.forEach((d) => {
           const safeClient = (d.client_name || "").replace(/'/g, "\\'");
           const safeServer = (d.served_by || "").replace(/'/g, "\\'");
-          const invoiceLabel = d.transaction_id
-            ? `Invoice #${d.transaction_id}`
-            : `Order #${d.pos_order_id}`;
+          const invNum = d.invoice_number || d.pos_order_id;
+          const invoiceLabel = `Invoice #${invNum}`;
+          // Clean invoice label using sequential invoice_number
+
+
           const waiterBadge = d.served_by
             ? `<div style="display:inline-flex; align-items:center; gap:5px; background:rgba(79, 70, 229, 0.12); color:var(--primary, #4F46E5); padding:3px 9px; border-radius:12px; font-size:0.83rem; font-weight:700; margin-top:4px;">
                  <i class="fa-solid fa-bell-concierge"></i> Served by: ${d.served_by}
@@ -11198,7 +11213,7 @@ window.loadPendingCOD = async function () {
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  <button id="btn-print-pending-${d.pos_order_id}" onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
+                  <button id="btn-print-pending-${d.pos_order_id}" onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}', ${d.invoice_number || 'null'})"
                     style="${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'background:#94a3b8; opacity:0.4; pointer-events:none; cursor:not-allowed;' : 'background:var(--warning, #f59e0b); cursor:pointer;'} color:white; border:none; padding:10px 14px; border-radius:6px; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-print"></i> ${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'Printed' : 'Print Invoice'}
                   </button>
@@ -11249,7 +11264,7 @@ window.loadPendingCOD = async function () {
 };
 
 // Print invoice for a pending order (cashier view)
-window.printPendingInvoice = async function (posOrderId, totalAmount, clientName, servedBy) {
+window.printPendingInvoice = async function (posOrderId, totalAmount, clientName, servedBy, invoiceNumber) {
   try {
     _printedReceiptNos.add(Number(posOrderId));
     const btn = document.getElementById(`btn-print-pending-${posOrderId}`);
@@ -11270,20 +11285,20 @@ window.printPendingInvoice = async function (posOrderId, totalAmount, clientName
       items = [{ name: "Invoice Payment", qty: 1, price: totalAmount }];
     }
     // Fetch a transaction_id if available
-    let txnId = null;
+    let invNum = invoiceNumber || null;
     let orderServer = servedBy || null;
     try {
       const txRes = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}`);
       if (txRes.ok) {
         const txData = await txRes.json();
-        txnId = txData.transaction_id || null;
+        if (!invNum) invNum = txData.invoice_number || txData.transaction_id || null;
         if (!orderServer && txData.served_by) orderServer = txData.served_by;
       }
     } catch (_) {}
     printReceipt(
       items,
       totalAmount,
-      txnId || posOrderId,
+      invNum || posOrderId,
       "PENDING",
       totalAmount,
       clientName || "",

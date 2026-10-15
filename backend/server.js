@@ -2756,28 +2756,34 @@ app.put("/api/products/:id", authenticateToken, (req, res) => {
     low_stock_threshold,
   } = req.body;
   const { id } = req.params;
-  barcode = barcode ? barcode.toString().trim() : "";
-  barcode_end = barcode_end ? barcode_end.toString().trim() : null;
-  const bp = parseFloat(buying_price) || 0;
-  const ts = track_stock === undefined ? 1 : track_stock;
-  const lst = low_stock_threshold !== undefined && low_stock_threshold !== null ? parseInt(low_stock_threshold) : 10;
 
-  const params = [name, category, price, barcode, barcode_end, bp, ts, lst, id];
-  let sql =
-    "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, low_stock_threshold = ? WHERE id = ?";
+  db.get("SELECT barcode, barcode_end FROM products WHERE id = ?", [id], (err, current) => {
+    if (err) return res.status(500).json({ error: err.message });
 
-  if (photo_base64 && photo_base64.length > 50) {
-    sql =
-      "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, low_stock_threshold = ?, photo_base64 = ? WHERE id = ?";
-    params.splice(8, 0, photo_base64); // insert photo before id
-  }
+    let finalBarcode = barcode ? barcode.toString().trim() : (current?.barcode || `JOM-${id}`);
+    let finalBarcodeEnd = barcode_end !== undefined ? (barcode_end ? barcode_end.toString().trim() : null) : (current?.barcode_end || null);
 
-  db.run(sql, params, function (err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+    const bp = parseFloat(buying_price) || 0;
+    const ts = track_stock === undefined ? 1 : track_stock;
+    const lst = low_stock_threshold !== undefined && low_stock_threshold !== null ? parseInt(low_stock_threshold) : 10;
+
+    const params = [name, category, price, finalBarcode, finalBarcodeEnd, bp, ts, lst, id];
+    let sql =
+      "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, low_stock_threshold = ? WHERE id = ?";
+
+    if (photo_base64 && photo_base64.length > 50) {
+      sql =
+        "UPDATE products SET name = ?, category = ?, price = ?, barcode = ?, barcode_end = ?, buying_price = ?, track_stock = ?, low_stock_threshold = ?, photo_base64 = ? WHERE id = ?";
+      params.splice(8, 0, photo_base64); // insert photo before id
     }
-    emitAndBust("products", "products");
-    res.json({ message: "Product updated successfully" });
+
+    db.run(sql, params, function (err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      emitAndBust("products", "products");
+      res.json({ message: "Product updated successfully" });
+    });
   });
 });
 
@@ -2906,7 +2912,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     });
 
     // ── 2. Run all DB writes inside a single atomic transaction ─────────────
-    const { transaction_id, pos_order_id } = await db.withTransaction(async (q) => {
+    const { transaction_id, pos_order_id, invoice_number } = await db.withTransaction(async (q) => {
 
       const now = new Date().toISOString();
       const description = payment_method === "INVOICE"
@@ -2934,12 +2940,19 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       }
       const transaction_id = recycledId || txResult.lastID;
 
-      // INSERT pos_order — include buyer_name/buyer_phone and waiter tracking
+      // INSERT pos_order — include buyer_name/buyer_phone, waiter tracking and sequential invoice_number
       // For DISCOUNT, the effective total for the order is whatever was inserted/paid
       const effectiveOrderTotal = payment_method === "DISCOUNT" ? paid : total_amount;
+
+      let invoice_number = null;
+      if (effectivePaymentMethod === "COD" || effectivePaymentMethod === "INVOICE") {
+        const invRow = await q("SELECT COALESCE(MAX(invoice_number), 0) + 1 AS next_inv FROM pos_orders");
+        invoice_number = (invRow.rows && invRow.rows.length > 0) ? parseInt(invRow.rows[0].next_inv) : 1;
+      }
+
       const orderResult = await q(
-        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null]
+        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number]
       );
       const pos_order_id = orderResult.lastID;
 
@@ -2992,7 +3005,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         );
       }
 
-      return { transaction_id, pos_order_id };
+      return { transaction_id, pos_order_id, invoice_number };
     });
 
     // ── 3. Insert order_items AFTER commit (safe fire-and-forget) ──────────
@@ -3026,7 +3039,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       });
       receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
     } catch (_) { /* fallback to raw id */ }
-    res.json({ message: "Checkout successful!", transaction_id, receipt_no, pos_order_id });
+    res.json({ message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number });
 
   } catch (err) {
     console.error("[CHECKOUT] Error:", err.message);
@@ -3046,14 +3059,23 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
     db.run("ALTER TABLE cashier_shifts ADD COLUMN cash_in REAL DEFAULT 0", () => {});
     db.get("SELECT end_time, end_cash FROM cashier_shifts ORDER BY id DESC LIMIT 1", [], (err, lastShift) => {
       let startTime = lastShift ? lastShift.end_time : new Date(new Date().setHours(0,0,0,0)).toISOString();
-      let startCash = lastShift ? lastShift.end_cash : 0;
+      let startCash = lastShift ? Number(lastShift.end_cash || 0) : 0;
       
+      // Associate all expenses and cash-in during this shift window to the cashier on shift
+      // (Since cashier is in charge of the till and hands the cash out / receives float)
+      db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date > ?", [cashierId, startTime]);
+      db.run("UPDATE transactions SET recorded_by = ? WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date > ?", [cashierId, startTime]);
+
       const queries = {
-        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
-        momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
-        totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE cashier_id = ? AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
-        expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE recorded_by = ? AND type = 'EXPENSE' AND transaction_date > ?", [cashierId, startTime], (err, row) => resolve(row ? row.s || 0 : 0))),
-        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date > ?", [startTime], (err, row) => resolve(row ? row.s || 0 : 0)))
+        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        // Expenses = all cash handed out of the drawer during this shift window
+        expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        // Cash In = all cash/float added into drawer during this shift window (treated as INCOME/addition)
+        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        // COD/Invoice collections during this shift
+        invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
       };
       
       Promise.all(Object.values(queries)).then(results => {
@@ -3061,7 +3083,9 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         const momoSales = results[1];
         const totalSales = results[2];
         const expenses = results[3];
-        const cashIn = results[4];
+        const cashIn = results[4];  // float / income given to drawer — treated as INCOME
+        const invoiceCollected = results[5];
+        // End cash = what cashier started with + cash sales + cash-in float - expenses paid out
         const endCash = startCash + cashSales + cashIn - expenses;
         
         db.run("INSERT INTO cashier_shifts (cashier_id, start_cash, end_cash, cash_sales, momo_sales, total_sales, expenses, cash_in) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -3076,6 +3100,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
               total_sales: totalSales,
               expenses: expenses,
               cash_in: cashIn,
+              invoice_collected: invoiceCollected,
               cashier_name: req.user.name || "Cashier"
             });
         });
@@ -3860,8 +3885,8 @@ app.get("/api/finance/summary", authenticateToken, (req, res) => {
         const txDate = toEAT(tx.transaction_date);
         const amt = parseFloat(tx.amount) || 0;
 
-        // Only count INCOME if it is actually PAID (ignore PENDING COD/Invoices)
-        const isIncomePaid = tx.type === "INCOME" && tx.payment_status !== "PENDING";
+        // Only count INCOME if it is actually PAID (ignore PENDING COD/Invoices). Cash In / Float is also income/addition.
+        const isIncomePaid = (tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN") && tx.payment_status !== "PENDING";
         
         if (isIncomePaid) totalIncome += amt;
         else if (tx.type === "EXPENSE") totalExpense += amt;
@@ -5635,6 +5660,7 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
             p.id as order_id, 
             p.total_amount, 
             p.transaction_id, 
+            p.invoice_number,
             t.payment_status,
             p.buyer_name,
             p.buyer_phone,
@@ -5646,7 +5672,7 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
         LEFT JOIN employees ew ON p.waiter_id = ew.id
         LEFT JOIN employees ec ON p.cashier_id = ec.id
         WHERE p.payment_method IN ('COD', 'INVOICE') AND t.payment_status = 'PENDING'
-        ORDER BY p.order_date DESC, p.id DESC
+        ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC
     `;
   db.all(sql, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
