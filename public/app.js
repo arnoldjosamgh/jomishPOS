@@ -404,7 +404,7 @@ document.addEventListener("DOMContentLoaded", () => {
             el.classList.add("hidden");
           }
         });
-        switchPOSView("pending");    // Waiter → Pending tab (their orders)
+        switchPOSView("register");   // Waiter → Register (place new orders)
       } else if (["CEO", "ADMIN", "MANAGER", "FINANCE MANAGER"].includes(_role)) {
         switchPOSView("stock");      // Admin-like → Inventory
       } else if (_role === "SUPERVISOR") {
@@ -640,21 +640,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnEndShift = document.getElementById("btn-end-shift");
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
-  const isWaiterLevel = _currentRole === "WAITER" || _currentRole === "SUPERVISOR";
+  const isWaiterLevel = _currentRole === "WAITER";
   if (isWaiterLevel) {
-    // Waiter & Supervisor print kitchen token & send order to cashier (cannot pay)
+    // Waiter sends order to cashier (cannot pay)
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
-    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) {
-      btnPrintInvoice.style.setProperty("display", "block", "important");
-      btnPrintInvoice.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+    if (btnSendToCashier) {
+      btnSendToCashier.style.setProperty("display", "block", "important");
+      btnSendToCashier.innerHTML = '<i class="fa-solid fa-paper-plane"></i> SEND TO CASHIER';
     }
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (_currentRole === "CASHIER") {
-    // Cashier can pay, print invoice, and end shift
+    // Cashier can pay and end shift. Print invoice only appears in edit mode
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
   } else {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
@@ -671,11 +671,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnPrintInvoice) {
     btnPrintInvoice.onclick = () => {
-      const _role = (USER_ROLE || "").toUpperCase();
-      if (_role === "WAITER" || _role === "SUPERVISOR") {
-        submitWaiterOrder();
-      } else if (typeof getInvoice === "function") {
-        getInvoice();
+      if (_currentEditOrder) {
+        printEditOrderKitchenToken();
+      } else {
+        const _role = (USER_ROLE || "").toUpperCase();
+        if (_role === "WAITER") {
+          submitWaiterOrder();
+        } else if (typeof getInvoice === "function") {
+          getInvoice();
+        }
       }
     };
   }
@@ -683,9 +687,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnCheckout) {
     btnCheckout.addEventListener("click", () => {
       if (posCart.length === 0) return alert("Cart is empty!");
+      if (_currentEditOrder && _currentEditOrder.id) {
+        alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
+        return;
+      }
       const _roleNow = (USER_ROLE || "").toUpperCase();
-      if (_roleNow === "WAITER" || _roleNow === "SUPERVISOR") {
-        alert("Waiters and Supervisors cannot collect payment. Please click 'PRINT INVOICE'.");
+      if (_roleNow === "WAITER") {
+        alert("Waiters cannot collect payment. Please click 'SEND TO CASHIER'.");
         return;
       }
       const total = parseFloat(btnCheckout.getAttribute("data-total"));
@@ -2466,8 +2474,8 @@ function enforceRBAC() {
   const posNavMap = {
     // Register — Cashier + Tech + Waiter + Supervisor
     "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor,
-    // Pending Sales — Cashier + Tech ONLY (Waiter and Supervisor excluded)
-    "pos-nav-pending":  isCashier || isWaiter || isTech || isAdminLike,
+    // Pending Sales — Cashier + Waiter + Tech only. Admin uses Financial Hub for invoices.
+    "pos-nav-pending":  isCashier || isWaiter || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
     // Low Stock — Admin-like + Tech
@@ -2511,16 +2519,16 @@ function enforceRBAC() {
   const isWaiterLevel = isWaiter; // Supervisor has full admin privileges
   if (isWaiterLevel) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
-    if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) {
-      btnPrintInvoice.style.setProperty("display", "block", "important");
-      btnPrintInvoice.innerHTML = '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+    if (btnSendToCashier) {
+      btnSendToCashier.style.setProperty("display", "block", "important");
+      btnSendToCashier.innerHTML = '<i class="fa-solid fa-paper-plane"></i> SEND TO CASHIER';
     }
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
   } else if (isCashier) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
-    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
   } else {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
@@ -4122,6 +4130,11 @@ window.handlePaymentMethodChange = async function () {
 };
 
 async function confirmPayment() {
+  // Block: if we are in edit-order mode, save the edit instead of creating a new order
+  if (_currentEditOrder && _currentEditOrder.id) {
+    alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
+    return;
+  }
   const total =
     parseFloat(
       document.getElementById("btn-checkout").getAttribute("data-total"),
@@ -4286,6 +4299,10 @@ let _isSubmittingWaiterOrder = false;
 async function submitWaiterOrder() {
   if (_isSubmittingWaiterOrder) return;
   if (posCart.length === 0) return alert("Cart is empty!");
+  if (_currentEditOrder && _currentEditOrder.id) {
+    alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
+    return;
+  }
   _isSubmittingWaiterOrder = true;
 
   const total =
@@ -4382,6 +4399,12 @@ async function submitWaiterOrder() {
 window.submitWaiterOrder = submitWaiterOrder;
 
 async function getInvoice() {
+  if (_currentEditOrder && _currentEditOrder.id) {
+    if (typeof printEditOrderKitchenToken === "function") {
+      printEditOrderKitchenToken();
+    }
+    return;
+  }
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
   if (_role === "WAITER") {
     // Waiters should never print invoices/orders — send directly to cashier instead
@@ -5922,14 +5945,17 @@ async function loadTransactions(searchTerm = "") {
       }
       const _badgeHtml = `<span style="display:inline-block;padding:3px 9px;border-radius:20px;background:${_bColor}22;color:${_bColor};font-size:0.72rem;font-weight:700;border:1px solid ${_bColor}55;white-space:nowrap;">${_badge}</span>`;
 
-      // Delete button: only visible for Admin/HR/CEO/Manager
+      // Delete + Print Invoice buttons: only visible for Admin/HR/CEO/Manager
       // Cashiers can delete ONLY by selecting the row and pressing F8
       const _role = (USER_ROLE || "").toUpperCase();
       const canDeleteDirectly = ["CEO", "ADMIN", "HR", "MANAGER", "SUPERVISOR"].includes(_role) || USER_NAME === "System Technician" || _role === "TECH";
+      const _printInvBtn = (canDeleteDirectly && tx.type === "INCOME" && tx.pos_order_id)
+        ? `<button class='sm-btn secondary' onclick="printTransactionInvoice(${tx.pos_order_id})" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" title="Print Invoice"><i class="fa-solid fa-print"></i></button>`
+        : "";
       const _delBtn = canDeleteDirectly
         ? `<button class='sm-btn danger' onclick="deleteTransaction(${tx.id})" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" title="Delete"><i class="fa-solid fa-trash"></i></button>`
         : "";
-      const actionHtml = `<td style="white-space:nowrap;">${_badgeHtml}${_delBtn}</td>`;
+      const actionHtml = `<td style="white-space:nowrap;">${_badgeHtml}${_printInvBtn}${_delBtn}</td>`;
 
       let displayType = tx.type;
       if (tx.type === "GOODS_ON_CREDIT") displayType = "GOODS ON CREDIT";
@@ -5952,6 +5978,28 @@ async function loadTransactions(searchTerm = "") {
     console.error("TX Network Error:", e);
   }
 }
+
+window.printTransactionInvoice = async function (posOrderId) {
+  try {
+    showToast("Loading invoice details...", "info");
+    const r = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}`);
+    if (!r.ok) {
+      showToast("Order not found", "error");
+      return;
+    }
+    const o = await r.json();
+    await printPendingInvoice(
+      posOrderId,
+      o.total_amount,
+      o.buyer_name || "Customer",
+      o.served_by || "Staff",
+      o.invoice_number
+    );
+  } catch (e) {
+    console.error("Error printing transaction invoice:", e);
+    showToast("Error printing invoice", "error");
+  }
+};
 
 let _allSmeProducts = [];
 
@@ -11244,10 +11292,11 @@ window.loadPendingCOD = async function () {
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  ${isWaiterUser ? `
                   <button id="btn-print-pending-${d.pos_order_id}" onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}', ${d.invoice_number || 'null'})"
                     style="${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'background:#94a3b8; opacity:0.4; pointer-events:none; cursor:not-allowed;' : 'background:var(--warning, #f59e0b); cursor:pointer;'} color:white; border:none; padding:10px 14px; border-radius:6px; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-print"></i> ${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'Printed' : 'Print Invoice'}
-                  </button>
+                  </button>` : ''}
                   <button onclick="openEditPendingOrder(${d.pos_order_id})"
                     style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-pen-to-square"></i> Edit Order
@@ -11554,12 +11603,37 @@ async function openEditPendingOrder(posOrderId) {
     // Show editing banner in cart panel
     _showEditOrderBanner(posOrderId, _currentEditOrder);
 
+    // Show Print Kitchen Token button in checkout area
+    const btnPrintInvoice = document.getElementById("btn-print-invoice");
+    if (btnPrintInvoice) {
+      btnPrintInvoice.style.setProperty("display", "block", "important");
+      btnPrintInvoice.innerHTML = '<i class="fa-solid fa-receipt"></i> PRINT KITCHEN TOKEN';
+    }
+
     showToast(`Editing Order #${posOrderId} — add/remove items then tap Save`, 'warning');
   } catch (e) {
     alert('Error loading order: ' + e.message);
   }
 }
 window.openEditPendingOrder = openEditPendingOrder;
+
+window.printEditOrderKitchenToken = function () {
+  if (posCart.length === 0) return alert("Cart is empty! Add products first.");
+  const orderNo = _currentEditOrder ? (_currentEditOrder.invoice_number || _currentEditOrder.id) : "TOKEN";
+  const serverName = _currentEditOrder?.served_by || USER_NAME || "Staff";
+  const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
+  const tokenData = {
+    isInvoice: false,
+    printTokenOnly: true,
+    orderId: String(orderNo).padStart(4, "0"),
+    dateStr,
+    cashierName: USER_NAME || "Staff",
+    servedBy: serverName,
+    items: posCart.map((i) => ({ name: i.name, qty: i.qty || 1, price: i.price })),
+  };
+  _printHTMLQueue([_buildKitchenTokenHTML(tokenData)]);
+  showToast("Kitchen token printed!", "success");
+};
 
 function _showEditOrderBanner(posOrderId, order) {
   // Remove any existing banner
@@ -11572,9 +11646,12 @@ function _showEditOrderBanner(posOrderId, order) {
   banner.innerHTML = `
     <span style="display:flex;align-items:center;gap:7px;">
       <i class="fa-solid fa-pen-to-square"></i>
-      EDITING Order #${posOrderId}&nbsp;&bull;&nbsp;${order.buyer_name || 'Walk-in'}
+      EDITING Order #${order.invoice_number || posOrderId}&nbsp;&bull;&nbsp;${order.buyer_name || 'Walk-in'}
     </span>
-    <span style="display:flex;gap:8px;">
+    <span style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button onclick="printEditOrderKitchenToken()" style="background:#0284c7;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
+        <i class="fa-solid fa-receipt"></i> Print Token
+      </button>
       <button onclick="saveEditedPendingOrder()" id="btn-save-edit-order" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
         <i class="fa-solid fa-floppy-disk"></i> Save Changes
       </button>
@@ -11599,6 +11676,8 @@ function cancelEditOrder() {
   _editOrderItems = [];
   posCart = [];
   renderCart();
+  const btnPrintInvoice = document.getElementById("btn-print-invoice");
+  if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
   switchPOSView('pending');
 }
 window.cancelEditOrder = cancelEditOrder;
@@ -11652,6 +11731,8 @@ async function saveEditedPendingOrder() {
     _currentEditOrder = null;
     posCart = [];
     renderCart();
+    const btnPrintInvoice = document.getElementById("btn-print-invoice");
+    if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     switchPOSView('pending');
     if (typeof loadPendingCOD === 'function') loadPendingCOD();
   } catch (e) {
