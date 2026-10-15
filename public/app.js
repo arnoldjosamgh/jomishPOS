@@ -11458,10 +11458,6 @@ window.loadPendingCOD = async function () {
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  <button onclick="printPendingOrderToken(${d.pos_order_id})"
-                    style="background:var(--warning, #f59e0b); color:white; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
-                    <i class="fa-solid fa-print"></i> Print Token
-                  </button>
                   <button onclick="openEditPendingOrder(${d.pos_order_id})"
                     style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-pen-to-square"></i> Edit Order
