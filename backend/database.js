@@ -1537,12 +1537,12 @@ if (config.dbType === 'postgres') {
             setTimeout(async () => {
                 try {
                     const safetyPool = new Pool(config.postgres);
-                    // Re-fetch tenant list
+                    // Re-fetch tenant list + include public schema
                     const tResult = await safetyPool.query(
                         `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\'`
                     );
-                    for (const row of tResult.rows) {
-                        const sc = row.schema_name;
+                    const allSchemas = ['public', ...tResult.rows.map(r => r.schema_name)];
+                    for (const sc of allSchemas) {
                         const sc_client = await safetyPool.connect();
                         try {
                             await sc_client.query(`SET search_path TO "${sc}"`);

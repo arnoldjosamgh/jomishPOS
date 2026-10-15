@@ -876,6 +876,7 @@ function initNavigation() {
 
   // POS Sub-view Navigation Listeners (always wire these)
   const btnPosReg = document.getElementById("pos-nav-register");
+  const btnPosPending = document.getElementById("pos-nav-pending");
   const btnPosStock = document.getElementById("pos-nav-stock");
   const btnPosExp = document.getElementById("pos-nav-expenses");
   const btnPosCredits = document.getElementById("pos-nav-credits");
@@ -885,6 +886,11 @@ function initNavigation() {
     btnPosReg.addEventListener("click", (e) => {
       e.preventDefault();
       switchPOSView("register");
+    });
+  if (btnPosPending)
+    btnPosPending.addEventListener("click", (e) => {
+      e.preventDefault();
+      switchPOSView("pending");
     });
   if (btnPosStock)
     btnPosStock.addEventListener("click", (e) => {
@@ -928,7 +934,7 @@ function initNavigation() {
 
 function switchPOSView(viewName) {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  if (_role === "WAITER" && viewName !== "register" && viewName !== "terminal") {
+  if (_role === "WAITER" && viewName !== "register" && viewName !== "terminal" && viewName !== "pending") {
     viewName = "register";
   }
   // Hide all sub-views & reset nav button states
@@ -955,7 +961,7 @@ function switchPOSView(viewName) {
     const el = document.getElementById("pos-register-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-register");
     if (b) b.classList.add("active");
@@ -964,16 +970,18 @@ function switchPOSView(viewName) {
     const el = document.getElementById("pos-pending-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-pending");
     if (b) b.classList.add("active");
-    loadPendingCOD();
+    if (typeof loadPendingCOD === "function") {
+      loadPendingCOD();
+    }
   } else if (viewName === "stock") {
     const el = document.getElementById("pos-stock-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-stock");
     if (b) b.classList.add("active");
@@ -983,7 +991,7 @@ function switchPOSView(viewName) {
     const el = document.getElementById("pos-stock-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-lowstock");
     if (b) b.classList.add("active");
@@ -993,7 +1001,7 @@ function switchPOSView(viewName) {
     const el = document.getElementById("pos-expenses-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-expenses");
     if (b) b.classList.add("active");
@@ -1002,7 +1010,7 @@ function switchPOSView(viewName) {
     const el = document.getElementById("pos-credits-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-credits");
     if (b) b.classList.add("active");
@@ -1011,7 +1019,7 @@ function switchPOSView(viewName) {
     const el = document.getElementById("pos-hr-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-hr");
     if (b) b.classList.add("active");
@@ -1020,13 +1028,14 @@ function switchPOSView(viewName) {
     const el = document.getElementById("pos-tech-view");
     if (el) {
       el.classList.remove("hidden");
-      el.style.display = "block";
+      el.style.setProperty("display", "block", "important");
     }
     const b = document.getElementById("pos-nav-tech");
     if (b) b.classList.add("active");
     loadTechTenants();
   }
 }
+window.switchPOSView = switchPOSView;
 
 function switchHRView(viewName) {
   // Hide all HR sub-sections
@@ -11244,12 +11253,16 @@ window.closeCodModal = function () {
 window.loadPendingCOD = async function () {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
   const isWaiterUser = _role === "WAITER";
+  const listContainer = document.getElementById("cod-list-container");
+  if (listContainer) {
+    listContainer.innerHTML =
+      '<p style="text-align:center;color:var(--text-muted);padding:30px;"><i class="fa-solid fa-spinner fa-spin"></i> Loading pending orders...</p>';
+  }
   try {
     const res = await fetchAuth(`${API_URL}/deliveries/pending-cod`);
     if (res.ok) {
       const deliveries = await res.json();
       const badge = document.getElementById("cod-badge-count");
-      const listContainer = document.getElementById("cod-list-container");
 
       if (badge) {
         if (deliveries.length > 0) {
@@ -11337,9 +11350,17 @@ window.loadPendingCOD = async function () {
           } catch (_) {}
         });
       }
+    } else {
+      const err = await res.json().catch(() => ({}));
+      if (listContainer) {
+        listContainer.innerHTML = `<p style="text-align:center;color:var(--danger);padding:20px;"><i class="fa-solid fa-triangle-exclamation"></i> Error loading pending orders: ${err.error || res.statusText || 'Server error'}</p>`;
+      }
     }
   } catch (e) {
     console.error("Failed to load pending COD:", e);
+    if (listContainer) {
+      listContainer.innerHTML = '<p style="text-align:center;color:var(--danger);padding:20px;"><i class="fa-solid fa-triangle-exclamation"></i> Could not connect to server to load pending orders.</p>';
+    }
   }
 };
 
