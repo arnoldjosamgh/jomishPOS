@@ -2483,8 +2483,8 @@ function enforceRBAC() {
   const posNavMap = {
     // Register — Cashier + Tech + Waiter + Supervisor
     "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor,
-    // Pending Sales — Cashier + Waiter + Tech only. Admin uses Financial Hub for invoices.
-    "pos-nav-pending":  isCashier || isWaiter || isTech,
+    // Pending Sales — Cashier + Waiter + Supervisor + Tech
+    "pos-nav-pending":  isCashier || isWaiter || isSupervisor || isTech,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
     // Low Stock — Admin-like + Tech
@@ -11318,7 +11318,7 @@ window.closeCodModal = function () {
 
 window.loadPendingCOD = async function () {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isWaiterUser = _role === "WAITER" || _role === "CASHIER"; // Cashier: edit-only in pending, no collect payment
+  const isWaiterUser = _role === "WAITER" || _role === "SUPERVISOR";
   const listContainer = document.getElementById("cod-list-container");
   if (listContainer) {
     listContainer.innerHTML =

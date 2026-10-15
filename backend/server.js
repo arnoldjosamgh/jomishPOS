@@ -2821,18 +2821,71 @@ app.get("/api/products/:id/photo", authenticateToken, (req, res) => {
   });
 });
 
-// Get stock movements for a product
-app.get("/api/products/:id/movements", authenticateToken, (req, res) => {
+// Get stock movements for a product — merges stock_movements + order_items for full history
+app.get("/api/products/:id/movements", authenticateToken, async (req, res) => {
   const productId = req.params.id;
-  const limit = parseInt(req.query.limit) || 100;
-  db.all(
-    `SELECT * FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC LIMIT ?`,
-    [productId, limit],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ movements: rows || [] });
-    }
-  );
+  const limit = parseInt(req.query.limit) || 300;
+
+  try {
+    // 1. Fetch all explicit stock_movements rows
+    const smRows = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT id, product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by, created_at
+         FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC`,
+        [productId],
+        (err, rows) => err ? reject(err) : resolve(rows || [])
+      );
+    });
+
+    // Build set of pos_order_ids already captured via "Sale #<id>" note
+    const capturedOrderIds = new Set();
+    smRows.forEach(r => {
+      if (r.note) {
+        const m = r.note.match(/Sale #(\d+)/i);
+        if (m) capturedOrderIds.add(parseInt(m[1]));
+      }
+    });
+
+    // 2. Fetch all sales from order_items not already in stock_movements
+    const salesRows = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT oi.pos_order_id, oi.product_id, oi.product_name, oi.qty,
+                po.created_at, po.served_by, po.invoice_number
+         FROM order_items oi
+         LEFT JOIN pos_orders po ON po.id = oi.pos_order_id
+         WHERE oi.product_id = ?
+         ORDER BY po.created_at DESC`,
+        [productId],
+        (err, rows) => err ? reject(err) : resolve(rows || [])
+      );
+    });
+
+    // Convert to movement-shaped objects, skip already captured ones
+    const syntheticSales = salesRows
+      .filter(r => !capturedOrderIds.has(r.pos_order_id))
+      .map(r => ({
+        id: `oi_${r.pos_order_id}`,
+        product_id: r.product_id,
+        product_name: r.product_name,
+        movement_type: 'SALE',
+        qty: -Math.abs(r.qty),
+        stock_before: null,
+        stock_after: null,
+        note: `Sale #${r.pos_order_id}${r.invoice_number ? ' (Inv: ' + r.invoice_number + ')' : ''}`,
+        performed_by: r.served_by || 'Cashier',
+        created_at: r.created_at
+      }));
+
+    // 3. Merge, sort newest-first, apply limit
+    const all = [...smRows, ...syntheticSales]
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, limit);
+
+    res.json({ movements: all });
+  } catch (err) {
+    console.error('[movements GET] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Add manual stock movement (adjustment)
