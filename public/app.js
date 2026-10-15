@@ -4308,8 +4308,77 @@ let _isSubmittingWaiterOrder = false;
 async function submitWaiterOrder() {
   if (_isSubmittingWaiterOrder) return;
   if (posCart.length === 0) return alert("Cart is empty!");
+
   if (_currentEditOrder && _currentEditOrder.id) {
-    alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
+    _isSubmittingWaiterOrder = true;
+    const btnWaiter = document.getElementById("btn-send-to-cashier");
+    const origHtml = btnWaiter ? btnWaiter.innerHTML : "";
+    if (btnWaiter) {
+      btnWaiter.disabled = true;
+      btnWaiter.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Updating...';
+    }
+    try {
+      const items = posCart.map((i) => ({
+        id: i.product_id || i.id,
+        product_id: i.product_id || i.id,
+        name: i.name,
+        price: i.price,
+        qty: i.qty || 1,
+      }));
+
+      const res = await fetchAuth(`${API_URL}/pos_orders/${_currentEditOrder.id}/items`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to update order");
+      }
+
+      const rawName = USER_NAME || localStorage.getItem("jomish_name") || "Waiter";
+      const waiterFirstName = rawName.trim().split(/\s+/)[0] || "Waiter";
+      const orderNo = _currentEditOrder.invoice_number || _currentEditOrder.id;
+
+      showToast(`Order #${String(orderNo).padStart(4, "0")} updated & sent to cashier!`, "success");
+
+      // Print updated kitchen token
+      const dateStr = new Date().toLocaleString("en-UG", { timeZone: "Africa/Kampala" });
+      const tokenData = {
+        isInvoice: false,
+        printTokenOnly: true,
+        orderId: String(orderNo).padStart(4, "0"),
+        dateStr,
+        cashierName: waiterFirstName,
+        servedBy: _currentEditOrder.served_by || waiterFirstName,
+        items: posCart.map((i) => ({ name: i.name, qty: i.qty || 1, price: i.price })),
+      };
+      _printHTMLQueue([_buildKitchenTokenHTML(tokenData)]);
+
+      // Clean up edit mode
+      const banner = document.getElementById("edit-order-banner");
+      if (banner) banner.remove();
+      _currentEditOrder = null;
+      posCart = [];
+      renderCart();
+      loadPOSProducts();
+
+      const buyerNameEl = document.getElementById("buyer-name-input");
+      const buyerPhoneEl = document.getElementById("buyer-phone-input");
+      if (buyerNameEl) buyerNameEl.value = "";
+      if (buyerPhoneEl) buyerPhoneEl.value = "";
+
+      switchPOSView("register");
+    } catch (e) {
+      alert("Error updating order: " + e.message);
+    } finally {
+      if (btnWaiter) {
+        btnWaiter.disabled = false;
+        btnWaiter.innerHTML = origHtml || '<i class="fa-solid fa-paper-plane"></i> SEND TO CASHIER';
+      }
+      _isSubmittingWaiterOrder = false;
+    }
     return;
   }
   _isSubmittingWaiterOrder = true;
@@ -11305,11 +11374,6 @@ window.loadPendingCOD = async function () {
                   <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  ${isWaiterUser ? `
-                  <button id="btn-print-pending-${d.pos_order_id}" onclick="printPendingInvoice(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}', ${d.invoice_number || 'null'})"
-                    style="${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'background:#94a3b8; opacity:0.4; pointer-events:none; cursor:not-allowed;' : 'background:var(--warning, #f59e0b); cursor:pointer;'} color:white; border:none; padding:10px 14px; border-radius:6px; font-weight:600; white-space:nowrap;">
-                    <i class="fa-solid fa-print"></i> ${_printedReceiptNos.has(Number(d.pos_order_id)) ? 'Printed' : 'Print Invoice'}
-                  </button>` : ''}
                   <button onclick="openEditPendingOrder(${d.pos_order_id})"
                     style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
                     <i class="fa-solid fa-pen-to-square"></i> Edit Order
@@ -11624,14 +11688,13 @@ async function openEditPendingOrder(posOrderId) {
     // Show editing banner in cart panel
     _showEditOrderBanner(posOrderId, _currentEditOrder);
 
-    // Show Print Kitchen Token button in checkout area
+    // Ensure print invoice button stays hidden
     const btnPrintInvoice = document.getElementById("btn-print-invoice");
     if (btnPrintInvoice) {
-      btnPrintInvoice.style.setProperty("display", "block", "important");
-      btnPrintInvoice.innerHTML = '<i class="fa-solid fa-receipt"></i> PRINT KITCHEN TOKEN';
+      btnPrintInvoice.style.setProperty("display", "none", "important");
     }
 
-    showToast(`Editing Order #${posOrderId} — add/remove items then tap Save`, 'warning');
+    showToast(`Editing Order #${posOrderId} — add/remove items then tap Send to Cashier`, 'warning');
   } catch (e) {
     alert('Error loading order: ' + e.message);
   }
@@ -11661,24 +11724,35 @@ function _showEditOrderBanner(posOrderId, order) {
   const existing = document.getElementById('edit-order-banner');
   if (existing) existing.remove();
 
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  const isWaiter = _role === "WAITER";
+
   const banner = document.createElement('div');
   banner.id = 'edit-order-banner';
   banner.style.cssText = 'background:#f59e0b;color:#000;padding:10px 14px;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700;font-size:0.85rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-wrap:wrap;';
-  banner.innerHTML = `
-    <span style="display:flex;align-items:center;gap:7px;">
-      <i class="fa-solid fa-pen-to-square"></i>
-      EDITING Order #${order.invoice_number || posOrderId}&nbsp;&bull;&nbsp;${order.buyer_name || 'Walk-in'}
-    </span>
-    <span style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button onclick="printEditOrderKitchenToken()" style="background:#0284c7;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
-        <i class="fa-solid fa-receipt"></i> Print Token
+
+  const buttonsHtml = isWaiter
+    ? `
+      <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
+        <i class="fa-solid fa-xmark"></i> Cancel
       </button>
+    `
+    : `
       <button onclick="saveEditedPendingOrder()" id="btn-save-edit-order" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
         <i class="fa-solid fa-floppy-disk"></i> Save Changes
       </button>
       <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
         <i class="fa-solid fa-xmark"></i> Cancel
       </button>
+    `;
+
+  banner.innerHTML = `
+    <span style="display:flex;align-items:center;gap:7px;">
+      <i class="fa-solid fa-pen-to-square"></i>
+      EDITING Order #${order.invoice_number || posOrderId}&nbsp;&bull;&nbsp;${order.buyer_name || 'Walk-in'}
+    </span>
+    <span style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${buttonsHtml}
     </span>
   `;
 
