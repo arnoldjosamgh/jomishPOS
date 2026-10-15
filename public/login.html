@@ -287,8 +287,76 @@ window.onunhandledrejection = function(e) {
             }
         }
     </style>
+
+    <!-- ── PWA Install Prompt Styles ── -->
+    <style>
+        #pwa-install-banner {
+            position: fixed;
+            bottom: -160px;
+            left: 50%; transform: translateX(-50%);
+            width: min(440px, calc(100vw - 32px));
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            border: 1px solid rgba(99,102,241,0.45);
+            border-radius: 20px;
+            padding: 20px 22px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            z-index: 9999;
+            box-shadow: 0 -4px 40px rgba(99,102,241,0.25), 0 20px 60px rgba(0,0,0,0.5);
+            transition: bottom 0.5s cubic-bezier(0.34,1.56,0.64,1);
+            backdrop-filter: blur(20px);
+        }
+        #pwa-install-banner.show { bottom: 24px; }
+        #pwa-install-banner .pwa-icon {
+            width: 52px; height: 52px; border-radius: 14px;
+            flex-shrink: 0; object-fit: cover;
+            box-shadow: 0 4px 16px rgba(99,102,241,0.4);
+        }
+        #pwa-install-banner .pwa-text { flex: 1; min-width: 0; }
+        #pwa-install-banner .pwa-text h4 {
+            font-size: 0.88rem; font-weight: 700;
+            color: #fff; margin-bottom: 3px; letter-spacing: 0.01em;
+        }
+        #pwa-install-banner .pwa-text p {
+            font-size: 0.75rem; color: rgba(255,255,255,0.55);
+            line-height: 1.4; margin: 0;
+        }
+        #pwa-install-banner .pwa-actions {
+            display: flex; flex-direction: column; gap: 7px; flex-shrink: 0;
+        }
+        #pwa-btn-install {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff; border: none; border-radius: 10px;
+            padding: 8px 18px; font-size: 0.78rem; font-weight: 700;
+            cursor: pointer; white-space: nowrap;
+            box-shadow: 0 4px 14px rgba(99,102,241,0.5);
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        #pwa-btn-install:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(99,102,241,0.65); }
+        #pwa-btn-dismiss {
+            background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.5);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+            padding: 6px 18px; font-size: 0.72rem; cursor: pointer;
+            transition: background 0.15s;
+        }
+        #pwa-btn-dismiss:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    </style>
 </head>
 <body>
+<!-- ── PWA Install Banner ── -->
+<div id="pwa-install-banner" role="dialog" aria-label="Install Jomish as an app">
+    <img src="favicon.png" alt="Jomish" class="pwa-icon">
+    <div class="pwa-text">
+        <h4>Install Jomish Business Suite</h4>
+        <p>Add to your home screen for a faster,<br>full-screen experience — works offline too.</p>
+    </div>
+    <div class="pwa-actions">
+        <button id="pwa-btn-install">⬇ Install App</button>
+        <button id="pwa-btn-dismiss">Not now</button>
+    </div>
+</div>
+
 <div id="offline-banner">⚠ You are currently offline. Local login available.</div>
 
 <div class="card-wrap">
@@ -656,6 +724,52 @@ window.onunhandledrejection = function(e) {
     buildUserGrid();
     // Apply full-screen tile mode immediately (screen-select is active on load)
     document.body.classList.add('tiles-mode');
+
+    // ───── PWA Install Prompt ─────
+    (function initPWAInstallBanner() {
+        const DISMISSED_KEY = 'jomish_pwa_dismissed';
+        const banner = document.getElementById('pwa-install-banner');
+        const btnInstall = document.getElementById('pwa-btn-install');
+        const btnDismiss = document.getElementById('pwa-btn-dismiss');
+        let deferredPrompt = null;
+
+        // Don't show if already dismissed or already installed as standalone
+        if (localStorage.getItem(DISMISSED_KEY)) return;
+        if (window.matchMedia('(display-mode: standalone)').matches) return;
+        if (window.navigator.standalone) return; // iOS standalone
+
+        // Capture the browser's beforeinstallprompt event
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            // Show banner with a short delay for a polished entrance
+            setTimeout(() => banner.classList.add('show'), 800);
+        });
+
+        btnInstall.addEventListener('click', async () => {
+            if (!deferredPrompt) return;
+            banner.classList.remove('show');
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            console.log('[PWA] Install outcome:', outcome);
+            if (outcome === 'accepted') {
+                localStorage.setItem(DISMISSED_KEY, '1');
+            }
+            deferredPrompt = null;
+        });
+
+        btnDismiss.addEventListener('click', () => {
+            banner.classList.remove('show');
+            localStorage.setItem(DISMISSED_KEY, '1');
+        });
+
+        // Hide banner if app gets installed later
+        window.addEventListener('appinstalled', () => {
+            banner.classList.remove('show');
+            localStorage.setItem(DISMISSED_KEY, '1');
+            console.log('[PWA] App installed successfully.');
+        });
+    })();
 </script>
 </body>
 </html>

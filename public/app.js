@@ -2495,8 +2495,8 @@ function enforceRBAC() {
     "pos-nav-credits":  isAdminLike || isTech,
     // Finance Hub — Admin-like + HR + Supervisor + Cashier + Tech
     "pos-nav-finance":  isAdminLike || isHRRole || isSupervisor || isCashier || isTech,
-    // Staff / HR — Admin-like + Tech
-    "pos-nav-hr":       isAdminLike || isTech,
+    // Staff / HR — Admin-like (excluding Supervisor) + Tech
+    "pos-nav-hr":       (isAdminLike && !isSupervisor) || isTech,
     // Tech sub-tab — Tech ONLY
     "pos-nav-tech":     isTech,
   };
