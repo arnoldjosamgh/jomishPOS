@@ -1501,6 +1501,7 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
                po.total_amount AS order_total_amount,
                po.buyer_name AS order_buyer_name,
                po.served_by AS order_served_by,
+               po.payment_method AS order_payment_method,
                CASE 
                  WHEN po.served_by IS NOT NULL AND TRIM(po.served_by) != '' THEN po.served_by
                  WHEN t.recorded_by = 9999 THEN 'System Technician' 

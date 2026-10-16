@@ -3992,6 +3992,15 @@ function addToCart(p, scannedBarcode = null) {
 function updateCartQty(id, delta) {
   const item = posCart.find((i) => i.id === id);
   if (!item) return;
+  // In edit-order mode: cannot reduce below original qty (items already made)
+  if (_currentEditOrder && _currentEditOrder.id && delta < 0) {
+    const originalItem = _editOrderOriginalQtys && _editOrderOriginalQtys[id];
+    const minQty = originalItem !== undefined ? originalItem : 1;
+    if ((item.qty + delta) < minQty) {
+      showToast(`Cannot reduce "${item.name}" — already prepared. You can only add more.`, "warning");
+      return;
+    }
+  }
   item.qty += delta;
   if (item.qty <= 0) posCart = posCart.filter((i) => i.id !== id);
   renderCart();
@@ -3999,7 +4008,24 @@ function updateCartQty(id, delta) {
 
 function setCartQty(id, val) {
   const qty = parseInt(val);
+  // In edit-order mode: cannot reduce below original qty
+  if (_currentEditOrder && _currentEditOrder.id) {
+    const originalQty = _editOrderOriginalQtys && _editOrderOriginalQtys[id];
+    const minQty = originalQty !== undefined ? originalQty : 1;
+    if (!isNaN(qty) && qty < minQty) {
+      showToast(`Cannot reduce below original quantity (${minQty}) — item already prepared.`, "warning");
+      const item = posCart.find((i) => i.id === id);
+      if (item) renderCart(); // reset input visually
+      return;
+    }
+  }
   if (isNaN(qty) || qty <= 0) {
+    // In edit mode, don't allow removing original items
+    if (_currentEditOrder && _currentEditOrder.id && _editOrderOriginalQtys && _editOrderOriginalQtys[id] !== undefined) {
+      showToast(`Cannot remove "${posCart.find(i=>i.id===id)?.name}" — already prepared.`, "warning");
+      renderCart();
+      return;
+    }
     posCart = posCart.filter((i) => i.id !== id);
   } else {
     const item = posCart.find((i) => i.id === id);
@@ -4424,6 +4450,7 @@ async function submitWaiterOrder() {
       const tokenData = {
         isInvoice: false,
         printTokenOnly: true,
+        isEdited: true,
         orderId: invLabel,
         dateStr,
         cashierName: staffFirstName,
@@ -4436,6 +4463,7 @@ async function submitWaiterOrder() {
       const banner = document.getElementById("edit-order-banner");
       if (banner) banner.remove();
       _currentEditOrder = null;
+      _editOrderOriginalQtys = {};
       posCart = [];
       renderCart();
       loadPOSProducts();
@@ -5074,6 +5102,7 @@ table { width: 100%; border-collapse: collapse; }
 </head>
 <body>
     <div class="center heading" style="font-size:16pt;">KITCHEN TOKEN</div>
+    ${d.isEdited ? `<div class="center" style="background:#000;color:#fff;font-weight:bold;font-size:13pt;padding:4px;letter-spacing:2px;margin:4px 0;">*** EDITED ORDER ***</div>` : ""}
     <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: ${d.orderId}</span></div>
     <div class="row"><span>Date: ${d.dateStr}</span></div>
     ${d.servedBy ? `<div class="row"><span>Served by: ${d.servedBy}</span></div>` : ""}
@@ -6046,13 +6075,20 @@ async function loadTransactions(searchTerm = "") {
 
     let filtered = data.transactions;
     if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      filtered = filtered.filter(
-        (tx) =>
+      // Strip known document prefixes so '002' matches 'RCPT002', 'INV002', etc.
+      const term = searchTerm.trim().toLowerCase().replace(/^(rcpt|inv|ref|tx|exp)0*/i, "");
+      const rawTerm = searchTerm.trim().toLowerCase();
+      filtered = filtered.filter((tx) => {
+        const docNo = String(tx.order_invoice_number || tx.receipt_no || tx.id);
+        const paddedNo = String(tx.id).padStart(4, "0");
+        const strippedDoc = docNo.replace(/^(rcpt|inv|ref|tx|exp)0*/i, "");
+        return (
+          paddedNo.includes(term) ||
+          strippedDoc.includes(term) ||
           String(tx.id).includes(term) ||
-          String(tx.id).padStart(4, "0").includes(term) ||
-          (tx.description || "").toLowerCase().includes(term),
-      );
+          (tx.description || "").toLowerCase().includes(rawTerm)
+        );
+      });
     }
 
     if (filtered.length === 0) {
@@ -6067,45 +6103,35 @@ async function loadTransactions(searchTerm = "") {
       const receiptNo = formatDocNo("RCPT", tx.order_invoice_number || tx.receipt_no || tx.id);
       const tr = document.createElement("tr");
 
-      // Payment method badge based on type & description
+      // ── Action badge: real-time payment status + method ──
       const _desc = (tx.description || "").toLowerCase();
-      let _badge = "",
-        _bColor = "";
+      const _payStatus = (tx.payment_status || "").toUpperCase();
+      const _payMethod = (tx.order_payment_method || "").toUpperCase();
+      let _badge = "", _bColor = "";
+
       if (tx.type === "GOODS_ON_CREDIT") {
-        _badge = "🔖 Credit Sale";
-        _bColor = "#f59e0b";
-      } else if (
-        _desc.includes("credit") &&
-        (_desc.includes("paid") || _desc.includes("payment"))
-      ) {
-        _badge = "✅ Credit Paid";
-        _bColor = "#10b981";
-      } else if (
-        _desc.includes("mobile") ||
-        _desc.includes("momo") ||
-        _desc.includes("airtel") ||
-        _desc.includes("mtn")
-      ) {
-        _badge = "📱 Mobile Money";
-        _bColor = "#6366f1";
-      } else if (_desc.includes("bank") || _desc.includes("transfer")) {
-        _badge = "🏦 Bank Transfer";
-        _bColor = "#3b82f6";
-      } else if (_desc.includes("invoice") || _desc.includes("pending invoice")) {
-        _badge = "⏳ Pending Payment";
-        _bColor = "#8b5cf6";
+        _badge = "🔖 Credit Sale"; _bColor = "#f59e0b";
+      } else if (_desc.includes("credit") && (_desc.includes("paid") || _desc.includes("payment"))) {
+        _badge = "✅ Credit Paid"; _bColor = "#10b981";
       } else if (tx.type === "CASH_IN" || tx.type === "FLOAT_IN") {
-        _badge = "📥 Cash In (Float)";
-        _bColor = "#10b981";
+        _badge = "📥 Cash In (Float)"; _bColor = "#10b981";
       } else if (tx.type === "EXPENSE") {
-        _badge = "💸 Expense";
-        _bColor = "#ef4444";
-      } else if (tx.type === "INCOME") {
-        _badge = "💵 Cash Payment";
-        _bColor = "#10b981";
+        _badge = "💸 Expense"; _bColor = "#ef4444";
+      } else if (tx.type === "INCOME" || tx.type === "PAYMENT") {
+        // Paid order — show payment method
+        if (_payMethod === "MOBILE MONEY" || _payMethod === "MOMO" || _desc.includes("mobile") || _desc.includes("momo") || _desc.includes("airtel") || _desc.includes("mtn")) {
+          _badge = "📱 Mobile Money"; _bColor = "#6366f1";
+        } else if (_payMethod === "BANK" || _payMethod.includes("TRANSFER") || _desc.includes("bank") || _desc.includes("transfer")) {
+          _badge = "🏦 Bank Transfer"; _bColor = "#3b82f6";
+        } else if (_payMethod === "CASH" || _payMethod === "DISCOUNT") {
+          _badge = "💵 Cash Payment"; _bColor = "#10b981";
+        } else {
+          _badge = "💵 Cash Payment"; _bColor = "#10b981";
+        }
+      } else if (_payStatus === "PENDING" || _payMethod === "COD" || _payMethod === "INVOICE" || _desc.includes("invoice") || _desc.includes("pending")) {
+        _badge = "⏳ Pending Payment"; _bColor = "#f59e0b";
       } else {
-        _badge = "📋 Manual Entry";
-        _bColor = "#64748b";
+        _badge = "📋 Manual Entry"; _bColor = "#64748b";
       }
       const _badgeHtml = `<span style="display:inline-block;padding:3px 9px;border-radius:20px;background:${_bColor}22;color:${_bColor};font-size:0.72rem;font-weight:700;border:1px solid ${_bColor}55;white-space:nowrap;">${_badge}</span>`;
 
@@ -11772,6 +11798,7 @@ window._loadStockMovements = _loadStockMovements;
 // ========================================================
 let _currentEditOrder = null;
 let _editOrderItems = [];
+let _editOrderOriginalQtys = {}; // tracks original item qtys to prevent reduction
 
 async function openEditPendingOrder(posOrderId) {
   try {
@@ -11786,15 +11813,21 @@ async function openEditPendingOrder(posOrderId) {
     _currentEditOrder = await orderRes.json();
     const items = await itemsRes.json();
 
-    // Load items into register cart
-    posCart = items.map(i => ({
-      id: i.id || i.product_id,
-      product_id: i.id || i.product_id,
-      name: i.name || i.product_name,
-      price: Number(i.price) || 0,
-      qty: Number(i.qty) || 1,
-      track_stock: 0,
-    }));
+    // Store original quantities so edit mode can enforce minimum
+    _editOrderOriginalQtys = {};
+    posCart = items.map(i => {
+      const itemId = i.id || i.product_id;
+      const qty = Number(i.qty) || 1;
+      _editOrderOriginalQtys[itemId] = qty;
+      return {
+        id: itemId,
+        product_id: itemId,
+        name: i.name || i.product_name,
+        price: Number(i.price) || 0,
+        qty,
+        track_stock: 0,
+      };
+    });
 
     // Switch to Register view
     switchPOSView('register');
@@ -11881,6 +11914,7 @@ function cancelEditOrder() {
   if (banner) banner.remove();
   _currentEditOrder = null;
   _editOrderItems = [];
+  _editOrderOriginalQtys = {};
   posCart = [];
   renderCart();
   const btnPrintInvoice = document.getElementById("btn-print-invoice");
