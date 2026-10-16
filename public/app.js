@@ -1280,9 +1280,10 @@ async function loadPOSExpenses() {
     if (todayCashinEl) todayCashinEl.textContent = `UGX ${todayCashIn.toLocaleString()}`;
     if (totalExpEl) totalExpEl.textContent = `UGX ${allExp.toLocaleString()}`;
 
-    // Enforce Permission for Expense/Float Entry (Cashiers, Supervisors, Admins, Managers, Tech)
+    // Enforce Permission for Expense/Float Entry
+    // ADMIN and SUPERVISOR are VIEW-ONLY — only CASHIER, MANAGER, CEO, TECH can record
     const _expUserRole = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-    const canRecord = ["CASHIER", "SUPERVISOR", "MANAGER", "ADMIN", "CEO", "TECH"].includes(_expUserRole) || USER_NAME === "System Technician";
+    const canRecord = ["CASHIER", "MANAGER", "CEO", "TECH"].includes(_expUserRole) || USER_NAME === "System Technician";
     const formExp = document.getElementById("form-pos-expense");
     const formCashin = document.getElementById("form-pos-cashin");
     const tabsContainer = document.getElementById("tab-btn-expense")?.parentElement;
