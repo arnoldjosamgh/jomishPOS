@@ -1502,6 +1502,7 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
                po.buyer_name AS order_buyer_name,
                po.served_by AS order_served_by,
                po.payment_method AS order_payment_method,
+               po.amount_paid AS order_amount_paid,
                CASE 
                  WHEN po.served_by IS NOT NULL AND TRIM(po.served_by) != '' THEN po.served_by
                  WHEN t.recorded_by = 9999 THEN 'System Technician' 
@@ -5856,6 +5857,8 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
 app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res) => {
   try {
     let transactionData = null;
+    const paymentMethod = (req.body && req.body.payment_method) ? String(req.body.payment_method).toUpperCase() : "CASH";
+    const desc = `POS Sale (${paymentMethod})`;
     await db.withTransaction(async (q) => {
       const rowRes = await q(
         "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, served_by, invoice_number FROM pos_orders WHERE id = ?",
@@ -5867,8 +5870,8 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       const row = rowRes.rows[0];
 
       await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
-      await q("UPDATE transactions SET payment_status = ?, description = ? WHERE id = ?", ["PAID", "POS Sale (CASH)", row.transaction_id]);
-      await q("UPDATE pos_orders SET amount_paid = ? WHERE id = ?", [row.total_amount, row.pos_order_id]);
+      await q("UPDATE transactions SET payment_status = ?, description = ? WHERE id = ?", ["PAID", desc, row.transaction_id]);
+      await q("UPDATE pos_orders SET amount_paid = ?, payment_method = ? WHERE id = ?", [row.total_amount, paymentMethod, row.pos_order_id]);
       
       transactionData = row;
     });

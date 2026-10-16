@@ -2048,7 +2048,7 @@ function initSockets() {
       if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
         window.OfflineDB.bustCache("/transactions").catch(() => {});
       }
-      if (USER_PERMISSIONS.can_see_sme) {
+      if (USER_PERMISSIONS.can_see_sme || document.querySelector("#transactions-table")) {
         loadTransactions();
         loadDashboard();
       }
@@ -6107,6 +6107,12 @@ async function loadTransactions(searchTerm = "") {
       const _desc = (tx.description || "").toLowerCase();
       const _payStatus = (tx.payment_status || "").toUpperCase();
       const _payMethod = (tx.order_payment_method || "").toUpperCase();
+      const _isPending =
+        _payStatus.includes("PENDING") ||
+        _desc.includes("pending") ||
+        ((_payMethod === "COD" || _payMethod === "INVOICE") && _payStatus !== "PAID") ||
+        (tx.order_amount_paid !== null && tx.order_amount_paid !== undefined && Number(tx.order_amount_paid) < Number(tx.order_total_amount || 0) && _payStatus !== "PAID");
+
       let _badge = "", _bColor = "";
 
       if (tx.type === "GOODS_ON_CREDIT") {
@@ -6117,19 +6123,29 @@ async function loadTransactions(searchTerm = "") {
         _badge = "📥 Cash In (Float)"; _bColor = "#10b981";
       } else if (tx.type === "EXPENSE") {
         _badge = "💸 Expense"; _bColor = "#ef4444";
+      } else if (_isPending) {
+        _badge = "⏳ Pending"; _bColor = "#f59e0b";
       } else if (tx.type === "INCOME" || tx.type === "PAYMENT") {
         // Paid order — show payment method
-        if (_payMethod === "MOBILE MONEY" || _payMethod === "MOMO" || _desc.includes("mobile") || _desc.includes("momo") || _desc.includes("airtel") || _desc.includes("mtn")) {
+        if (
+          _payMethod === "MOBILE MONEY" ||
+          _payMethod === "MOMO" ||
+          _desc.includes("mobile") ||
+          _desc.includes("momo") ||
+          _desc.includes("airtel") ||
+          _desc.includes("mtn")
+        ) {
           _badge = "📱 Mobile Money"; _bColor = "#6366f1";
-        } else if (_payMethod === "BANK" || _payMethod.includes("TRANSFER") || _desc.includes("bank") || _desc.includes("transfer")) {
+        } else if (
+          _payMethod === "BANK" ||
+          _payMethod.includes("TRANSFER") ||
+          _desc.includes("bank") ||
+          _desc.includes("transfer")
+        ) {
           _badge = "🏦 Bank Transfer"; _bColor = "#3b82f6";
-        } else if (_payMethod === "CASH" || _payMethod === "DISCOUNT") {
-          _badge = "💵 Cash Payment"; _bColor = "#10b981";
         } else {
           _badge = "💵 Cash Payment"; _bColor = "#10b981";
         }
-      } else if (_payStatus === "PENDING" || _payMethod === "COD" || _payMethod === "INVOICE" || _desc.includes("invoice") || _desc.includes("pending")) {
-        _badge = "⏳ Pending Payment"; _bColor = "#f59e0b";
       } else {
         _badge = "📋 Manual Entry"; _bColor = "#64748b";
       }
@@ -12013,8 +12029,15 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
     return;
   }
 
+  const paymentMethodSelect = document.getElementById("payment-method-select");
+  const paymentMethod = (paymentMethodSelect ? paymentMethodSelect.value : "CASH").toUpperCase();
+
   try {
-    const res = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/cod-received`, { method: "POST" });
+    const res = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/cod-received`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payment_method: paymentMethod }),
+    });
     const data = await res.json();
     if (res.ok) {
       // Reset confirm button back to normal checkout
@@ -12044,7 +12067,7 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
           receiptItems,
           data.total_amount,
           rcptNo,
-          "CASH",
+          paymentMethod,
           paid,
           data.client_name || "",
           null,
