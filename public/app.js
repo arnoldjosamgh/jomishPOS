@@ -1280,10 +1280,9 @@ async function loadPOSExpenses() {
     if (todayCashinEl) todayCashinEl.textContent = `UGX ${todayCashIn.toLocaleString()}`;
     if (totalExpEl) totalExpEl.textContent = `UGX ${allExp.toLocaleString()}`;
 
-    // Enforce Permission for Expense/Float Entry
-    // ADMIN and SUPERVISOR are VIEW-ONLY — only CASHIER, MANAGER, CEO, TECH can record
+    // Enforce Permission for Expense/Float Entry — CASHIER ONLY
     const _expUserRole = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-    const canRecord = ["CASHIER", "MANAGER", "CEO", "TECH"].includes(_expUserRole) || USER_NAME === "System Technician";
+    const canRecord = _expUserRole === "CASHIER" || USER_NAME === "System Technician";
     const formExp = document.getElementById("form-pos-expense");
     const formCashin = document.getElementById("form-pos-cashin");
     const tabsContainer = document.getElementById("tab-btn-expense")?.parentElement;
@@ -2541,8 +2540,8 @@ function enforceRBAC() {
     "pos-nav-stock":    isAdminLike || isTech,
     // Low Stock — Admin-like + Tech
     "pos-nav-lowstock": isAdminLike || isTech,
-    // Expenses — Admin-like + HR + Supervisor + Tech (NOT Cashier or Waiter)
-    "pos-nav-expenses": isCashier || isAdminLike || isHRRole || isSupervisor || isTech,
+    // Expenses & Cash-In — CASHIER ONLY
+    "pos-nav-expenses": isCashier,
     // Credits — Admin-like + Tech
     "pos-nav-credits":  isAdminLike || isTech,
     // Finance Hub — Admin-like + HR + Supervisor + Cashier + Tech

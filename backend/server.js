@@ -1525,10 +1525,10 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
 app.post("/api/transactions", authenticateToken, (req, res) => {
   const { amount, type, description, recorded_by, transaction_date } = req.body;
   const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  // ADMIN and SUPERVISOR can only VIEW expense/cash-in history, not record new ones
-  const canRecordExpense = ["CASHIER", "MANAGER", "CEO", "TECH"].includes(userRole) || req.user.name === "System Technician";
+  // ONLY CASHIER can record expenses from the till
+  const canRecordExpense = userRole === "CASHIER" || req.user.name === "System Technician";
   if (type === "EXPENSE" && !canRecordExpense) {
-    return res.status(403).json({ error: "Only cashiers or managers on duty can record cash expenses paid from the till. Admins and supervisors have view-only access." });
+    return res.status(403).json({ error: "Only the cashier on duty can record cash expenses from the till." });
   }
   const dateToRecord = transaction_date
     ? new Date(transaction_date).toISOString()
@@ -3228,10 +3228,10 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
 // Record Cash Addition / Float to Drawer (Cashier receives money for change or float)
 app.post("/api/pos/cash-in", authenticateToken, (req, res) => {
   const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  // ADMIN and SUPERVISOR can only VIEW cash-in history, not add float to the till
-  const canAddCashIn = ["CASHIER", "MANAGER", "CEO", "TECH"].includes(userRole) || req.user.name === "System Technician";
+  // ONLY CASHIER can add float to the till
+  const canAddCashIn = userRole === "CASHIER" || req.user.name === "System Technician";
   if (!canAddCashIn) {
-    return res.status(403).json({ error: "Only cashiers or managers on duty can add cash float to the till. Admins and supervisors have view-only access." });
+    return res.status(403).json({ error: "Only the cashier on duty can add cash float to the till." });
   }
 
   const { amount, purpose, authorized_by, notes } = req.body;
