@@ -5209,12 +5209,14 @@ window.updateCashierShiftUI = async function () {
     if (res.ok) {
       const data = await res.json();
       if (data.has_active_shift && data.shift) {
-        // Active shift is running: Start Shift is disabled/checked, End Shift is active next to it
+        // Active shift is running: Start Shift is faded/disabled, End Shift is unfaded/active
         if (btnStartShift) {
           btnStartShift.style.setProperty("display", "inline-flex", "important");
           btnStartShift.disabled = true;
-          btnStartShift.style.opacity = "0.5";
+          btnStartShift.style.opacity = "0.4";
           btnStartShift.style.cursor = "default";
+          btnStartShift.style.pointerEvents = "none";
+          btnStartShift.style.filter = "grayscale(70%)";
           btnStartShift.title = "Shift is already in progress";
           btnStartShift.innerHTML = '<i class="fa-solid fa-check"></i> Shift Started';
         }
@@ -5223,6 +5225,8 @@ window.updateCashierShiftUI = async function () {
           btnEndShift.disabled = false;
           btnEndShift.style.opacity = "1";
           btnEndShift.style.cursor = "pointer";
+          btnEndShift.style.pointerEvents = "auto";
+          btnEndShift.style.filter = "none";
           btnEndShift.title = "End shift and calculate cash drawer";
           btnEndShift.innerHTML = '<i class="fa-solid fa-power-off"></i> End Shift';
         }
@@ -5232,20 +5236,24 @@ window.updateCashierShiftUI = async function () {
           shiftInfo.textContent = `Started ${startTimeStr} • Starting Capital: UGX ${Number(data.shift.start_cash || 0).toLocaleString()}`;
         }
       } else {
-        // No shift started yet: Start Shift is active, End Shift sits next to it disabled
+        // No shift started yet: Start Shift is unfaded/active, End Shift is faded/disabled
         if (btnStartShift) {
           btnStartShift.style.setProperty("display", "inline-flex", "important");
           btnStartShift.disabled = false;
           btnStartShift.style.opacity = "1";
           btnStartShift.style.cursor = "pointer";
+          btnStartShift.style.pointerEvents = "auto";
+          btnStartShift.style.filter = "none";
           btnStartShift.title = "Start your shift";
           btnStartShift.innerHTML = '<i class="fa-solid fa-play"></i> Start Shift';
         }
         if (btnEndShift) {
           btnEndShift.style.setProperty("display", "inline-flex", "important");
           btnEndShift.disabled = true;
-          btnEndShift.style.opacity = "0.4";
+          btnEndShift.style.opacity = "0.35";
           btnEndShift.style.cursor = "not-allowed";
+          btnEndShift.style.pointerEvents = "none";
+          btnEndShift.style.filter = "grayscale(80%)";
           btnEndShift.title = "Start a shift first before ending";
           btnEndShift.innerHTML = '<i class="fa-solid fa-power-off"></i> End Shift';
         }
@@ -5281,7 +5289,7 @@ window.confirmStartShift = async function () {
   const input = document.getElementById("start-shift-cash-input");
   const val = input ? input.value.trim() : "";
   if (val === "") {
-    alert("Please enter your starting cash (enter 0 if starting with an empty drawer).");
+    showToast("Please enter your starting cash (enter 0 if starting with an empty drawer).", "warning");
     if (input) input.focus();
     return;
   }
@@ -5302,6 +5310,36 @@ window.confirmStartShift = async function () {
     const data = await res.json();
     if (res.ok) {
       closeStartShiftModal();
+
+      // Immediately fade start button and unfade end button
+      const btnStart = document.getElementById("btn-start-shift");
+      const btnEnd = document.getElementById("btn-end-shift");
+      const banner = document.getElementById("active-shift-banner");
+      const info = document.getElementById("active-shift-info");
+
+      if (btnStart) {
+        btnStart.disabled = true;
+        btnStart.style.opacity = "0.4";
+        btnStart.style.pointerEvents = "none";
+        btnStart.style.filter = "grayscale(70%)";
+        btnStart.title = "Shift is already in progress";
+        btnStart.innerHTML = '<i class="fa-solid fa-check"></i> Shift Started';
+      }
+      if (btnEnd) {
+        btnEnd.disabled = false;
+        btnEnd.style.opacity = "1";
+        btnEnd.style.pointerEvents = "auto";
+        btnEnd.style.cursor = "pointer";
+        btnEnd.style.filter = "none";
+        btnEnd.title = "End shift and calculate cash drawer";
+        btnEnd.innerHTML = '<i class="fa-solid fa-power-off"></i> End Shift';
+      }
+      if (banner && info) {
+        banner.style.setProperty("display", "inline-flex", "important");
+        const timeStr = new Date(data.start_time || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        info.textContent = `Started ${timeStr} • Starting Capital: UGX ${startCash.toLocaleString()}`;
+      }
+
       showToast(`Shift started! Starting Capital: UGX ${startCash.toLocaleString()}`, "success");
       updateCashierShiftUI();
     } else {
