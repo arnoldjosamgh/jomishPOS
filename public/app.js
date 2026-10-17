@@ -1,4 +1,4 @@
-﻿const BASE_URL =
+const BASE_URL =
   window.location.protocol === "file:" ||
   window.location.hostname.includes("github.io")
     ? "https://jomish-business-suite.onrender.com"
@@ -5318,14 +5318,17 @@ window.confirmStartShift = async function () {
       const info = document.getElementById("active-shift-info");
 
       if (btnStart) {
+        btnStart.style.setProperty("display", "inline-flex", "important");
         btnStart.disabled = true;
         btnStart.style.opacity = "0.4";
         btnStart.style.pointerEvents = "none";
+        btnStart.style.cursor = "default";
         btnStart.style.filter = "grayscale(70%)";
         btnStart.title = "Shift is already in progress";
         btnStart.innerHTML = '<i class="fa-solid fa-check"></i> Shift Started';
       }
       if (btnEnd) {
+        btnEnd.style.setProperty("display", "inline-flex", "important");
         btnEnd.disabled = false;
         btnEnd.style.opacity = "1";
         btnEnd.style.pointerEvents = "auto";
@@ -5341,7 +5344,7 @@ window.confirmStartShift = async function () {
       }
 
       showToast(`Shift started! Starting Capital: UGX ${startCash.toLocaleString()}`, "success");
-      updateCashierShiftUI();
+      await updateCashierShiftUI();
     } else {
       alert("Error starting shift: " + (data.error || "Unknown error"));
     }
