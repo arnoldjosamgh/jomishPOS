@@ -172,13 +172,26 @@ app.use((req, res, next) => {
   next();
 });
 
-// Global API rate limit: 200 requests/min per IP
+// Global API rate limit — 600 req/min per IP.
+// Read-only POS endpoints (products, orders listing, finance summary, current-shift)
+// are excluded entirely so a busy cashier can never be rate-limited during normal work.
+const RATE_LIMIT_EXCLUDED = [
+  "/api/products",
+  "/api/pos_orders",
+  "/api/finance/summary",
+  "/api/pos/current-shift",
+  "/api/alerts/low-stock",
+];
 app.use("/api/", (req, res, next) => {
-  const ip = req.ip || req.socket?.remoteAddress;
-  if (rateLimit("api_" + ip, 200, 60 * 1000)) {
+  // Skip read-only endpoints that fire on every POS page refresh
+  if (req.method === "GET" && RATE_LIMIT_EXCLUDED.some(p => req.path.startsWith(p.replace("/api", "")))) {
+    return next();
+  }
+  const ip = req.ip || req.socket?.remoteAddress || "unknown";
+  if (rateLimit("api_" + ip, 600, 60 * 1000)) {
     return res
       .status(429)
-      .json({ error: "Too many requests. Please slow down." });
+      .json({ error: "Too many requests. Please wait a moment." });
   }
   next();
 });

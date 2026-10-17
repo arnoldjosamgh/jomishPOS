@@ -3755,57 +3755,114 @@ function getCategoryIcon(cat) {
 }
 
 // ==== POS HANDLERS & RECEIPT ====
+// In-flight guard: if a load is already running, queue at most one pending call
+let _posProductsLoading = false;
+let _posProductsPendingSearch = null; // last queued searchTerm while load was in progress
+let _posProductsRetryTimer = null;
+
 async function loadPOSProducts(searchTerm = "") {
+  // If a fetch is already in flight, just remember the latest search term and return.
+  // When the in-flight fetch completes it will re-run with the queued term.
+  if (_posProductsLoading) {
+    _posProductsPendingSearch = searchTerm;
+    return;
+  }
+
+  _posProductsLoading = true;
+  clearTimeout(_posProductsRetryTimer);
+
   try {
     const res = await fetchAuth(`${API_URL}/products`);
-    if (!res.ok) {
-      const err = await res.json();
-      alert("POS Load Error: " + err.error);
+
+    if (res.status === 429) {
+      // Rate limited — keep the current grid intact and silently retry after 3 s
+      console.warn("[POS] Rate limited on /products — retrying in 3s");
+      _posProductsRetryTimer = setTimeout(() => loadPOSProducts(searchTerm), 3000);
       return;
     }
+
+    if (!res.ok) {
+      // Any other server error — fall back to the last good product list if we have it,
+      // otherwise show a non-intrusive toast (no alert, no blank screen)
+      const body = await res.json().catch(() => ({}));
+      console.error("[POS] Products load error:", body.error || res.status);
+      if (cachedProducts && cachedProducts.length > 0) {
+        // Re-render from cache so the cashier can still work
+        _renderPOSGrid(cachedProducts, searchTerm);
+      } else {
+        showToast("Couldn't load products. Retrying…", "warning");
+        _posProductsRetryTimer = setTimeout(() => loadPOSProducts(searchTerm), 4000);
+      }
+      return;
+    }
+
     const data = await res.json();
     cachedProducts = data.products || []; // Refresh cache for barcode scanner
-    const grid = document.getElementById("pos-products");
-    if (!grid) return;
-    grid.innerHTML = "";
+    _renderPOSGrid(cachedProducts, searchTerm);
 
-    let filtered = data.products || [];
-    if (searchTerm) {
-      const lowTerm = searchTerm.toLowerCase();
-      filtered = filtered.filter(
-        (p) =>
-          (p.name || "").toLowerCase().includes(lowTerm) ||
-          (p.category || "").toLowerCase().includes(lowTerm),
-      );
+  } catch (e) {
+    console.error("[POS] Products network error:", e.message);
+    // Network/fetch failure — fall back to cached data silently
+    if (cachedProducts && cachedProducts.length > 0) {
+      _renderPOSGrid(cachedProducts, searchTerm);
+    } else {
+      showToast("Network error loading products. Retrying…", "warning");
+      _posProductsRetryTimer = setTimeout(() => loadPOSProducts(searchTerm), 4000);
     }
-
-    if (filtered.length === 0) {
-      grid.innerHTML =
-        '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--text-muted);"><h3>No Items Found</h3><p>Try searching for something else or check your inventory.</p></div>';
-      return;
+  } finally {
+    _posProductsLoading = false;
+    // If a call was queued while we were loading, run it now
+    if (_posProductsPendingSearch !== null) {
+      const nextSearch = _posProductsPendingSearch;
+      _posProductsPendingSearch = null;
+      loadPOSProducts(nextSearch);
     }
-    filtered.forEach((p) => {
-      const prodName = p.name || "Unnamed";
-      const prodPrice = Number(p.price) || 0;
-      const prodStock = Number(p.stock) || 0;
-      const prodCat = p.category || "General";
+  }
+}
 
-      const card = document.createElement("div");
-      card.className = `product-card ${prodStock <= 0 ? "empty" : ""}`;
+function _renderPOSGrid(products, searchTerm = "") {
+  const grid = document.getElementById("pos-products");
+  if (!grid) return;
 
-      const catClass = `category-${prodCat.toLowerCase()}`;
-      let imageHtml;
-      if (p.photo_base64 && p.photo_base64.length > 50) {
-        imageHtml = `<div class="product-img-container">
+  let filtered = products;
+  if (searchTerm) {
+    const lowTerm = searchTerm.toLowerCase();
+    filtered = filtered.filter(
+      (p) =>
+        (p.name || "").toLowerCase().includes(lowTerm) ||
+        (p.category || "").toLowerCase().includes(lowTerm),
+    );
+  }
+
+  if (filtered.length === 0) {
+    grid.innerHTML =
+      '<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--text-muted);"><h3>No Items Found</h3><p>Try searching for something else or check your inventory.</p></div>';
+    return;
+  }
+
+  grid.innerHTML = "";
+  filtered.forEach((p) => {
+    const prodName = p.name || "Unnamed";
+    const prodPrice = Number(p.price) || 0;
+    const prodStock = Number(p.stock) || 0;
+    const prodCat = p.category || "General";
+
+    const card = document.createElement("div");
+    card.className = `product-card ${prodStock <= 0 ? "empty" : ""}`;
+
+    const catClass = `category-${prodCat.toLowerCase()}`;
+    let imageHtml;
+    if (p.photo_base64 && p.photo_base64.length > 50) {
+      imageHtml = `<div class="product-img-container">
                     <img src="${p.photo_base64}" alt="${prodName}" loading="lazy">
                 </div>`;
-      } else if (p.has_photo) {
-        imageHtml = `<div class="product-img-container">
+    } else if (p.has_photo) {
+      imageHtml = `<div class="product-img-container">
                     <img data-photo-id="${p.id}" class="lazy-prod-photo" alt="${prodName}" loading="lazy" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3C/svg%3E">
                 </div>`;
-      } else {
-        const initial = prodName[0].toUpperCase();
-        imageHtml = `<div class="product-img-container placeholder ${catClass}">
+    } else {
+      const initial = prodName[0].toUpperCase();
+      imageHtml = `<div class="product-img-container placeholder ${catClass}">
                     <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
                         <span style="font-size:2rem;">${getCategoryIcon(prodCat)}</span>
                         <span style="font-size:1.1rem;font-weight:700;opacity:0.8;">${initial}</span>
@@ -3815,29 +3872,26 @@ async function loadPOSProducts(searchTerm = "") {
                         <i class="fa-solid fa-camera"></i> Add Photo
                     </button>
                 </div>`;
-      }
+    }
 
-      card.innerHTML = `
-                ${imageHtml}
-                <div class="product-info">
-                    <h4>${prodName}</h4>
-                    <div class="price">UGX ${prodPrice.toLocaleString()}</div>
-                    <div class="stock" style="display:flex;justify-content:space-between;align-items:center;">
-                        <span>${prodStock > 0 ? "In Stock: " + prodStock : "\u26a0\ufe0f Out of Stock"}</span>
-                        ${p.barcode ? `<span style="font-size:0.6rem;background:rgba(99,102,241,0.15);color:var(--primary);padding:2px 6px;border-radius:4px;">#${p.barcode}</span>` : ""}
-                    </div>
+    card.innerHTML = `
+            ${imageHtml}
+            <div class="product-info">
+                <h4>${prodName}</h4>
+                <div class="price">UGX ${prodPrice.toLocaleString()}</div>
+                <div class="stock" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>${prodStock > 0 ? "In Stock: " + prodStock : "\u26a0\ufe0f Out of Stock"}</span>
+                    ${p.barcode ? `<span style="font-size:0.6rem;background:rgba(99,102,241,0.15);color:var(--primary);padding:2px 6px;border-radius:4px;">#${p.barcode}</span>` : ""}
                 </div>
-            `;
-      if (prodStock > 0) card.onclick = () => addToCart(p);
-      grid.appendChild(card);
-    });
+            </div>
+        `;
+    if (prodStock > 0) card.onclick = () => addToCart(p);
+    grid.appendChild(card);
+  });
 
-    lazyLoadProductImages();
-    // Run active inventory filter
-    window.filterInventory();
-  } catch (e) {
-    console.error("POS Load Error:", e);
-  }
+  lazyLoadProductImages();
+  // Run active inventory filter
+  if (typeof window.filterInventory === "function") window.filterInventory();
 }
 
 // Quick photo upload from POS tiles
