@@ -4177,11 +4177,31 @@ function updateChange() {
   }
 }
 
+function generateClientUUID(prefix = "pos") {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    try {
+      return crypto.randomUUID();
+    } catch (_) {}
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function closePaymentPanel() {
-  document.getElementById("payment-panel").classList.add("hidden");
+  const panel = document.getElementById("payment-panel");
+  if (panel) panel.classList.add("hidden");
   const servedByContainer = document.getElementById("pay-served-by-container");
   if (servedByContainer) servedByContainer.style.display = "none";
   window._pendingServedBy = null;
+
+  // Reset confirm button back to default checkout if it was tied to a pending order
+  const btnConfirm = document.getElementById("btn-confirm-pay");
+  if (btnConfirm && btnConfirm.hasAttribute("data-pending-id")) {
+    btnConfirm.removeAttribute("data-pending-id");
+    btnConfirm.onclick = () => confirmPayment();
+    btnConfirm.innerHTML = '<i class="fa-solid fa-check"></i> CONFIRM PAYMENT';
+  }
+  window._pendingOrderId = null;
+  window._pendingOrderTotal = null;
 
   // Always reset payment method back to Cash when payment panel closes
   const payMethodSelect = document.getElementById("payment-method-select");
@@ -4194,49 +4214,57 @@ function closePaymentPanel() {
 }
 
 window.handleDeliveryCheckboxChange = function () {
-  const isDelivery = document.getElementById("send-to-transport-chk").checked;
+  const isDelivery = document.getElementById("send-to-transport-chk")?.checked || false;
   const deliveryContainer = document.getElementById("delivery-info-container");
   const btnConfirmPay = document.getElementById("btn-confirm-pay");
 
   if (isDelivery) {
-    deliveryContainer.style.display = "block";
-    if (btnConfirmPay)
-      btnConfirmPay.innerHTML =
-        '<i class="fa-solid fa-truck"></i> CONFIRM & DISPATCH';
+    if (deliveryContainer) deliveryContainer.style.display = "block";
+    if (btnConfirmPay) {
+      btnConfirmPay.innerHTML = '<i class="fa-solid fa-truck"></i> CONFIRM & DISPATCH';
+    }
   } else {
-    deliveryContainer.style.display = "none";
-    if (btnConfirmPay)
-      btnConfirmPay.innerHTML =
-        '<i class="fa-solid fa-check"></i> CONFIRM PAYMENT';
+    if (deliveryContainer) deliveryContainer.style.display = "none";
+    if (btnConfirmPay) {
+      btnConfirmPay.innerHTML = '<i class="fa-solid fa-check"></i> CONFIRM PAYMENT';
+    }
   }
 };
 
 window.handlePaymentMethodChange = async function () {
-  const method = document.getElementById("payment-method-select").value;
+  const methodSelect = document.getElementById("payment-method-select");
+  if (!methodSelect) return;
+  const method = methodSelect.value;
   const buyerContainer = document.getElementById("buyer-name-container");
   const payAmountInput = document.getElementById("pay-amount");
   const deliveryChk = document.getElementById("send-to-transport-chk");
 
   if (method === "COD") {
-    deliveryChk.checked = true;
-    window.handleDeliveryCheckboxChange();
-    payAmountInput.value = "0";
-    payAmountInput.setAttribute("readonly", "true");
-    buyerContainer.style.display = "none"; // User requested name/phone only for creditors
-  } else if (method === "DISCOUNT") {
-    payAmountInput.removeAttribute("readonly");
-    buyerContainer.style.display = "none";
-    updateChange();
-    payAmountInput.focus();
-    payAmountInput.select();
-  } else {
-    payAmountInput.removeAttribute("readonly");
-    if (method === "CREDIT") {
-      buyerContainer.style.display = "block";
-    } else {
-      buyerContainer.style.display = "none";
+    if (deliveryChk) {
+      deliveryChk.checked = true;
+      if (typeof window.handleDeliveryCheckboxChange === "function") {
+        window.handleDeliveryCheckboxChange();
+      }
     }
-    updateChange();
+    if (payAmountInput) {
+      payAmountInput.value = "0";
+      payAmountInput.setAttribute("readonly", "true");
+    }
+    if (buyerContainer) buyerContainer.style.display = "none";
+  } else if (method === "DISCOUNT") {
+    if (payAmountInput) payAmountInput.removeAttribute("readonly");
+    if (buyerContainer) buyerContainer.style.display = "none";
+    if (typeof updateChange === "function") updateChange();
+    if (payAmountInput) {
+      payAmountInput.focus();
+      payAmountInput.select();
+    }
+  } else {
+    if (payAmountInput) payAmountInput.removeAttribute("readonly");
+    if (buyerContainer) {
+      buyerContainer.style.display = method === "CREDIT" ? "block" : "none";
+    }
+    if (typeof updateChange === "function") updateChange();
   }
 
   if (method === "CREDIT" || method === "COD") {
@@ -4245,12 +4273,14 @@ window.handlePaymentMethodChange = async function () {
       if (res.ok) {
         const data = await res.json();
         const datalist = document.getElementById("buyer-names-list");
-        datalist.innerHTML = "";
-        data.buyers.forEach((buyer) => {
-          const option = document.createElement("option");
-          option.value = buyer;
-          datalist.appendChild(option);
-        });
+        if (datalist && Array.isArray(data.buyers)) {
+          datalist.innerHTML = "";
+          data.buyers.forEach((buyer) => {
+            const option = document.createElement("option");
+            option.value = buyer;
+            datalist.appendChild(option);
+          });
+        }
       }
     } catch (e) {
       console.error("Failed to load buyers list:", e);
@@ -4282,16 +4312,16 @@ async function confirmPayment() {
   }
   const total =
     parseFloat(
-      document.getElementById("btn-checkout").getAttribute("data-total"),
+      document.getElementById("btn-checkout")?.getAttribute("data-total") || "0",
     ) || 0;
-  const paid = parseInt(document.getElementById("pay-amount").value) || 0;
-  const paymentMethod = document.getElementById("payment-method-select").value;
-  const buyerName = document.getElementById("buyer-name-input").value.trim();
-  const buyerPhone = document.getElementById("buyer-phone-input").value.trim();
-  const isDelivery = document.getElementById("send-to-transport-chk").checked;
-  const deliveryAddress = document
-    .getElementById("delivery-address-input")
-    .value.trim();
+  const payInput = document.getElementById("pay-amount");
+  const paid = payInput ? (parseInt(payInput.value) || 0) : 0;
+  const paymentMethodSelect = document.getElementById("payment-method-select");
+  const paymentMethod = paymentMethodSelect ? paymentMethodSelect.value : "CASH";
+  const buyerName = document.getElementById("buyer-name-input")?.value?.trim() || "";
+  const buyerPhone = document.getElementById("buyer-phone-input")?.value?.trim() || "";
+  const isDelivery = document.getElementById("send-to-transport-chk")?.checked || false;
+  const deliveryAddress = document.getElementById("delivery-address-input")?.value?.trim() || "";
 
   if (paymentMethod === "CREDIT") {
     if (paid > Math.round(total)) {
@@ -4330,7 +4360,7 @@ async function confirmPayment() {
     btnConfirm.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
   }
 
-  const client_uuid = crypto.randomUUID();
+  const client_uuid = generateClientUUID("pos");
 
   try {
     const res = await fetchAuth(`${API_URL}/checkout`, {
@@ -4580,7 +4610,7 @@ async function submitWaiterOrder() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        client_uuid: crypto.randomUUID(),
+        client_uuid: generateClientUUID("waiter"),
         total_amount: total,
         items: posCart,
         payment_method: "COD",
@@ -4677,7 +4707,7 @@ async function getInvoice() {
   const isDelivery = false;
   const deliveryAddress = "";
 
-  const client_uuid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("inv_" + Date.now() + "_" + Math.random().toString(36).slice(2));
+  const client_uuid = generateClientUUID("inv");
   const _btnPI = document.getElementById("btn-print-invoice");
   const origPIHtml = _btnPI ? _btnPI.innerHTML : "";
   _isGettingInvoice = true;

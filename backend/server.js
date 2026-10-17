@@ -2964,6 +2964,14 @@ app.post("/api/products/:id/movements", authenticateToken, (req, res) => {
 
 // In-memory idempotency cache for fast-path checkout deduplication
 const recentCheckouts = new Map(); // client_uuid -> { result, timestamp }
+function rememberCheckout(uuid, result) {
+  if (!uuid) return;
+  if (recentCheckouts.size > 5000) {
+    const firstKey = recentCheckouts.keys().next().value;
+    if (firstKey) recentCheckouts.delete(firstKey);
+  }
+  recentCheckouts.set(uuid, { result, timestamp: Date.now() });
+}
 setInterval(() => {
   const cutoff = Date.now() - 300000; // 5 min TTL
   for (const [k, v] of recentCheckouts.entries()) {
@@ -3022,7 +3030,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         pos_order_id: existing.pos_order_id,
         invoice_number: existing.invoice_number
       };
-      recentCheckouts.set(trimmedUuid, { result: dupRes, timestamp: Date.now() });
+      rememberCheckout(trimmedUuid, dupRes);
       return res.json(dupRes);
     }
   }
@@ -3179,6 +3187,15 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         );
       }
 
+      // ── Insert order_items INSIDE transaction for complete atomicity ─────
+      for (const item of items) {
+        const itemTotal = (item.price || 0) * (item.qty || 1);
+        await q(
+          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+          [pos_order_id, item.id, item.name, item.qty, item.price, itemTotal]
+        );
+      }
+
       return { transaction_id, pos_order_id, invoice_number, already_done: false };
     });
 
@@ -3191,20 +3208,9 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
       } catch (_) {}
       const dupRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
-      if (trimmedUuid) recentCheckouts.set(trimmedUuid, { result: dupRes, timestamp: Date.now() });
+      if (trimmedUuid) rememberCheckout(trimmedUuid, dupRes);
       return res.json(dupRes);
     }
-
-    // ── 3. Insert order_items AFTER commit (safe fire-and-forget) ──────────
-    for (const item of items) {
-      const itemTotal = (item.price || 0) * (item.qty || 1);
-      db.run(
-        "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
-        [pos_order_id, item.id, item.name, item.qty, item.price, itemTotal],
-        (err) => { if (err) console.error("Failed to insert order_item:", err.message); }
-      );
-    }
-    // NOTE: stock_movements for SALE are now logged INSIDE the withTransaction block above
 
     // ── 4. Emit real-time updates ──────────────────────────────────────────
     emitAndBust("transactions", "finance_summary");
@@ -3227,7 +3233,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
     } catch (_) { /* fallback to raw id */ }
     const successRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
-    if (trimmedUuid) recentCheckouts.set(trimmedUuid, { result: successRes, timestamp: Date.now() });
+    if (trimmedUuid) rememberCheckout(trimmedUuid, successRes);
     res.json(successRes);
 
   } catch (err) {
@@ -3482,78 +3488,106 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
   const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
 
   try {
-    const order = await new Promise((resolve, reject) => {
-      db.get("SELECT * FROM pos_orders WHERE id = ?", [posOrderId], (err, row) => err ? reject(err) : resolve(row));
-    });
-    if (!order) return res.status(404).json({ error: "Order not found" });
-
-    // Revert stock for existing items
-    const existingItems = await new Promise((resolve, reject) => {
-      db.all("SELECT * FROM order_items WHERE pos_order_id = ?", [posOrderId], (err, rows) => err ? reject(err) : resolve(rows || []));
-    });
-
-    for (const oldItem of existingItems) {
-      if (oldItem.product_id) {
-        db.get("SELECT track_stock, stock FROM products WHERE id = ?", [oldItem.product_id], (err, prod) => {
-          if (!err && prod && prod.track_stock !== 0) {
-            const stockBefore = prod.stock;
-            const stockAfter = prod.stock + oldItem.qty;
-            db.run("UPDATE products SET stock = stock + ? WHERE id = ?", [oldItem.qty, oldItem.product_id]);
-            db.run(
-              "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'ADJUSTMENT', ?, ?, ?, ?, ?)",
-              [oldItem.product_id, oldItem.product_name, oldItem.qty, stockBefore, stockAfter, `Reverted items before editing Order #${posOrderId}`, cashierName]
-            );
-          }
-        });
-      }
-    }
-
-    // Delete old items
-    await new Promise((resolve, reject) => {
-      db.run("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId], (err) => err ? reject(err) : resolve());
-    });
-
-    // Insert new items and deduct stock
     let newTotal = 0;
-    for (const item of items) {
-      const qty = parseInt(item.qty) || 1;
-      const price = parseFloat(item.price) || 0;
-      const total = qty * price;
-      newTotal += total;
-
-      await new Promise((resolve, reject) => {
-        db.run(
-          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
-          [posOrderId, item.product_id || item.id, item.product_name || item.name, qty, price, total],
-          (err) => err ? reject(err) : resolve()
-        );
-      });
-
-      const pId = item.product_id || item.id;
-      if (pId) {
-        db.get("SELECT track_stock, stock, name FROM products WHERE id = ?", [pId], (err, prod) => {
-          if (!err && prod && prod.track_stock !== 0) {
-            const stockBefore = prod.stock;
-            const stockAfter = prod.stock - qty;
-            db.run("UPDATE products SET stock = stock - ? WHERE id = ?", [qty, pId]);
-            db.run(
-              "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)",
-              [pId, prod.name || item.name, -qty, stockBefore, stockAfter, `Edited Order #${posOrderId}`, cashierName]
-            );
-          }
-        });
+    await db.withTransaction(async (q) => {
+      const ordRes = await q("SELECT * FROM pos_orders WHERE id = ?", [posOrderId]);
+      if (!ordRes.rows || ordRes.rows.length === 0) {
+        throw new Error("Order not found");
       }
-    }
+      const order = ordRes.rows[0];
 
-    // Update pos_orders & transaction
-    await new Promise((resolve, reject) => {
-      db.run("UPDATE pos_orders SET total_amount = ? WHERE id = ?", [newTotal, posOrderId], (err) => err ? reject(err) : resolve());
+      // Get existing items
+      const existRes = await q("SELECT * FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+      const existingItems = existRes.rows || [];
+
+      // Map existing quantities by product_id
+      const existingQtyByPid = {};
+      const existingNamesByPid = {};
+      for (const oldItem of existingItems) {
+        const pid = oldItem.product_id;
+        if (pid) {
+          existingQtyByPid[pid] = (existingQtyByPid[pid] || 0) + (parseInt(oldItem.qty) || 0);
+          existingNamesByPid[pid] = oldItem.product_name;
+        }
+      }
+
+      // Map new quantities by product_id
+      const newQtyByPid = {};
+      const newNamesByPid = {};
+      newTotal = 0;
+      for (const item of items) {
+        const pid = item.product_id || item.id;
+        const qty = parseInt(item.qty) || 1;
+        const price = parseFloat(item.price) || 0;
+        newTotal += (qty * price);
+        if (pid) {
+          newQtyByPid[pid] = (newQtyByPid[pid] || 0) + qty;
+          newNamesByPid[pid] = item.product_name || item.name;
+        }
+      }
+
+      // Reconcile stock by calculating net differences (delta)
+      const allProductIds = Array.from(new Set([
+        ...Object.keys(existingQtyByPid),
+        ...Object.keys(newQtyByPid)
+      ]));
+
+      for (const pidStr of allProductIds) {
+        const pid = parseInt(pidStr);
+        if (!pid) continue;
+        const oldQty = existingQtyByPid[pid] || 0;
+        const newQty = newQtyByPid[pid] || 0;
+        const delta = newQty - oldQty;
+
+        if (delta !== 0) {
+          const prodRes = await q("SELECT id, name, track_stock, stock FROM products WHERE id = ?", [pid]);
+          if (prodRes.rows && prodRes.rows.length > 0) {
+            const prod = prodRes.rows[0];
+            if (prod.track_stock !== 0) {
+              const stockBefore = prod.stock;
+              if (delta > 0) {
+                // More items added -> deduct stock
+                await q("UPDATE products SET stock = stock - ? WHERE id = ?", [delta, pid]);
+                const stockAfter = Math.max(0, stockBefore - delta);
+                await q(
+                  "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)",
+                  [pid, prod.name || newNamesByPid[pid] || "Product", -delta, stockBefore, stockAfter, `Added to Order #${posOrderId}`, cashierName]
+                ).catch((e) => console.error("[stock_movements] SALE edit error:", e.message));
+              } else {
+                // Items reduced -> restore stock
+                const restoreQty = Math.abs(delta);
+                await q("UPDATE products SET stock = stock + ? WHERE id = ?", [restoreQty, pid]);
+                const stockAfter = stockBefore + restoreQty;
+                await q(
+                  "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'ADJUSTMENT', ?, ?, ?, ?, ?)",
+                  [pid, prod.name || existingNamesByPid[pid] || "Product", restoreQty, stockBefore, stockAfter, `Reduced in Order #${posOrderId}`, cashierName]
+                ).catch((e) => console.error("[stock_movements] ADJUSTMENT edit error:", e.message));
+              }
+            }
+          }
+        }
+      }
+
+      // Atomic replace of order_items
+      await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+      for (const item of items) {
+        const pid = item.product_id || item.id;
+        const pname = item.product_name || item.name;
+        const qty = parseInt(item.qty) || 1;
+        const price = parseFloat(item.price) || 0;
+        const total = qty * price;
+        await q(
+          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+          [posOrderId, pid, pname, qty, price, total]
+        );
+      }
+
+      // Update pos_orders & transaction
+      await q("UPDATE pos_orders SET total_amount = ? WHERE id = ?", [newTotal, posOrderId]);
+      if (order.transaction_id) {
+        await q("UPDATE transactions SET amount = ? WHERE id = ?", [newTotal, order.transaction_id]);
+      }
     });
-    if (order.transaction_id) {
-      await new Promise((resolve, reject) => {
-        db.run("UPDATE transactions SET amount = ? WHERE id = ?", [newTotal, order.transaction_id], (err) => err ? reject(err) : resolve());
-      });
-    }
 
     emitAndBust("products", "products");
     emitAndBust("transactions", "finance_summary");
@@ -3563,7 +3597,7 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
     res.json({ success: true, message: "Order updated successfully", total_amount: newTotal });
   } catch (err) {
     console.error("Edit order error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.message === "Order not found" ? 404 : 500).json({ error: err.message });
   }
 });
 
