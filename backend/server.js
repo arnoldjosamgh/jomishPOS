@@ -3381,22 +3381,17 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
       "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
       [cashierId],
       (err, openShift) => {
-        let startTime;
-        let startCash = 0;
-        let shiftId = openShift ? openShift.id : null;
-
-        if (openShift) {
-          startTime = openShift.start_time;
-          startCash = Number(openShift.start_cash || 0);
-          proceedWithReconciliation(startTime, startCash, shiftId);
-        } else {
-          // Fallback to last closed shift or start of today
-          db.get("SELECT end_time, end_cash FROM cashier_shifts WHERE status != 'OPEN' ORDER BY id DESC LIMIT 1", [], (e, lastShift) => {
-            startTime = lastShift ? lastShift.end_time : new Date(new Date().setHours(0,0,0,0)).toISOString();
-            startCash = lastShift ? Number(lastShift.end_cash || 0) : 0;
-            proceedWithReconciliation(startTime, startCash, null);
+        if (err) return res.status(500).json({ error: err.message });
+        if (!openShift) {
+          return res.status(400).json({
+            error: "No active shift found. Please start a shift first and enter your starting capital.",
           });
         }
+
+        const startTime = openShift.start_time;
+        const startCash = Number(openShift.start_cash || 0);
+        const shiftId = openShift.id;
+        proceedWithReconciliation(startTime, startCash, shiftId);
       }
     );
 

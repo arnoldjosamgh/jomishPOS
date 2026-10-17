@@ -5187,7 +5187,7 @@ window.updateCashierShiftUI = async function () {
   if (_role !== "CASHIER") {
     if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
-    if (shiftBanner) shiftBanner.style.display = "none";
+    if (shiftBanner) shiftBanner.style.setProperty("display", "none", "important");
     return;
   }
 
@@ -5196,19 +5196,49 @@ window.updateCashierShiftUI = async function () {
     if (res.ok) {
       const data = await res.json();
       if (data.has_active_shift && data.shift) {
-        // Active shift is running
-        if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
-        if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
+        // Active shift is running: Start Shift is disabled/checked, End Shift is active next to it
+        if (btnStartShift) {
+          btnStartShift.style.setProperty("display", "inline-flex", "important");
+          btnStartShift.disabled = true;
+          btnStartShift.style.opacity = "0.5";
+          btnStartShift.style.cursor = "default";
+          btnStartShift.title = "Shift is already in progress";
+          btnStartShift.innerHTML = '<i class="fa-solid fa-check"></i> Shift Started';
+        }
+        if (btnEndShift) {
+          btnEndShift.style.setProperty("display", "inline-flex", "important");
+          btnEndShift.disabled = false;
+          btnEndShift.style.opacity = "1";
+          btnEndShift.style.cursor = "pointer";
+          btnEndShift.title = "End shift and calculate cash drawer";
+          btnEndShift.innerHTML = '<i class="fa-solid fa-power-off"></i> End Shift';
+        }
         if (shiftBanner && shiftInfo) {
-          shiftBanner.style.display = "block";
+          shiftBanner.style.setProperty("display", "inline-flex", "important");
           const startTimeStr = new Date(data.shift.start_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          shiftInfo.textContent = `Float: UGX ${Number(data.shift.start_cash || 0).toLocaleString()} • Started ${startTimeStr}`;
+          shiftInfo.textContent = `Started ${startTimeStr} • Starting Capital: UGX ${Number(data.shift.start_cash || 0).toLocaleString()}`;
         }
       } else {
-        // No shift started yet
-        if (btnStartShift) btnStartShift.style.setProperty("display", "block", "important");
-        if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
-        if (shiftBanner) shiftBanner.style.display = "none";
+        // No shift started yet: Start Shift is active, End Shift sits next to it disabled
+        if (btnStartShift) {
+          btnStartShift.style.setProperty("display", "inline-flex", "important");
+          btnStartShift.disabled = false;
+          btnStartShift.style.opacity = "1";
+          btnStartShift.style.cursor = "pointer";
+          btnStartShift.title = "Start your shift";
+          btnStartShift.innerHTML = '<i class="fa-solid fa-play"></i> Start Shift';
+        }
+        if (btnEndShift) {
+          btnEndShift.style.setProperty("display", "inline-flex", "important");
+          btnEndShift.disabled = true;
+          btnEndShift.style.opacity = "0.4";
+          btnEndShift.style.cursor = "not-allowed";
+          btnEndShift.title = "Start a shift first before ending";
+          btnEndShift.innerHTML = '<i class="fa-solid fa-power-off"></i> End Shift';
+        }
+        if (shiftBanner) {
+          shiftBanner.style.setProperty("display", "none", "important");
+        }
       }
     }
   } catch (e) {
@@ -5217,9 +5247,14 @@ window.updateCashierShiftUI = async function () {
 };
 
 window.openStartShiftModal = function () {
+  const btnStartShift = document.getElementById("btn-start-shift");
+  if (btnStartShift && btnStartShift.disabled) {
+    showToast("Your shift is already in progress. Tap 'End Shift' when finished.", "info");
+    return;
+  }
   const modal = document.getElementById("start-shift-modal");
   const input = document.getElementById("start-shift-cash-input");
-  if (input) input.value = "0";
+  if (input) input.value = "";
   if (modal) modal.classList.remove("hidden");
   setTimeout(() => input && input.focus(), 100);
 };
@@ -5231,7 +5266,13 @@ window.closeStartShiftModal = function () {
 
 window.confirmStartShift = async function () {
   const input = document.getElementById("start-shift-cash-input");
-  const startCash = parseFloat(input ? input.value : 0) || 0;
+  const val = input ? input.value.trim() : "";
+  if (val === "") {
+    alert("Please enter your starting cash (enter 0 if starting with an empty drawer).");
+    if (input) input.focus();
+    return;
+  }
+  const startCash = parseFloat(val) || 0;
   const btn = document.getElementById("btn-submit-start-shift");
   const origHtml = btn ? btn.innerHTML : "";
   if (btn) {
@@ -5248,7 +5289,7 @@ window.confirmStartShift = async function () {
     const data = await res.json();
     if (res.ok) {
       closeStartShiftModal();
-      showToast(`Shift started! Opening float: UGX ${startCash.toLocaleString()}`, "success");
+      showToast(`Shift started! Starting Capital: UGX ${startCash.toLocaleString()}`, "success");
       updateCashierShiftUI();
     } else {
       alert("Error starting shift: " + (data.error || "Unknown error"));
@@ -5265,6 +5306,11 @@ window.confirmStartShift = async function () {
 };
 
 window.openEndShiftModal = function () {
+  const btnEndShift = document.getElementById("btn-end-shift");
+  if (btnEndShift && btnEndShift.disabled) {
+    showToast("No active shift found. Please click 'Start Shift' and enter your starting capital first.", "warning");
+    return;
+  }
   const modal = document.getElementById("end-shift-modal");
   const input = document.getElementById("end-shift-cash-input");
   if (input) input.value = "";
@@ -5302,7 +5348,13 @@ window.confirmEndShift = async function () {
     const report = await res.json();
     if (res.ok) {
       closeEndShiftModal();
-      showToast("Shift ended successfully!", "success");
+      const diff = Number(report.difference || 0);
+      let diffMsg = "Drawer is Balanced";
+      if (diff < 0) diffMsg = `Shortage: -UGX ${Math.abs(diff).toLocaleString()}`;
+      else if (diff > 0) diffMsg = `Excess: +UGX ${diff.toLocaleString()}`;
+
+      showToast(`Shift ended! Expected: UGX ${Number(report.end_cash || 0).toLocaleString()} • ${diffMsg}`, diff < 0 ? "warning" : "success");
+
       setTimeout(() => {
         printEndShiftReport(report);
         setTimeout(() => {
@@ -5312,7 +5364,7 @@ window.confirmEndShift = async function () {
           localStorage.removeItem("jomish_permissions");
           location.replace("login.html");
         }, 1500);
-      }, 500);
+      }, 600);
     } else {
       alert("Error ending shift: " + (report.error || "Unknown error"));
     }
@@ -5340,7 +5392,7 @@ window.printEndShiftReport = function(report) {
   let diffLabel = "BALANCED";
   let diffColor = "#16a34a";
   if (diff > 0) {
-    diffLabel = `OVERAGE (+UGX ${diff.toLocaleString()})`;
+    diffLabel = `EXCESS (+UGX ${diff.toLocaleString()})`;
     diffColor = "#2563eb";
   } else if (diff < 0) {
     diffLabel = `SHORTAGE (-UGX ${Math.abs(diff).toLocaleString()})`;
@@ -5372,13 +5424,13 @@ window.printEndShiftReport = function(report) {
         <div class="row"><span>Ended:</span><span>${new Date(report.end_time).toLocaleString("en-UG")}</span></div>
         <div class="divider"></div>
         <div style="font-weight:bold; font-size:11pt; margin-bottom:5px;">CASH DRAWER RECONCILIATION</div>
-        <div class="row"><span>Opening Cash (Float):</span><span>UGX ${(report.start_cash || 0).toLocaleString()}</span></div>
+        <div class="row"><span>Starting Capital:</span><span>UGX ${(report.start_cash || 0).toLocaleString()}</span></div>
         <div class="row"><span>(+) Cash Sales:</span><span>UGX ${(report.cash_sales || 0).toLocaleString()}</span></div>
         <div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Cash In (Float):</span><span>+UGX ${(report.cash_in || 0).toLocaleString()}</span></div>
         <div class="row" style="color:#dc2626; font-weight:bold;"><span>(-) Cashier Expenses:</span><span>-UGX ${(report.expenses || 0).toLocaleString()}</span></div>
         <div class="divider"></div>
-        <div class="row bold" style="font-size:12.5pt;"><span>Expected In Drawer:</span><span>UGX ${expectedCash.toLocaleString()}</span></div>
-        <div class="row bold" style="font-size:12.5pt;"><span>Actual Counted Cash:</span><span>UGX ${countedCash.toLocaleString()}</span></div>
+        <div class="row bold" style="font-size:12.5pt;"><span>Expected Cash in Drawer:</span><span>UGX ${expectedCash.toLocaleString()}</span></div>
+        <div class="row bold" style="font-size:12.5pt;"><span>Cash in Drawer (Counted):</span><span>UGX ${countedCash.toLocaleString()}</span></div>
         <div class="row bold" style="font-size:11pt; color:${diffColor};"><span>Reconciliation:</span><span>${diffLabel}</span></div>
         <div class="divider"></div>
         <div style="font-weight:bold; margin-bottom:4px;">SALES BREAKDOWN</div>

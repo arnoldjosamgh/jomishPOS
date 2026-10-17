@@ -420,6 +420,18 @@
                             <button id="pos-nav-hr" class="pos-tab pos-tab-hr hidden" style="display: none;" onclick="switchPOSView('hr')"><i class="fa-solid fa-users"></i> Staff / HR</button>
                             <button id="pos-nav-tech" class="pos-tab-tech" style="display:none;" onclick="switchPOSView('tech')"><i class="fa-solid fa-server"></i> Tech Hub</button>
                         </div>
+                        <!-- Cashier Shift Controls: Start Shift & End Shift on Top -->
+                        <div id="pos-shift-controls" style="display:flex; align-items:center; gap:8px; margin-left:auto; flex-shrink:0;">
+                            <button id="btn-start-shift" class="primary-btn" style="padding:7px 15px; font-size:0.82rem; font-weight:700; border-radius:8px; background:#10b981; color:white; border:none; cursor:pointer; display:none; white-space:nowrap;" onclick="openStartShiftModal()">
+                                <i class="fa-solid fa-play"></i> Start Shift
+                            </button>
+                            <button id="btn-end-shift" class="secondary-btn" style="padding:7px 15px; font-size:0.82rem; font-weight:700; border-radius:8px; background:var(--danger); color:white; border:none; cursor:pointer; display:none; white-space:nowrap;" onclick="openEndShiftModal()">
+                                <i class="fa-solid fa-power-off"></i> End Shift
+                            </button>
+                            <div id="active-shift-banner" style="display:none; font-size:0.78rem; color:#10b981; font-weight:700; white-space:nowrap; padding:4px 10px; background:rgba(16,185,129,0.12); border-radius:20px; border:1px solid rgba(16,185,129,0.25);">
+                                <i class="fa-solid fa-circle" style="font-size:0.5rem; vertical-align:middle; margin-right:4px;"></i> <span id="active-shift-info">Shift Active</span>
+                            </div>
+                        </div>
                     </div>
                 </header>
 
@@ -455,9 +467,6 @@
                                 <button id="btn-checkout" class="primary-btn checkout-btn"><i class="fa-solid fa-credit-card"></i> PAY NOW</button>
                                 <button id="btn-send-to-cashier" class="primary-btn checkout-btn" style="display:none; background:var(--warning); margin-top:8px;"><i class="fa-solid fa-print"></i> PRINT INVOICE</button>
                                 <button id="btn-print-invoice" class="primary-btn checkout-btn" style="display:none; background:var(--warning); margin-top:8px;"><i class="fa-solid fa-print"></i> PRINT INVOICE</button>
-                                <button id="btn-start-shift" class="primary-btn checkout-btn" style="width:100%; margin-top:8px; display:none; background:#10b981; color:white; border-color:#10b981;" onclick="openStartShiftModal()"><i class="fa-solid fa-play"></i> START SHIFT</button>
-                                <button id="btn-end-shift" class="secondary-btn" style="width:100%; margin-top:8px; display:none; background:var(--danger); color:white; border-color:var(--danger);" onclick="openEndShiftModal()"><i class="fa-solid fa-power-off"></i> END SHIFT & PRINT REPORT</button>
-                                <div id="active-shift-banner" style="display:none; margin-top:6px; font-size:0.75rem; text-align:center; color:#10b981; font-weight:600;"><i class="fa-solid fa-circle" style="font-size:0.5rem; vertical-align:middle; margin-right:4px;"></i> Shift Active (<span id="active-shift-info"></span>)</div>
                             </div>
 
                             <!-- Payment Panel -->
@@ -1566,10 +1575,10 @@
                 <button type="button" onclick="closeStartShiftModal()" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:16px; line-height:1.4;">
-                Enter the starting income / opening float cash placed in the drawer to begin this shift:
+                Enter the starting cash / opening capital placed in the drawer to begin this shift:
             </p>
             <div style="margin-bottom:20px;">
-                <label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:6px; color:var(--text);">Starting Cash / Float (UGX)</label>
+                <label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:6px; color:var(--text);">Starting Cash / Capital (UGX)</label>
                 <input type="number" id="start-shift-cash-input" min="0" step="100" placeholder="e.g. 50000" style="width:100%; padding:12px; font-size:1.1rem; font-weight:700; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text);">
             </div>
             <div class="modal-actions" style="display:flex; gap:10px; justify-content:flex-end;">
@@ -1591,10 +1600,10 @@
                 <button type="button" onclick="closeEndShiftModal()" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:16px; line-height:1.4;">
-                Count all cash physically in the drawer right now and enter the total below. The system will calculate expected cash and reconcile discrepancies:
+                Count all cash physically in the drawer right now and enter the total amount below. The system will calculate expected cash and reconcile shortage or excess:
             </p>
             <div style="margin-bottom:20px;">
-                <label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:6px; color:var(--text);">Counted Cash in Drawer (UGX)</label>
+                <label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:6px; color:var(--text);">Cash in Drawer (Counted) (UGX)</label>
                 <input type="number" id="end-shift-cash-input" min="0" step="100" placeholder="e.g. 185000" style="width:100%; padding:12px; font-size:1.1rem; font-weight:700; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text);">
             </div>
             <div class="modal-actions" style="display:flex; gap:10px; justify-content:flex-end;">
