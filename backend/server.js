@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const bcrypt = require("bcryptjs");
@@ -3303,6 +3303,8 @@ function ensureCashierShiftsSchema(callback) {
     db.run("ALTER TABLE cashier_shifts ADD COLUMN invoice_collected REAL DEFAULT 0", () => {});
     db.run("ALTER TABLE cashier_shifts ADD COLUMN cash_in REAL DEFAULT 0", () => {});
     db.run("ALTER TABLE cashier_shifts ADD COLUMN discount_amount REAL DEFAULT 0", () => {});
+    db.run("ALTER TABLE cashier_shifts ALTER COLUMN end_time DROP DEFAULT", () => {});
+    db.run("ALTER TABLE cashier_shifts ALTER COLUMN start_time SET DEFAULT CURRENT_TIMESTAMP", () => {});
     db.run("UPDATE cashier_shifts SET status = 'CLOSED' WHERE end_time IS NOT NULL AND status = 'OPEN'", () => {});
     if (typeof callback === "function") callback();
   });
@@ -3351,7 +3353,7 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
 
         const now = new Date().toISOString();
         db.run(
-          "INSERT INTO cashier_shifts (cashier_id, start_cash, start_time, status) VALUES (?, ?, ?, 'OPEN')",
+          "INSERT INTO cashier_shifts (cashier_id, start_cash, start_time, end_time, status) VALUES (?, ?, ?, NULL, 'OPEN')",
           [cashierId, startCash, now],
           function (insertErr) {
             if (insertErr) return res.status(500).json({ error: insertErr.message });

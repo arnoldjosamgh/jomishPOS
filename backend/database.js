@@ -1608,6 +1608,24 @@ if (config.dbType === 'postgres') {
                                 FROM numbered
                                 WHERE pos_orders.id = numbered.id AND pos_orders.invoice_number IS NULL
                             `).catch(() => {});
+                            // Ensure client_uuid column exists on pos_orders
+                            await sc_client.query(
+                                `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS client_uuid TEXT`
+                            ).catch(() => {});
+                            // Ensure driver columns exist on deliveries
+                            await sc_client.query(
+                                `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS driver_id INTEGER`
+                            ).catch(() => {});
+                            await sc_client.query(
+                                `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS driver_name TEXT`
+                            ).catch(() => {});
+                            // Ensure cashier_shifts end_time has no default and start_time defaults to CURRENT_TIMESTAMP
+                            await sc_client.query(
+                                `ALTER TABLE cashier_shifts ALTER COLUMN end_time DROP DEFAULT`
+                            ).catch(() => {});
+                            await sc_client.query(
+                                `ALTER TABLE cashier_shifts ALTER COLUMN start_time SET DEFAULT CURRENT_TIMESTAMP`
+                            ).catch(() => {});
                             // Ensure discount_amount exists on pos_orders & cashier_shifts
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0`
@@ -1623,7 +1641,7 @@ if (config.dbType === 'postgres') {
                                     can_see_system_users=1, can_see_schedules=1
                                 WHERE LOWER(role_name) = 'supervisor'
                             `).catch(() => {});
-                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements, invoice_number & discount_amount OK.`);
+                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements, invoice_number, discount_amount, client_uuid & shifts schema OK.`);
                         } catch (patchErr) {
                             if (!patchErr.message.includes('already exists') && !patchErr.message.includes('duplicate column')) {
                                 console.error(`[SAFETY PATCH] ${sc}:`, patchErr.message);
