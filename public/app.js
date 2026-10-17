@@ -650,6 +650,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const _currentRole = (USER_ROLE || "").toUpperCase();
   const isWaiterLevel = _currentRole === "WAITER" || _currentRole === "SUPERVISOR";
+  const shiftControls = document.getElementById("pos-shift-controls");
   if (isWaiterLevel) {
     // Waiter sends order to cashier (cannot pay)
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
@@ -658,6 +659,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btnSendToCashier.innerHTML = '<i class="fa-solid fa-paper-plane"></i> SEND TO CASHIER';
     }
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (shiftControls) shiftControls.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
     const btnStartShift = document.getElementById("btn-start-shift");
     if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
@@ -666,12 +668,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (shiftControls) shiftControls.style.setProperty("display", "flex", "important");
     if (typeof updateCashierShiftUI === "function") updateCashierShiftUI();
   } else {
-    // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment
+    // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment, no cashier shifts
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (shiftControls) shiftControls.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
     const btnStartShift = document.getElementById("btn-start-shift");
     if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
@@ -2633,6 +2637,7 @@ function enforceRBAC() {
   const btnEndShift = document.getElementById("btn-end-shift");
 
   const isWaiterLevel = isWaiter || isSupervisor; // Supervisor: make order only, no payment
+  const shiftControls = document.getElementById("pos-shift-controls");
   if (isWaiterLevel) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) {
@@ -2640,6 +2645,7 @@ function enforceRBAC() {
       btnSendToCashier.innerHTML = '<i class="fa-solid fa-paper-plane"></i> SEND TO CASHIER';
     }
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
+    if (shiftControls) shiftControls.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
     const btnStartShift = document.getElementById("btn-start-shift");
     if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
@@ -2647,12 +2653,14 @@ function enforceRBAC() {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (shiftControls) shiftControls.style.setProperty("display", "flex", "important");
     if (typeof updateCashierShiftUI === "function") updateCashierShiftUI();
   } else {
-    // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment
+    // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment, no cashier shifts
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
+    if (shiftControls) shiftControls.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
     const btnStartShift = document.getElementById("btn-start-shift");
     if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
@@ -5178,6 +5186,7 @@ function printReceipt(
  */
 // ── CASHIER SHIFTS (START & END RECONCILIATION) ────────────────────────
 window.updateCashierShiftUI = async function () {
+  const shiftControls = document.getElementById("pos-shift-controls");
   const btnStartShift = document.getElementById("btn-start-shift");
   const btnEndShift = document.getElementById("btn-end-shift");
   const shiftBanner = document.getElementById("active-shift-banner");
@@ -5185,11 +5194,15 @@ window.updateCashierShiftUI = async function () {
 
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
   if (_role !== "CASHIER") {
+    if (shiftControls) shiftControls.style.setProperty("display", "none", "important");
     if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
     if (shiftBanner) shiftBanner.style.setProperty("display", "none", "important");
     return;
   }
+
+  // Only Cashier sees the shift controls
+  if (shiftControls) shiftControls.style.setProperty("display", "flex", "important");
 
   try {
     const res = await fetchAuth(`${API_URL}/pos/current-shift`);

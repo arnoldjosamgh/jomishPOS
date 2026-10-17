@@ -3309,6 +3309,11 @@ function ensureCashierShiftsSchema(callback) {
 
 // 1. Get current active shift status for cashier
 app.get("/api/pos/current-shift", authenticateToken, (req, res) => {
+  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  if (userRole !== "CASHIER") {
+    return res.json({ has_active_shift: false, shift: null });
+  }
+
   ensureCashierShiftsSchema(() => {
     const cashierId = req.user.id;
     db.get(
@@ -3322,8 +3327,13 @@ app.get("/api/pos/current-shift", authenticateToken, (req, res) => {
   });
 });
 
-// 2. Start Shift API — Cashier inserts starting income / float
+// 2. Start Shift API — Cashier inserts starting income / float (Only Cashier)
 app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
+  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  if (userRole !== "CASHIER") {
+    return res.status(403).json({ error: "Access Denied: Only Cashiers can start a cashier shift." });
+  }
+
   ensureCashierShiftsSchema(() => {
     const cashierId = req.user.id;
     const startCash = parseFloat(req.body.start_cash) || 0;
@@ -3371,8 +3381,13 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
   });
 });
 
-// 3. End Shift API — Cashier inserts counted cash in drawer; system calculates expected cash and reconciles
+// 3. End Shift API — Cashier inserts counted cash in drawer; system calculates expected cash and reconciles (Only Cashier)
 app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
+  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  if (userRole !== "CASHIER") {
+    return res.status(403).json({ error: "Access Denied: Only Cashiers can end a cashier shift." });
+  }
+
   ensureCashierShiftsSchema(() => {
     const cashierId = req.user.id;
     const countedCash = req.body.counted_cash !== undefined ? parseFloat(req.body.counted_cash) || 0 : null;
