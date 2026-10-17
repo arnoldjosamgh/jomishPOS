@@ -5318,26 +5318,51 @@ window.confirmStartShift = async function () {
   }
 };
 
-// Holds the shift report data fetched in step 1 while cashier reviews the preview
+// Holds the shift report data while cashier reviews the preview
 let _pendingShiftReport = null;
 let _pendingShiftCountedCash = null;
 
-window.openEndShiftModal = function () {
+window.openEndShiftModal = async function () {
   const btnEndShift = document.getElementById("btn-end-shift");
   if (btnEndShift && btnEndShift.disabled) {
     showToast("No active shift found. Please click 'Start Shift' and enter your starting capital first.", "warning");
     return;
   }
-  const modal = document.getElementById("end-shift-modal");
-  const input = document.getElementById("end-shift-cash-input");
-  if (input) input.value = "";
-  if (modal) modal.classList.remove("hidden");
-  setTimeout(() => input && input.focus(), 100);
+  const origHtml = btnEndShift ? btnEndShift.innerHTML : "";
+  if (btnEndShift) {
+    btnEndShift.disabled = true;
+    btnEndShift.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Loading preview...';
+  }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/pos/shift-preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const report = await res.json();
+    if (res.ok) {
+      _pendingShiftReport = report;
+      _pendingShiftCountedCash = Number(report.end_cash || 0);
+      _buildShiftPreview(report);
+      const previewModal = document.getElementById("end-shift-preview-modal");
+      if (previewModal) previewModal.classList.remove("hidden");
+    } else {
+      showToast(report.error || "Error loading shift preview", "danger");
+    }
+  } catch (e) {
+    console.error("Shift preview error:", e);
+    showToast("Network error while loading shift preview.", "danger");
+  } finally {
+    if (btnEndShift) {
+      btnEndShift.disabled = false;
+      btnEndShift.innerHTML = origHtml;
+    }
+  }
 };
 
 window.closeEndShiftModal = function () {
-  const modal = document.getElementById("end-shift-modal");
-  if (modal) modal.classList.add("hidden");
+  closeEndShiftPreviewModal();
 };
 
 window.closeEndShiftPreviewModal = function () {
@@ -5352,93 +5377,39 @@ window.cancelEndShift = function () {
   _pendingShiftCountedCash = null;
 };
 
-// Step 1: fetch a preview of the shift statement (read-only — does NOT end the shift yet)
-window.confirmEndShift = async function () {
-  const input = document.getElementById("end-shift-cash-input");
-  const val = input ? input.value.trim() : "";
-  if (val === "") {
-    alert("Please enter the cash counted in drawer (enter 0 if empty).");
-    if (input) input.focus();
-    return;
-  }
-  const countedCash = parseFloat(val) || 0;
-  const btn = document.getElementById("btn-submit-end-shift");
-  const origHtml = btn ? btn.innerHTML : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Loading preview...';
-  }
-
-  try {
-    // Call a preview endpoint (read-only) — falls back to end-shift data shape
-    const res = await fetchAuth(`${API_URL}/pos/shift-preview`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ counted_cash: countedCash }),
-    });
-    const report = await res.json();
-    if (res.ok) {
-      _pendingShiftReport = report;
-      _pendingShiftCountedCash = countedCash;
-      closeEndShiftModal();
-      _buildShiftPreview(report);
-      const previewModal = document.getElementById("end-shift-preview-modal");
-      if (previewModal) previewModal.classList.remove("hidden");
-    } else {
-      alert("Error loading shift preview: " + (report.error || "Unknown error"));
-    }
-  } catch (e) {
-    console.error("Shift preview error:", e);
-    alert("Network error while loading shift preview.");
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = origHtml || '<i class="fa-solid fa-magnifying-glass-chart"></i> Preview Shift Report';
-    }
-  }
-};
-
 function _buildShiftPreview(r) {
   const el = document.getElementById("shift-preview-content");
   if (!el) return;
   const expectedCash = Number(r.end_cash || 0);
-  const countedCash = Number(r.counted_cash !== undefined ? r.counted_cash : expectedCash);
-  const diff = Number(r.difference !== undefined ? r.difference : (countedCash - expectedCash));
-  let diffLabel = "✓ BALANCED";
-  let diffColor = "#16a34a";
-  if (diff > 0) { diffLabel = `▲ EXCESS +UGX ${diff.toLocaleString()}`; diffColor = "#2563eb"; }
-  else if (diff < 0) { diffLabel = `▼ SHORTAGE -UGX ${Math.abs(diff).toLocaleString()}`; diffColor = "#dc2626"; }
-  const fmt = (n) => `UGX ${Number(n || 0).toLocaleString()}`;
+  const fmt = (n) => "UGX " + Number(n || 0).toLocaleString();
   const row = (label, val, color) =>
-    `<div style="display:flex;justify-content:space-between;margin-bottom:4px;${color ? 'color:'+color+';font-weight:700;' : ''}">
-      <span>${label}</span><span>${val}</span></div>`;
-  const divider = `<div style="border-top:1px dashed var(--border);margin:8px 0;"></div>`;
+    '<div style="display:flex;justify-content:space-between;margin-bottom:6px;' + (color ? 'color:' + color + ';font-weight:700;' : '') + '">' +
+    '<span>' + label + '</span><span>' + val + '</span></div>';
+  const divider = '<div style="border-top:1px dashed var(--border);margin:10px 0;"></div>';
 
-  el.innerHTML = `
-    <div style="text-align:center;font-weight:800;font-size:1rem;margin-bottom:8px;">${localStorage.getItem("jomish_biz_name") || "Business"}</div>
-    <div style="text-align:center;margin-bottom:12px;font-size:0.8rem;color:var(--text-muted);">Cashier: <strong>${r.cashier_name || "Cashier"}</strong></div>
-    ${divider}
-    ${row("Started:", new Date(r.start_time).toLocaleString("en-UG"))}
-    ${row("Starting Capital:", fmt(r.start_cash))}
-    ${divider}
-    ${row("(+) Cash Sales:", fmt(r.cash_sales))}
-    ${row("(+) Cash In (Float):", fmt(r.cash_in), "#16a34a")}
-    ${row("(-) Expenses:", "-" + fmt(r.expenses), "#dc2626")}
-    ${divider}
-    ${row("Expected in Drawer:", fmt(expectedCash), null)}
-    ${row("Counted in Drawer:", fmt(countedCash), null)}
-    <div style="display:flex;justify-content:space-between;font-weight:800;font-size:1rem;margin-top:6px;color:${diffColor};">
-      <span>Reconciliation:</span><span>${diffLabel}</span></div>
-    ${divider}
-    <div style="font-size:0.78rem;color:var(--text-muted);">
-      ${row("Mobile Money Sales:", fmt(r.momo_sales))}
-      ${row("Total Sales (All):", fmt(r.total_sales))}
-      ${r.discount_amount ? row("Discounts Given:", "-" + fmt(r.discount_amount), "#f59e0b") : ""}
-    </div>
-  `;
+  el.innerHTML =
+    '<div style="text-align:center;font-weight:800;font-size:1.05rem;margin-bottom:6px;">' + (localStorage.getItem("jomish_biz_name") || "Jomish Business") + '</div>' +
+    '<div style="text-align:center;margin-bottom:12px;font-size:0.82rem;color:var(--text-muted);">Cashier: <strong>' + (r.cashier_name || "Cashier") + '</strong></div>' +
+    divider +
+    row("Shift Started:", new Date(r.start_time).toLocaleString("en-UG")) +
+    row("Starting Capital:", fmt(r.start_cash)) +
+    divider +
+    row("(+) Cash Sales:", fmt(r.cash_sales)) +
+    row("(+) Cash In (Float):", fmt(r.cash_in), "#16a34a") +
+    row("(-) Expenses / Cash Out:", "-" + fmt(r.expenses), "#dc2626") +
+    divider +
+    '<div style="display:flex;justify-content:space-between;font-weight:800;font-size:1.05rem;margin:8px 0;color:var(--text);background:rgba(99,102,241,0.08);padding:8px 10px;border-radius:6px;">' +
+      '<span>Total Cash in Drawer:</span><span>' + fmt(expectedCash) + '</span>' +
+    '</div>' +
+    divider +
+    '<div style="font-size:0.8rem;color:var(--text-muted);">' +
+      row("Mobile Money Sales:", fmt(r.momo_sales)) +
+      row("Total Sales (All Methods):", fmt(r.total_sales)) +
+      (r.discount_amount ? row("Discounts Given:", "-" + fmt(r.discount_amount), "#f59e0b") : "") +
+    '</div>';
 }
 
-// Step 2: cashier confirmed — NOW actually end the shift
+// Cashier confirmed from preview — NOW actually end the shift
 window.finaliseEndShift = async function () {
   if (!_pendingShiftReport || _pendingShiftCountedCash === null) {
     showToast("No pending shift data. Please try again.", "warning");
@@ -5456,11 +5427,7 @@ window.finaliseEndShift = async function () {
     const report = await res.json();
     if (res.ok) {
       closeEndShiftPreviewModal();
-      const diff = Number(report.difference || 0);
-      let diffMsg = "Drawer is Balanced";
-      if (diff < 0) diffMsg = `Shortage: -UGX ${Math.abs(diff).toLocaleString()}`;
-      else if (diff > 0) diffMsg = `Excess: +UGX ${diff.toLocaleString()}`;
-      showToast(`Shift ended! Expected: UGX ${Number(report.end_cash || 0).toLocaleString()} • ${diffMsg}`, diff < 0 ? "warning" : "success");
+      showToast(`Shift ended! Total Cash: UGX ${Number(report.end_cash || 0).toLocaleString()}`, "success");
 
       // Print then log out — shift is already CLOSED in the DB
       setTimeout(() => {
@@ -5487,6 +5454,7 @@ window.finaliseEndShift = async function () {
 window.endCashierShift = function () {
   openEndShiftModal();
 };
+
 window.printEndShiftReport = function(report) {
   const bizName = localStorage.getItem("jomish_biz_name") || "Jomish Business";
   const expectedCash = Number(report.end_cash || 0);
