@@ -5436,6 +5436,7 @@ function _buildShiftPreview(r) {
     row("Starting Capital:", fmt(r.start_cash)) +
     divider +
     row("(+) Cash Sales:", fmt(r.cash_sales)) +
+    (Number(r.income_transactions || 0) > 0 ? row("(+) Income (Transactions):", fmt(r.income_transactions), "#16a34a") : "") +
     row("(+) Cash In (Float):", fmt(r.cash_in), "#16a34a") +
     row("(-) Expenses / Cash Out:", "-" + fmt(r.expenses), "#dc2626") +
     divider +
@@ -5446,6 +5447,7 @@ function _buildShiftPreview(r) {
     '<div style="font-size:0.8rem;color:var(--text-muted);">' +
       row("Mobile Money Sales:", fmt(r.momo_sales)) +
       row("Total Sales (All Methods):", fmt(r.total_sales)) +
+      (Number(r.income_transactions || 0) > 0 ? row("Income Transactions:", fmt(r.income_transactions)) : "") +
       (r.discount_amount ? row("Discounts Given:", "-" + fmt(r.discount_amount), "#f59e0b") : "") +
     '</div>';
 }
@@ -5539,6 +5541,7 @@ window.printEndShiftReport = function(report) {
         <div style="font-weight:bold; font-size:11pt; margin-bottom:5px;">CASH DRAWER RECONCILIATION</div>
         <div class="row"><span>Starting Capital:</span><span>UGX ${(report.start_cash || 0).toLocaleString()}</span></div>
         <div class="row"><span>(+) Cash Sales:</span><span>UGX ${(report.cash_sales || 0).toLocaleString()}</span></div>
+        ${Number(report.income_transactions || 0) > 0 ? `<div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Income (Transactions):</span><span>+UGX ${Number(report.income_transactions).toLocaleString()}</span></div>` : ""}
         <div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Cash In (Float):</span><span>+UGX ${(report.cash_in || 0).toLocaleString()}</span></div>
         <div class="row" style="color:#dc2626; font-weight:bold;"><span>(-) Cashier Expenses:</span><span>-UGX ${(report.expenses || 0).toLocaleString()}</span></div>
         <div class="divider"></div>
@@ -5550,6 +5553,7 @@ window.printEndShiftReport = function(report) {
         <div class="row"><span>Cash Sales:</span><span>UGX ${(report.cash_sales || 0).toLocaleString()}</span></div>
         <div class="row"><span>Mobile Money:</span><span>UGX ${(report.momo_sales || 0).toLocaleString()}</span></div>
         <div class="row bold"><span>Total Sales (All):</span><span>UGX ${(report.total_sales || 0).toLocaleString()}</span></div>
+        ${Number(report.income_transactions || 0) > 0 ? `<div class="row"><span>Income Transactions:</span><span>UGX ${Number(report.income_transactions).toLocaleString()}</span></div>` : ""}
         ${report.invoice_collected ? `<div class="row"><span>Invoices/COD Paid:</span><span>UGX ${Number(report.invoice_collected).toLocaleString()}</span></div>` : ''}
         ${report.discount_amount ? `<div class="row" style="color:#f59e0b; font-weight:bold;"><span>(-) Discounts Given:</span><span>-UGX ${Number(report.discount_amount).toLocaleString()}</span></div>` : ''}
         <div class="divider"></div>
@@ -7205,7 +7209,7 @@ window.printCashierReport = function(start, end, cashierLabel) {
   const totalSales = rpt.totalSales || 0;
   const expenses = rpt.totalExpense || 0;
   // Note: we use "Net Cash" instead of "End Cash" since there is no Start Cash for an arbitrary date range.
-  const netCash = cashSales - expenses;
+  const netCash = cashSales + totalIncome - expenses;
 
   const printHtml = `<!DOCTYPE html>
 <html>

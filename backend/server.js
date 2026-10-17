@@ -3303,6 +3303,7 @@ function ensureCashierShiftsSchema(callback) {
     db.run("ALTER TABLE cashier_shifts ADD COLUMN invoice_collected REAL DEFAULT 0", () => {});
     db.run("ALTER TABLE cashier_shifts ADD COLUMN cash_in REAL DEFAULT 0", () => {});
     db.run("ALTER TABLE cashier_shifts ADD COLUMN discount_amount REAL DEFAULT 0", () => {});
+    db.run("ALTER TABLE cashier_shifts ADD COLUMN income_transactions REAL DEFAULT 0", () => {});
     db.run("ALTER TABLE cashier_shifts ALTER COLUMN end_time DROP DEFAULT", () => {});
     db.run("ALTER TABLE cashier_shifts ALTER COLUMN start_time SET DEFAULT CURRENT_TIMESTAMP", () => {});
     db.run("UPDATE cashier_shifts SET status = 'CLOSED' WHERE end_time IS NOT NULL AND status = 'OPEN'", () => {});
@@ -3414,7 +3415,9 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
           expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+          discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          // INCOME transactions manually recorded during this shift (cash received into drawer)
+          incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
         };
 
         Promise.all(Object.values(queries)).then(results => {
@@ -3425,8 +3428,10 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
           const cashIn = results[4];
           const invoiceCollected = results[5];
           const discountAmount = results[6];
+          const incomeTransactions = results[7];
 
-          const expectedCash = startCash + cashSales + cashIn - expenses;
+          // Expected Cash = opening capital + cash sales + cash floats added + income received - expenses paid out
+          const expectedCash = startCash + cashSales + cashIn + incomeTransactions - expenses;
           const actualCounted = countedCash !== null ? countedCash : expectedCash;
           const difference = actualCounted - expectedCash;
 
@@ -3443,6 +3448,7 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
             total_sales: totalSales,
             expenses: expenses,
             cash_in: cashIn,
+            income_transactions: incomeTransactions,
             discount_amount: discountAmount,
             invoice_collected: invoiceCollected,
             cashier_name: req.user.name || "Cashier"
@@ -3497,7 +3503,9 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         // COD/Invoice collections during this shift
         invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Total discount amount given during this shift
-        discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+        discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        // INCOME transactions manually recorded during this shift (cash received into drawer)
+        incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
       };
 
       Promise.all(Object.values(queries)).then(results => {
@@ -3508,18 +3516,22 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         const cashIn = results[4];
         const invoiceCollected = results[5];
         const discountAmount = results[6];
+        const incomeTransactions = results[7];
 
-        // Expected Cash in Drawer = startCash + cashSales + cashIn - expenses
-        const expectedCash = startCash + cashSales + cashIn - expenses;
+        // Expected Cash in Drawer = startCash + cashSales + cashIn + incomeTransactions - expenses
+        const expectedCash = startCash + cashSales + cashIn + incomeTransactions - expenses;
         const actualCounted = countedCash !== null ? countedCash : expectedCash;
         const difference = actualCounted - expectedCash; // > 0 = overage, < 0 = shortage
 
         const endTime = new Date().toISOString();
 
+        // Also attribute income transactions to this cashier
+        db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'INCOME' AND transaction_date > ?", [cashierId, startTime]);
+
         if (shiftId) {
           db.run(
-            "UPDATE cashier_shifts SET end_time = ?, start_cash = ?, end_cash = ?, counted_cash = ?, difference = ?, cash_sales = ?, momo_sales = ?, total_sales = ?, expenses = ?, cash_in = ?, discount_amount = ?, invoice_collected = ?, status = 'CLOSED' WHERE id = ?",
-            [endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, discountAmount, invoiceCollected, shiftId],
+            "UPDATE cashier_shifts SET end_time = ?, start_cash = ?, end_cash = ?, counted_cash = ?, difference = ?, cash_sales = ?, momo_sales = ?, total_sales = ?, expenses = ?, cash_in = ?, income_transactions = ?, discount_amount = ?, invoice_collected = ?, status = 'CLOSED' WHERE id = ?",
+            [endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, incomeTransactions, discountAmount, invoiceCollected, shiftId],
             () => {
               // Ensure any stale/lingering open shifts for this cashier are also closed
               db.run(
@@ -3531,8 +3543,8 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
           );
         } else {
           db.run(
-            "INSERT INTO cashier_shifts (cashier_id, start_time, end_time, start_cash, end_cash, counted_cash, difference, cash_sales, momo_sales, total_sales, expenses, cash_in, discount_amount, invoice_collected, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')",
-            [cashierId, startTime, endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, discountAmount, invoiceCollected],
+            "INSERT INTO cashier_shifts (cashier_id, start_time, end_time, start_cash, end_cash, counted_cash, difference, cash_sales, momo_sales, total_sales, expenses, cash_in, income_transactions, discount_amount, invoice_collected, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')",
+            [cashierId, startTime, endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, incomeTransactions, discountAmount, invoiceCollected],
             () => respond()
           );
         }
@@ -3551,6 +3563,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
             total_sales: totalSales,
             expenses: expenses,
             cash_in: cashIn,
+            income_transactions: incomeTransactions,
             discount_amount: discountAmount,
             invoice_collected: invoiceCollected,
             cashier_name: req.user.name || "Cashier"
