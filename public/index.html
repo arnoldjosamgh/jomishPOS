@@ -455,7 +455,9 @@
                                 <button id="btn-checkout" class="primary-btn checkout-btn"><i class="fa-solid fa-credit-card"></i> PAY NOW</button>
                                 <button id="btn-send-to-cashier" class="primary-btn checkout-btn" style="display:none; background:var(--warning); margin-top:8px;"><i class="fa-solid fa-print"></i> PRINT INVOICE</button>
                                 <button id="btn-print-invoice" class="primary-btn checkout-btn" style="display:none; background:var(--warning); margin-top:8px;"><i class="fa-solid fa-print"></i> PRINT INVOICE</button>
-                                <button id="btn-end-shift" class="secondary-btn" style="width:100%; margin-top:8px; display:none; background:var(--danger); color:white; border-color:var(--danger);" onclick="endCashierShift()"><i class="fa-solid fa-power-off"></i> END SHIFT & PRINT REPORT</button>
+                                <button id="btn-start-shift" class="primary-btn checkout-btn" style="width:100%; margin-top:8px; display:none; background:#10b981; color:white; border-color:#10b981;" onclick="openStartShiftModal()"><i class="fa-solid fa-play"></i> START SHIFT</button>
+                                <button id="btn-end-shift" class="secondary-btn" style="width:100%; margin-top:8px; display:none; background:var(--danger); color:white; border-color:var(--danger);" onclick="openEndShiftModal()"><i class="fa-solid fa-power-off"></i> END SHIFT & PRINT REPORT</button>
+                                <div id="active-shift-banner" style="display:none; margin-top:6px; font-size:0.75rem; text-align:center; color:#10b981; font-weight:600;"><i class="fa-solid fa-circle" style="font-size:0.5rem; vertical-align:middle; margin-right:4px;"></i> Shift Active (<span id="active-shift-info"></span>)</div>
                             </div>
 
                             <!-- Payment Panel -->
@@ -1550,6 +1552,56 @@
             <div style="margin-top:14px; display:flex; justify-content:space-between; align-items:center; font-size:0.85rem; color:var(--text-muted);">
                 <div>Showing real-time sales data from completed POS orders.</div>
                 <button type="button" class="secondary-btn" onclick="closeProductSalesCounterModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start Shift Modal -->
+    <div id="start-shift-modal" class="modal hidden">
+        <div class="modal-content" style="max-width: 420px; padding: 24px; border-radius: 12px; background: var(--surface);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="margin:0; font-size:1.15rem; color:#10b981; display:flex; align-items:center; gap:8px;">
+                    <i class="fa-solid fa-play"></i> Start Cashier Shift
+                </h3>
+                <button type="button" onclick="closeStartShiftModal()" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:16px; line-height:1.4;">
+                Enter the starting income / opening float cash placed in the drawer to begin this shift:
+            </p>
+            <div style="margin-bottom:20px;">
+                <label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:6px; color:var(--text);">Starting Cash / Float (UGX)</label>
+                <input type="number" id="start-shift-cash-input" min="0" step="100" placeholder="e.g. 50000" style="width:100%; padding:12px; font-size:1.1rem; font-weight:700; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text);">
+            </div>
+            <div class="modal-actions" style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="secondary-btn" onclick="closeStartShiftModal()" style="padding:10px 18px;">Cancel</button>
+                <button type="button" id="btn-submit-start-shift" class="primary-btn" onclick="confirmStartShift()" style="padding:10px 20px; background:#10b981; border-color:#10b981; color:#fff;">
+                    <i class="fa-solid fa-check"></i> Start Shift
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- End Shift Modal -->
+    <div id="end-shift-modal" class="modal hidden">
+        <div class="modal-content" style="max-width: 440px; padding: 24px; border-radius: 12px; background: var(--surface);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="margin:0; font-size:1.15rem; color:var(--danger); display:flex; align-items:center; gap:8px;">
+                    <i class="fa-solid fa-power-off"></i> End Cashier Shift
+                </h3>
+                <button type="button" onclick="closeEndShiftModal()" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:16px; line-height:1.4;">
+                Count all cash physically in the drawer right now and enter the total below. The system will calculate expected cash and reconcile discrepancies:
+            </p>
+            <div style="margin-bottom:20px;">
+                <label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:6px; color:var(--text);">Counted Cash in Drawer (UGX)</label>
+                <input type="number" id="end-shift-cash-input" min="0" step="100" placeholder="e.g. 185000" style="width:100%; padding:12px; font-size:1.1rem; font-weight:700; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text);">
+            </div>
+            <div class="modal-actions" style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" class="secondary-btn" onclick="closeEndShiftModal()" style="padding:10px 18px;">Cancel</button>
+                <button type="button" id="btn-submit-end-shift" class="primary-btn" onclick="confirmEndShift()" style="padding:10px 20px; background:var(--danger); border-color:var(--danger); color:#fff;">
+                    <i class="fa-solid fa-file-invoice"></i> End & Print Report
+                </button>
             </div>
         </div>
     </div>

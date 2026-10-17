@@ -659,18 +659,22 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+    const btnStartShift = document.getElementById("btn-start-shift");
+    if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
   } else if (_currentRole === "CASHIER") {
-    // Cashier can pay, print invoices, and end shift
+    // Cashier can pay, print invoices, and manage shifts
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
-    if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
+    if (typeof updateCashierShiftUI === "function") updateCashierShiftUI();
   } else {
     // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+    const btnStartShift = document.getElementById("btn-start-shift");
+    if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
   }
 
   if (btnSendToCashier) {
@@ -698,6 +702,12 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       const total = parseFloat(btnCheckout.getAttribute("data-total"));
+      // Default payment method back to Cash every time checkout panel opens
+      const pmSelect = document.getElementById("payment-method-select");
+      if (pmSelect) {
+        pmSelect.value = "CASH";
+        if (typeof handlePaymentMethodChange === "function") handlePaymentMethodChange();
+      }
       document.getElementById("pay-total").textContent =
         "UGX " + Math.round(total).toLocaleString();
       document.getElementById("pay-amount").value = "0";
@@ -731,6 +741,7 @@ document.addEventListener("DOMContentLoaded", () => {
     payAmountInputEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
+        if (_isConfirmingPayment || _isCollectingPending) return;
         const btnConfirm = document.getElementById("btn-confirm-pay");
         if (btnConfirm && btnConfirm.hasAttribute("data-pending-id")) {
           const pendingId = btnConfirm.getAttribute("data-pending-id");
@@ -2071,6 +2082,8 @@ function initSockets() {
       ) {
         window.loadShiftTimetable();
       }
+    } else if (data.module === "shifts") {
+      if (typeof updateCashierShiftUI === "function") updateCashierShiftUI();
     } else if (data.module === "deliveries") {
       if (typeof loadDeliveries === "function") loadDeliveries();
       if (typeof loadPendingCOD === "function") loadPendingCOD();
@@ -2585,17 +2598,21 @@ function enforceRBAC() {
     }
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "none", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+    const btnStartShift = document.getElementById("btn-start-shift");
+    if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
   } else if (isCashier) {
     if (btnCheckout) btnCheckout.style.setProperty("display", "block", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
-    if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
+    if (typeof updateCashierShiftUI === "function") updateCashierShiftUI();
   } else {
     // Admin/CEO/Manager/Tech etc. — invoice only, no direct payment
     if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
     if (btnSendToCashier) btnSendToCashier.style.setProperty("display", "none", "important");
     if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", "block", "important");
     if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+    const btnStartShift = document.getElementById("btn-start-shift");
+    if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
   }
 
 
@@ -4165,6 +4182,15 @@ function closePaymentPanel() {
   const servedByContainer = document.getElementById("pay-served-by-container");
   if (servedByContainer) servedByContainer.style.display = "none";
   window._pendingServedBy = null;
+
+  // Always reset payment method back to Cash when payment panel closes
+  const payMethodSelect = document.getElementById("payment-method-select");
+  if (payMethodSelect) {
+    payMethodSelect.value = "CASH";
+    if (typeof handlePaymentMethodChange === "function") {
+      handlePaymentMethodChange();
+    }
+  }
 }
 
 window.handleDeliveryCheckboxChange = function () {
@@ -4232,7 +4258,13 @@ window.handlePaymentMethodChange = async function () {
   }
 };
 
+let _isConfirmingPayment = false;
+
 async function confirmPayment() {
+  if (_isConfirmingPayment) {
+    console.warn("Payment submission already in progress.");
+    return;
+  }
   // Block: only Cashier role can collect direct payment
   const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
   if (_roleNow !== "CASHIER") {
@@ -4242,6 +4274,10 @@ async function confirmPayment() {
   // Block: if we are in edit-order mode, save the edit instead of creating a new order
   if (_currentEditOrder && _currentEditOrder.id) {
     alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
+    return;
+  }
+  if (!posCart || posCart.length === 0) {
+    alert("Cart is empty!");
     return;
   }
   const total =
@@ -4286,11 +4322,22 @@ async function confirmPayment() {
   const effectiveTotal = paymentMethod === "DISCOUNT" ? paid : total;
   const change = paymentMethod !== "DISCOUNT" && paid > Math.round(total) ? paid - Math.round(total) : 0;
 
+  const btnConfirm = document.getElementById("btn-confirm-pay");
+  const origBtnHtml = btnConfirm ? btnConfirm.innerHTML : "";
+  _isConfirmingPayment = true;
+  if (btnConfirm) {
+    btnConfirm.disabled = true;
+    btnConfirm.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
+  }
+
+  const client_uuid = crypto.randomUUID();
+
   try {
     const res = await fetchAuth(`${API_URL}/checkout`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        client_uuid: client_uuid,
         total_amount: effectiveTotal,
         original_total: total,
         items: posCart,
@@ -4305,6 +4352,13 @@ async function confirmPayment() {
     if (res.ok) {
       const result = await res.json();
       closePaymentPanel();
+
+      // Reset payment method dropdown back to Cash after order is finished
+      const pmSelect = document.getElementById("payment-method-select");
+      if (pmSelect) {
+        pmSelect.value = "CASH";
+        if (typeof handlePaymentMethodChange === "function") handlePaymentMethodChange();
+      }
 
       // Scroll main-content back to top so tab bar (Register/Inventory/etc.) is not hidden
       const mainContent = document.querySelector(".main-content");
@@ -4348,7 +4402,6 @@ async function confirmPayment() {
       !navigator.onLine ||
       e.message.toLowerCase().includes("failed to fetch")
     ) {
-      const client_uuid = crypto.randomUUID();
       const offlinePayload = {
         total_amount: effectiveTotal,
         items: posCart,
@@ -4361,6 +4414,13 @@ async function confirmPayment() {
         await window.OfflineDB.queueOfflineSale(client_uuid, offlinePayload);
       }
       closePaymentPanel();
+
+      // Reset payment method dropdown back to Cash
+      const pmSelect = document.getElementById("payment-method-select");
+      if (pmSelect) {
+        pmSelect.value = "CASH";
+        if (typeof handlePaymentMethodChange === "function") handlePaymentMethodChange();
+      }
 
       const mainContent = document.querySelector(".main-content");
       if (mainContent) mainContent.scrollTop = 0;
@@ -4397,7 +4457,14 @@ async function confirmPayment() {
       );
       return;
     }
+    console.error("Payment confirmation error:", e);
     alert("Checkout failed: " + e.message);
+  } finally {
+    _isConfirmingPayment = false;
+    if (btnConfirm) {
+      btnConfirm.disabled = false;
+      btnConfirm.innerHTML = origBtnHtml || '<i class="fa-solid fa-check"></i> CONFIRM PAYMENT';
+    }
   }
 }
 
@@ -4513,6 +4580,7 @@ async function submitWaiterOrder() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        client_uuid: crypto.randomUUID(),
         total_amount: total,
         items: posCart,
         payment_method: "COD",
@@ -4583,7 +4651,9 @@ async function submitWaiterOrder() {
 }
 window.submitWaiterOrder = submitWaiterOrder;
 
+let _isGettingInvoice = false;
 async function getInvoice() {
+  if (_isGettingInvoice) return;
   if (_currentEditOrder && _currentEditOrder.id) {
     if (typeof printEditOrderKitchenToken === "function") {
       printEditOrderKitchenToken();
@@ -4607,11 +4677,21 @@ async function getInvoice() {
   const isDelivery = false;
   const deliveryAddress = "";
 
+  const client_uuid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("inv_" + Date.now() + "_" + Math.random().toString(36).slice(2));
+  const _btnPI = document.getElementById("btn-print-invoice");
+  const origPIHtml = _btnPI ? _btnPI.innerHTML : "";
+  _isGettingInvoice = true;
+  if (_btnPI) {
+    _btnPI.disabled = true;
+    _btnPI.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
+  }
+
   try {
     const res = await fetchAuth(`${API_URL}/checkout`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        client_uuid,
         total_amount: total,
         items: posCart,
         payment_method: "INVOICE",
@@ -4647,7 +4727,6 @@ async function getInvoice() {
       );
 
       // Disable print invoice button after successful print — re-enables when new items are added
-      const _btnPI = document.getElementById("btn-print-invoice");
       if (_btnPI) {
         _btnPI.disabled = true;
         _btnPI.style.opacity = "0.45";
@@ -4670,7 +4749,6 @@ async function getInvoice() {
       !navigator.onLine ||
       e.message.toLowerCase().includes("failed to fetch")
     ) {
-      const client_uuid = crypto.randomUUID();
       const offlinePayload = {
         total_amount: total,
         items: posCart,
@@ -4708,6 +4786,12 @@ async function getInvoice() {
       return;
     }
     alert("Invoice generation failed: " + e.message);
+  } finally {
+    _isGettingInvoice = false;
+    if (_btnPI && _btnPI.innerHTML.includes("Processing")) {
+      _btnPI.disabled = false;
+      _btnPI.innerHTML = origPIHtml || '<i class="fa-solid fa-print"></i> PRINT INVOICE';
+    }
   }
 }
 
@@ -4965,20 +5049,135 @@ function printReceipt(
 /**
  * End Shift and Print Report
  */
-window.endCashierShift = async function() {
-  if (!confirm("Are you sure you want to end your shift? This will print your shift report.")) {
+// ── CASHIER SHIFTS (START & END RECONCILIATION) ────────────────────────
+window.updateCashierShiftUI = async function () {
+  const btnStartShift = document.getElementById("btn-start-shift");
+  const btnEndShift = document.getElementById("btn-end-shift");
+  const shiftBanner = document.getElementById("active-shift-banner");
+  const shiftInfo = document.getElementById("active-shift-info");
+
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_role !== "CASHIER") {
+    if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
+    if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+    if (shiftBanner) shiftBanner.style.display = "none";
     return;
   }
-  
+
   try {
-    const res = await fetchAuth(`${API_URL}/pos/end-shift`, { method: "POST" });
+    const res = await fetchAuth(`${API_URL}/pos/current-shift`);
     if (res.ok) {
-      const report = await res.json();
+      const data = await res.json();
+      if (data.has_active_shift && data.shift) {
+        // Active shift is running
+        if (btnStartShift) btnStartShift.style.setProperty("display", "none", "important");
+        if (btnEndShift) btnEndShift.style.setProperty("display", "block", "important");
+        if (shiftBanner && shiftInfo) {
+          shiftBanner.style.display = "block";
+          const startTimeStr = new Date(data.shift.start_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          shiftInfo.textContent = `Float: UGX ${Number(data.shift.start_cash || 0).toLocaleString()} • Started ${startTimeStr}`;
+        }
+      } else {
+        // No shift started yet
+        if (btnStartShift) btnStartShift.style.setProperty("display", "block", "important");
+        if (btnEndShift) btnEndShift.style.setProperty("display", "none", "important");
+        if (shiftBanner) shiftBanner.style.display = "none";
+      }
+    }
+  } catch (e) {
+    console.error("Failed to check cashier shift status:", e);
+  }
+};
+
+window.openStartShiftModal = function () {
+  const modal = document.getElementById("start-shift-modal");
+  const input = document.getElementById("start-shift-cash-input");
+  if (input) input.value = "0";
+  if (modal) modal.classList.remove("hidden");
+  setTimeout(() => input && input.focus(), 100);
+};
+
+window.closeStartShiftModal = function () {
+  const modal = document.getElementById("start-shift-modal");
+  if (modal) modal.classList.add("hidden");
+};
+
+window.confirmStartShift = async function () {
+  const input = document.getElementById("start-shift-cash-input");
+  const startCash = parseFloat(input ? input.value : 0) || 0;
+  const btn = document.getElementById("btn-submit-start-shift");
+  const origHtml = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Starting...';
+  }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/pos/start-shift`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start_cash: startCash }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      closeStartShiftModal();
+      showToast(`Shift started! Opening float: UGX ${startCash.toLocaleString()}`, "success");
+      updateCashierShiftUI();
+    } else {
+      alert("Error starting shift: " + (data.error || "Unknown error"));
+    }
+  } catch (e) {
+    console.error("Error starting shift:", e);
+    alert("Network error while starting shift.");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = origHtml || '<i class="fa-solid fa-check"></i> Start Shift';
+    }
+  }
+};
+
+window.openEndShiftModal = function () {
+  const modal = document.getElementById("end-shift-modal");
+  const input = document.getElementById("end-shift-cash-input");
+  if (input) input.value = "";
+  if (modal) modal.classList.remove("hidden");
+  setTimeout(() => input && input.focus(), 100);
+};
+
+window.closeEndShiftModal = function () {
+  const modal = document.getElementById("end-shift-modal");
+  if (modal) modal.classList.add("hidden");
+};
+
+window.confirmEndShift = async function () {
+  const input = document.getElementById("end-shift-cash-input");
+  const val = input ? input.value.trim() : "";
+  if (val === "") {
+    alert("Please enter the cash counted in drawer (enter 0 if empty).");
+    if (input) input.focus();
+    return;
+  }
+  const countedCash = parseFloat(val) || 0;
+  const btn = document.getElementById("btn-submit-end-shift");
+  const origHtml = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ending Shift...';
+  }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/pos/end-shift`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ counted_cash: countedCash }),
+    });
+    const report = await res.json();
+    if (res.ok) {
+      closeEndShiftModal();
       showToast("Shift ended successfully!", "success");
-      // Add a slight delay then print and logout
       setTimeout(() => {
         printEndShiftReport(report);
-        // After starting the print dialogue, log out
         setTimeout(() => {
           localStorage.removeItem("jomish_token");
           localStorage.removeItem("jomish_role");
@@ -4988,17 +5187,38 @@ window.endCashierShift = async function() {
         }, 1500);
       }, 500);
     } else {
-      const err = await res.json();
-      alert("Error ending shift: " + err.error);
+      alert("Error ending shift: " + (report.error || "Unknown error"));
     }
   } catch (e) {
     console.error("End shift error:", e);
     alert("Network error while ending shift.");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = origHtml || '<i class="fa-solid fa-file-invoice"></i> End & Print Report';
+    }
   }
+};
+
+window.endCashierShift = function () {
+  openEndShiftModal();
 };
 
 window.printEndShiftReport = function(report) {
   const bizName = localStorage.getItem("jomish_biz_name") || "Jomish Business";
+  const expectedCash = Number(report.end_cash || 0);
+  const countedCash = Number(report.counted_cash !== undefined ? report.counted_cash : expectedCash);
+  const diff = Number(report.difference !== undefined ? report.difference : (countedCash - expectedCash));
+
+  let diffLabel = "BALANCED";
+  let diffColor = "#16a34a";
+  if (diff > 0) {
+    diffLabel = `OVERAGE (+UGX ${diff.toLocaleString()})`;
+    diffColor = "#2563eb";
+  } else if (diff < 0) {
+    diffLabel = `SHORTAGE (-UGX ${Math.abs(diff).toLocaleString()})`;
+    diffColor = "#dc2626";
+  }
   
   const html = `
     <!DOCTYPE html>
@@ -5030,7 +5250,9 @@ window.printEndShiftReport = function(report) {
         <div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Cash In (Float):</span><span>+UGX ${(report.cash_in || 0).toLocaleString()}</span></div>
         <div class="row" style="color:#dc2626; font-weight:bold;"><span>(-) Cashier Expenses:</span><span>-UGX ${(report.expenses || 0).toLocaleString()}</span></div>
         <div class="divider"></div>
-        <div class="row bold" style="font-size:12.5pt;"><span>Expected In Drawer:</span><span>UGX ${(report.end_cash || 0).toLocaleString()}</span></div>
+        <div class="row bold" style="font-size:12.5pt;"><span>Expected In Drawer:</span><span>UGX ${expectedCash.toLocaleString()}</span></div>
+        <div class="row bold" style="font-size:12.5pt;"><span>Actual Counted Cash:</span><span>UGX ${countedCash.toLocaleString()}</span></div>
+        <div class="row bold" style="font-size:11pt; color:${diffColor};"><span>Reconciliation:</span><span>${diffLabel}</span></div>
         <div class="divider"></div>
         <div style="font-weight:bold; margin-bottom:4px;">SALES BREAKDOWN</div>
         <div class="row"><span>Cash Sales:</span><span>UGX ${(report.cash_sales || 0).toLocaleString()}</span></div>
@@ -5039,10 +5261,6 @@ window.printEndShiftReport = function(report) {
         ${report.invoice_collected ? `<div class="row"><span>Invoices/COD Paid:</span><span>UGX ${Number(report.invoice_collected).toLocaleString()}</span></div>` : ''}
         ${report.discount_amount ? `<div class="row" style="color:#f59e0b; font-weight:bold;"><span>(-) Discounts Given:</span><span>-UGX ${Number(report.discount_amount).toLocaleString()}</span></div>` : ''}
         <div class="divider"></div>
-        <div style="font-size:8.5pt; color:#444; margin-top:5px; line-height:1.3;">
-          Open (${(report.start_cash || 0).toLocaleString()}) + Cash Sales (${(report.cash_sales || 0).toLocaleString()}) + Cash In (${(report.cash_in || 0).toLocaleString()}) - Expenses (${(report.expenses || 0).toLocaleString()}) = <strong>UGX ${(report.end_cash || 0).toLocaleString()}</strong>
-          ${report.discount_amount ? ` &nbsp;|&nbsp; Discounts: -UGX ${Number(report.discount_amount).toLocaleString()}` : ''}
-        </div>
         <div class="center" style="margin-top: 20px;">Cashier: ____________________</div>
         <div class="center" style="margin-top: 12px;">Supervisor: _________________</div>
       </body>
@@ -12021,8 +12239,11 @@ window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clien
   }
 };
 
+let _isCollectingPending = false;
+
 // Called when cashier confirms payment for a pending order
 window.collectPendingPayment = async function (posOrderId, totalAmount) {
+  if (_isCollectingPending) return;
   const paid = parseInt(document.getElementById("pay-amount").value) || 0;
   if (paid < Math.round(totalAmount)) {
     alert("Amount paid is less than total! Customer still owes UGX " + (Math.round(totalAmount) - paid).toLocaleString());
@@ -12031,6 +12252,14 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
 
   const paymentMethodSelect = document.getElementById("payment-method-select");
   const paymentMethod = (paymentMethodSelect ? paymentMethodSelect.value : "CASH").toUpperCase();
+
+  const btnConfirm = document.getElementById("btn-confirm-pay");
+  const origBtnHtml = btnConfirm ? btnConfirm.innerHTML : "";
+  _isCollectingPending = true;
+  if (btnConfirm) {
+    btnConfirm.disabled = true;
+    btnConfirm.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
+  }
 
   try {
     const res = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/cod-received`, {
@@ -12041,7 +12270,6 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
     const data = await res.json();
     if (res.ok) {
       // Reset confirm button back to normal checkout
-      const btnConfirm = document.getElementById("btn-confirm-pay");
       if (btnConfirm) {
         btnConfirm.removeAttribute("data-pending-id");
         btnConfirm.onclick = () => confirmPayment();
@@ -12080,6 +12308,12 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
     }
   } catch (e) {
     console.error("Failed to collect pending payment:", e);
+  } finally {
+    _isCollectingPending = false;
+    if (btnConfirm) {
+      btnConfirm.disabled = false;
+      btnConfirm.innerHTML = origBtnHtml || '<i class="fa-solid fa-check"></i> CONFIRM PAYMENT';
+    }
   }
 };
 

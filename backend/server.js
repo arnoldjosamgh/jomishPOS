@@ -2962,6 +2962,15 @@ app.post("/api/products/:id/movements", authenticateToken, (req, res) => {
   });
 });
 
+// In-memory idempotency cache for fast-path checkout deduplication
+const recentCheckouts = new Map(); // client_uuid -> { result, timestamp }
+setInterval(() => {
+  const cutoff = Date.now() - 300000; // 5 min TTL
+  for (const [k, v] of recentCheckouts.entries()) {
+    if (v.timestamp < cutoff) recentCheckouts.delete(k);
+  }
+}, 60000);
+
 app.post("/api/checkout", authenticateToken, async (req, res) => {
   const {
     total_amount,
@@ -2976,8 +2985,47 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     driver_name,
     served_by,
     waiter_id,
+    client_uuid,
   } = req.body;
   const cashier_id = req.user.id;
+
+  const trimmedUuid = client_uuid ? String(client_uuid).trim() : null;
+
+  // Fast-path in-memory idempotency check (stops rapid double-clicks / network retries)
+  if (trimmedUuid && recentCheckouts.has(trimmedUuid)) {
+    console.log(`[Checkout] Intercepted duplicate in-memory submit for client_uuid: ${trimmedUuid}`);
+    return res.json(recentCheckouts.get(trimmedUuid).result);
+  }
+
+  // Database check for duplicate client_uuid
+  if (trimmedUuid) {
+    const existing = await new Promise((resolve) => {
+      db.get(
+        "SELECT id AS pos_order_id, transaction_id, invoice_number, total_amount FROM pos_orders WHERE client_uuid = ?",
+        [trimmedUuid],
+        (err, row) => resolve(row)
+      );
+    });
+    if (existing) {
+      console.log(`[Checkout] Intercepted duplicate DB order for client_uuid: ${trimmedUuid}`);
+      let receipt_no = existing.transaction_id;
+      try {
+        const rnResult = await new Promise((resolve, reject) => {
+          db.get("SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?", [existing.transaction_id], (err, row) => err ? reject(err) : resolve(row));
+        });
+        receipt_no = rnResult ? Number(rnResult.cnt) : existing.transaction_id;
+      } catch (_) {}
+      const dupRes = {
+        message: "Checkout successful!",
+        transaction_id: existing.transaction_id,
+        receipt_no,
+        pos_order_id: existing.pos_order_id,
+        invoice_number: existing.invoice_number
+      };
+      recentCheckouts.set(trimmedUuid, { result: dupRes, timestamp: Date.now() });
+      return res.json(dupRes);
+    }
+  }
 
   const isReqUserWaiter = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
   const userFirstName = (req.user && req.user.name ? req.user.name : "").trim().split(/\s+/)[0] || "";
@@ -3025,7 +3073,20 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     });
 
     // ── 2. Run all DB writes inside a single atomic transaction ─────────────
-    const { transaction_id, pos_order_id, invoice_number } = await db.withTransaction(async (q) => {
+    const { transaction_id, pos_order_id, invoice_number, already_done } = await db.withTransaction(async (q) => {
+      // Race condition check inside transaction lock
+      if (trimmedUuid) {
+        const raceCheck = await q("SELECT id AS pos_order_id, transaction_id, invoice_number FROM pos_orders WHERE client_uuid = ?", [trimmedUuid]);
+        if (raceCheck.rows && raceCheck.rows.length > 0) {
+          const r = raceCheck.rows[0];
+          return {
+            already_done: true,
+            transaction_id: r.transaction_id,
+            pos_order_id: r.pos_order_id,
+            invoice_number: r.invoice_number
+          };
+        }
+      }
 
       const now = new Date().toISOString();
       const description = payment_method === "INVOICE"
@@ -3064,8 +3125,8 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       }
 
       const orderResult = await q(
-        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount]
+        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid]
       );
       const pos_order_id = orderResult.lastID;
 
@@ -3118,8 +3179,21 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         );
       }
 
-      return { transaction_id, pos_order_id, invoice_number };
+      return { transaction_id, pos_order_id, invoice_number, already_done: false };
     });
+
+    if (already_done) {
+      let receipt_no = transaction_id;
+      try {
+        const rnResult = await new Promise((resolve, reject) => {
+          db.get("SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?", [transaction_id], (err, row) => err ? reject(err) : resolve(row));
+        });
+        receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
+      } catch (_) {}
+      const dupRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
+      if (trimmedUuid) recentCheckouts.set(trimmedUuid, { result: dupRes, timestamp: Date.now() });
+      return res.json(dupRes);
+    }
 
     // ── 3. Insert order_items AFTER commit (safe fire-and-forget) ──────────
     for (const item of items) {
@@ -3152,7 +3226,9 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       });
       receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
     } catch (_) { /* fallback to raw id */ }
-    res.json({ message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number });
+    const successRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
+    if (trimmedUuid) recentCheckouts.set(trimmedUuid, { result: successRes, timestamp: Date.now() });
+    res.json(successRes);
 
   } catch (err) {
     console.error("[CHECKOUT] Error:", err.message);
@@ -3160,23 +3236,121 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   }
 });
 
-// End Shift API for Cashiers
-app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
-  const cashierId = req.user.id;
-  
-  // 1. Get last end_time and end_cash for this cashier (or any cashier if global drawer)
+// ── CASHIER SHIFTS MANAGEMENT ──────────────────────────────────────────
+function ensureCashierShiftsSchema(callback) {
   db.run(`CREATE TABLE IF NOT EXISTS cashier_shifts (
-      id SERIAL PRIMARY KEY, cashier_id INTEGER, end_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      start_cash REAL, end_cash REAL, cash_sales REAL, momo_sales REAL, total_sales REAL, expenses REAL, cash_in REAL DEFAULT 0, discount_amount REAL DEFAULT 0
+      id SERIAL PRIMARY KEY, cashier_id INTEGER, start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      end_time TIMESTAMP, start_cash REAL DEFAULT 0, end_cash REAL DEFAULT 0, counted_cash REAL DEFAULT 0,
+      difference REAL DEFAULT 0, cash_sales REAL DEFAULT 0, momo_sales REAL DEFAULT 0, total_sales REAL DEFAULT 0,
+      expenses REAL DEFAULT 0, cash_in REAL DEFAULT 0, discount_amount REAL DEFAULT 0, invoice_collected REAL DEFAULT 0,
+      status TEXT DEFAULT 'OPEN'
   )`, () => {
+    db.run("ALTER TABLE cashier_shifts ADD COLUMN start_time TIMESTAMP", () => {});
+    db.run("ALTER TABLE cashier_shifts ADD COLUMN counted_cash REAL DEFAULT 0", () => {});
+    db.run("ALTER TABLE cashier_shifts ADD COLUMN difference REAL DEFAULT 0", () => {});
+    db.run("ALTER TABLE cashier_shifts ADD COLUMN status TEXT DEFAULT 'OPEN'", () => {});
+    db.run("ALTER TABLE cashier_shifts ADD COLUMN invoice_collected REAL DEFAULT 0", () => {});
     db.run("ALTER TABLE cashier_shifts ADD COLUMN cash_in REAL DEFAULT 0", () => {});
     db.run("ALTER TABLE cashier_shifts ADD COLUMN discount_amount REAL DEFAULT 0", () => {});
-    db.get("SELECT end_time, end_cash FROM cashier_shifts ORDER BY id DESC LIMIT 1", [], (err, lastShift) => {
-      let startTime = lastShift ? lastShift.end_time : new Date(new Date().setHours(0,0,0,0)).toISOString();
-      let startCash = lastShift ? Number(lastShift.end_cash || 0) : 0;
-      
-      // Associate all expenses and cash-in during this shift window to the cashier on shift
-      // (Since cashier is in charge of the till and hands the cash out / receives float)
+    if (typeof callback === "function") callback();
+  });
+}
+
+// 1. Get current active shift status for cashier
+app.get("/api/pos/current-shift", authenticateToken, (req, res) => {
+  ensureCashierShiftsSchema(() => {
+    const cashierId = req.user.id;
+    db.get(
+      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
+      [cashierId],
+      (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ has_active_shift: !!row, shift: row || null });
+      }
+    );
+  });
+});
+
+// 2. Start Shift API — Cashier inserts starting income / float
+app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
+  ensureCashierShiftsSchema(() => {
+    const cashierId = req.user.id;
+    const startCash = parseFloat(req.body.start_cash) || 0;
+
+    // Check if an open shift already exists for this cashier
+    db.get(
+      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
+      [cashierId],
+      (err, openShift) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (openShift) {
+          return res.json({ success: true, message: "Shift is already active", shift: openShift });
+        }
+
+        const now = new Date().toISOString();
+        db.run(
+          "INSERT INTO cashier_shifts (cashier_id, start_cash, start_time, status) VALUES (?, ?, ?, 'OPEN')",
+          [cashierId, startCash, now],
+          function (insertErr) {
+            if (insertErr) return res.status(500).json({ error: insertErr.message });
+            const shiftId = this.lastID;
+
+            if (startCash > 0) {
+              db.run(
+                "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, 'FLOAT_IN', ?, ?, ?, 'PAID')",
+                [startCash, `Opening Cash Drawer Float (Shift #${shiftId})`, cashierId, now],
+                () => {
+                  emitAndBust("transactions", "finance_summary");
+                }
+              );
+            }
+
+            io.emit("db_updated", { module: "shifts" });
+            res.json({
+              success: true,
+              shift_id: shiftId,
+              start_cash: startCash,
+              start_time: now,
+              cashier_name: req.user.name || "Cashier"
+            });
+          }
+        );
+      }
+    );
+  });
+});
+
+// 3. End Shift API — Cashier inserts counted cash in drawer; system calculates expected cash and reconciles
+app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
+  ensureCashierShiftsSchema(() => {
+    const cashierId = req.user.id;
+    const countedCash = req.body.counted_cash !== undefined ? parseFloat(req.body.counted_cash) || 0 : null;
+
+    db.get(
+      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
+      [cashierId],
+      (err, openShift) => {
+        let startTime;
+        let startCash = 0;
+        let shiftId = openShift ? openShift.id : null;
+
+        if (openShift) {
+          startTime = openShift.start_time;
+          startCash = Number(openShift.start_cash || 0);
+          proceedWithReconciliation(startTime, startCash, shiftId);
+        } else {
+          // Fallback to last closed shift or start of today
+          db.get("SELECT end_time, end_cash FROM cashier_shifts WHERE status != 'OPEN' ORDER BY id DESC LIMIT 1", [], (e, lastShift) => {
+            startTime = lastShift ? lastShift.end_time : new Date(new Date().setHours(0,0,0,0)).toISOString();
+            startCash = lastShift ? Number(lastShift.end_cash || 0) : 0;
+            proceedWithReconciliation(startTime, startCash, null);
+          });
+        }
+      }
+    );
+
+    function proceedWithReconciliation(startTime, startCash, shiftId) {
+      // Associate expenses and float during this shift to the cashier
       db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date > ?", [cashierId, startTime]);
       db.run("UPDATE transactions SET recorded_by = ? WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date > ?", [cashierId, startTime]);
 
@@ -3184,46 +3358,67 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // Expenses = all cash handed out of the drawer during this shift window
+        // Expenses = all cash handed out of drawer during this shift
         expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // Cash In = all cash/float added into drawer during this shift window (treated as INCOME/addition)
-        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        // Cash In = all float added during this shift (excluding the opening float if already counted in startCash)
+        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // COD/Invoice collections during this shift
         invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Total discount amount given during this shift
         discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
       };
-      
+
       Promise.all(Object.values(queries)).then(results => {
         const cashSales = results[0];
         const momoSales = results[1];
         const totalSales = results[2];
         const expenses = results[3];
-        const cashIn = results[4];  // float / income given to drawer — treated as INCOME
+        const cashIn = results[4];
         const invoiceCollected = results[5];
         const discountAmount = results[6];
-        // End cash = what cashier started with + cash sales + cash-in float - expenses paid out
-        const endCash = startCash + cashSales + cashIn - expenses;
-        
-        db.run("INSERT INTO cashier_shifts (cashier_id, start_cash, end_cash, cash_sales, momo_sales, total_sales, expenses, cash_in, discount_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [cashierId, startCash, endCash, cashSales, momoSales, totalSales, expenses, cashIn, discountAmount], function(err) {
-            res.json({
-              start_time: startTime,
-              end_time: new Date().toISOString(),
-              start_cash: startCash,
-              end_cash: endCash,
-              cash_sales: cashSales,
-              momo_sales: momoSales,
-              total_sales: totalSales,
-              expenses: expenses,
-              cash_in: cashIn,
-              discount_amount: discountAmount,
-              invoice_collected: invoiceCollected,
-              cashier_name: req.user.name || "Cashier"
-            });
-        });
+
+        // Expected Cash in Drawer = startCash + cashSales + cashIn - expenses
+        const expectedCash = startCash + cashSales + cashIn - expenses;
+        const actualCounted = countedCash !== null ? countedCash : expectedCash;
+        const difference = actualCounted - expectedCash; // > 0 = overage, < 0 = shortage
+
+        const endTime = new Date().toISOString();
+
+        if (shiftId) {
+          db.run(
+            "UPDATE cashier_shifts SET end_time = ?, start_cash = ?, end_cash = ?, counted_cash = ?, difference = ?, cash_sales = ?, momo_sales = ?, total_sales = ?, expenses = ?, cash_in = ?, discount_amount = ?, invoice_collected = ?, status = 'CLOSED' WHERE id = ?",
+            [endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, discountAmount, invoiceCollected, shiftId],
+            () => respond()
+          );
+        } else {
+          db.run(
+            "INSERT INTO cashier_shifts (cashier_id, start_time, end_time, start_cash, end_cash, counted_cash, difference, cash_sales, momo_sales, total_sales, expenses, cash_in, discount_amount, invoice_collected, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')",
+            [cashierId, startTime, endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, discountAmount, invoiceCollected],
+            () => respond()
+          );
+        }
+
+        function respond() {
+          io.emit("db_updated", { module: "shifts" });
+          res.json({
+            start_time: startTime,
+            end_time: endTime,
+            start_cash: startCash,
+            end_cash: expectedCash,
+            counted_cash: actualCounted,
+            difference: difference,
+            cash_sales: cashSales,
+            momo_sales: momoSales,
+            total_sales: totalSales,
+            expenses: expenses,
+            cash_in: cashIn,
+            discount_amount: discountAmount,
+            invoice_collected: invoiceCollected,
+            cashier_name: req.user.name || "Cashier"
+          });
+        }
       });
-    });
+    }
   });
 });
 
@@ -6268,6 +6463,7 @@ server
     const migrations = [
       `ALTER TABLE deliveries ADD COLUMN driver_id INTEGER`,
       `ALTER TABLE deliveries ADD COLUMN driver_name TEXT`,
+      `ALTER TABLE pos_orders ADD COLUMN client_uuid TEXT`,
     ];
 
     migrations.forEach((q) => {
@@ -6277,6 +6473,7 @@ server
         }
       });
     });
+    ensureCashierShiftsSchema();
 
     // Auto-open shift on startup if closed
     db.get("SELECT status FROM shifts ORDER BY id DESC LIMIT 1", (err, row) => {

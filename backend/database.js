@@ -1501,6 +1501,34 @@ function runMigrations(fromVersion) {
             });
         });
     }
+    if (fromVersion < 148) {
+        // v148: client_uuid on pos_orders + cashier_shifts full schema
+        const alterOrderUuid = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS client_uuid TEXT"
+            : "ALTER TABLE pos_orders ADD COLUMN client_uuid TEXT";
+        db.run(alterOrderUuid, () => {
+            const shiftTableSql = config.dbType === 'postgres'
+                ? `CREATE TABLE IF NOT EXISTS cashier_shifts (
+                    id SERIAL PRIMARY KEY, cashier_id INTEGER, start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    end_time TIMESTAMP, start_cash REAL DEFAULT 0, end_cash REAL DEFAULT 0, counted_cash REAL DEFAULT 0,
+                    difference REAL DEFAULT 0, cash_sales REAL DEFAULT 0, momo_sales REAL DEFAULT 0, total_sales REAL DEFAULT 0,
+                    expenses REAL DEFAULT 0, cash_in REAL DEFAULT 0, discount_amount REAL DEFAULT 0, invoice_collected REAL DEFAULT 0,
+                    status TEXT DEFAULT 'OPEN'
+                )`
+                : `CREATE TABLE IF NOT EXISTS cashier_shifts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, cashier_id INTEGER, start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    end_time DATETIME, start_cash REAL DEFAULT 0, end_cash REAL DEFAULT 0, counted_cash REAL DEFAULT 0,
+                    difference REAL DEFAULT 0, cash_sales REAL DEFAULT 0, momo_sales REAL DEFAULT 0, total_sales REAL DEFAULT 0,
+                    expenses REAL DEFAULT 0, cash_in REAL DEFAULT 0, discount_amount REAL DEFAULT 0, invoice_collected REAL DEFAULT 0,
+                    status TEXT DEFAULT 'OPEN'
+                )`;
+            db.run(shiftTableSql, () => {
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '148'], () => {
+                    console.log('Migration to v148 complete: Added client_uuid and cashier_shifts columns.');
+                });
+            });
+        });
+    }
 }
 
 initDb();
