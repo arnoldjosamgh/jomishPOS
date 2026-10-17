@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -119,8 +119,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css?v=18">
-    <link rel="stylesheet" href="premium-theme.css?v=5">
-    <link rel="stylesheet" href="skeu-patch.css?v=5">
+    <link rel="stylesheet" href="premium-theme.css?v=6">
+    <link rel="stylesheet" href="skeu-patch.css?v=6">
     <script src="kiosk-lock.js"></script>
     <script defer src="lib/socket.io.js"></script>
     <script defer src="lib/jspdf.umd.min.js"></script>
@@ -1590,7 +1590,7 @@
         </div>
     </div>
 
-    <!-- End Shift Modal -->
+    <!-- End Shift Modal -- Step 1: Enter counted cash -->
     <div id="end-shift-modal" class="modal hidden">
         <div class="modal-content" style="max-width: 440px; padding: 24px; border-radius: 12px; background: var(--surface);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
@@ -1600,7 +1600,8 @@
                 <button type="button" onclick="closeEndShiftModal()" style="background:none; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <p style="font-size:0.88rem; color:var(--text-muted); margin-bottom:16px; line-height:1.4;">
-                Count all cash physically in the drawer right now and enter the total amount below. The system will calculate expected cash and reconcile shortage or excess:
+                Count all cash physically in the drawer now and enter the total below.
+                You will see a full shift statement for review before the shift closes.
             </p>
             <div style="margin-bottom:20px;">
                 <label style="display:block; font-size:0.8rem; font-weight:600; margin-bottom:6px; color:var(--text);">Cash in Drawer (Counted) (UGX)</label>
@@ -1609,13 +1610,44 @@
             <div class="modal-actions" style="display:flex; gap:10px; justify-content:flex-end;">
                 <button type="button" class="secondary-btn" onclick="closeEndShiftModal()" style="padding:10px 18px;">Cancel</button>
                 <button type="button" id="btn-submit-end-shift" class="primary-btn" onclick="confirmEndShift()" style="padding:10px 20px; background:var(--danger); border-color:var(--danger); color:#fff;">
-                    <i class="fa-solid fa-file-invoice"></i> End & Print Report
+                    <i class="fa-solid fa-magnifying-glass-chart"></i> Preview Shift Report
                 </button>
             </div>
         </div>
     </div>
 
+    <!-- End Shift Preview Modal -- Step 2: Review statement and confirm -->
+    <div id="end-shift-preview-modal" class="modal hidden">
+        <div class="modal-content" style="max-width: 520px; padding: 0; border-radius: 14px; background: var(--surface); overflow: hidden;">
+            <div style="background: var(--danger); padding: 18px 24px; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <div style="color:#fff; font-size:1.1rem; font-weight:800; display:flex; align-items:center; gap:8px;">
+                        <i class="fa-solid fa-file-chart-column"></i> Shift Statement Preview
+                    </div>
+                    <div style="color:rgba(255,255,255,0.8); font-size:0.78rem; margin-top:2px;">Review your shift summary before closing</div>
+                </div>
+                <button type="button" onclick="cancelEndShift()" style="background:rgba(255,255,255,0.2); border:none; color:#fff; font-size:1rem; cursor:pointer; border-radius:8px; padding:6px 10px;"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div style="padding: 20px 24px; font-size:0.88rem; line-height:1.6; max-height:55vh; overflow-y:auto;">
+                <div id="shift-preview-content" style="font-family: 'Courier New', monospace; background:var(--background); border-radius:10px; padding:16px; border:1px solid var(--border);"></div>
+            </div>
+            <div style="padding: 0 24px 20px; text-align:center;">
+                <div style="font-size:0.95rem; font-weight:700; color:var(--text); margin-bottom:14px;">
+                    <i class="fa-solid fa-circle-question" style="color:var(--danger);"></i>
+                    Are you sure you want to end this shift?
+                </div>
+                <div style="display:flex; gap:12px; justify-content:center;">
+                    <button type="button" class="secondary-btn" onclick="cancelEndShift()" style="padding:11px 28px; font-size:0.9rem; font-weight:700;">
+                        <i class="fa-solid fa-arrow-left"></i> No, Continue Shift
+                    </button>
+                    <button type="button" id="btn-confirm-end-shift" class="primary-btn" onclick="finaliseEndShift()" style="padding:11px 28px; font-size:0.9rem; font-weight:700; background:var(--danger); border-color:var(--danger);">
+                        <i class="fa-solid fa-print"></i> Yes, Print &amp; End
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
     <script src="offline-db.js?v=2"></script>
-    <script src="app.js?v=41"></script>
+    <script src="app.js?v=42"></script>
 </body>
 </html>

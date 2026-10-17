@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const bcrypt = require("bcryptjs");
@@ -3381,6 +3381,74 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
   });
 });
 
+// 2b. Shift Preview API — read-only reconciliation for cashier to review before confirming end (Only Cashier)
+app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
+  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  if (userRole !== "CASHIER") {
+    return res.status(403).json({ error: "Access Denied: Only Cashiers can preview a cashier shift." });
+  }
+
+  ensureCashierShiftsSchema(() => {
+    const cashierId = req.user.id;
+    const countedCash = req.body.counted_cash !== undefined ? parseFloat(req.body.counted_cash) || 0 : null;
+
+    db.get(
+      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
+      [cashierId],
+      (err, openShift) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!openShift) {
+          return res.status(400).json({ error: "No active shift found. Please start a shift first." });
+        }
+
+        const startTime = openShift.start_time;
+        const startCash = Number(openShift.start_cash || 0);
+
+        const queries = {
+          cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+        };
+
+        Promise.all(Object.values(queries)).then(results => {
+          const cashSales = results[0];
+          const momoSales = results[1];
+          const totalSales = results[2];
+          const expenses = results[3];
+          const cashIn = results[4];
+          const invoiceCollected = results[5];
+          const discountAmount = results[6];
+
+          const expectedCash = startCash + cashSales + cashIn - expenses;
+          const actualCounted = countedCash !== null ? countedCash : expectedCash;
+          const difference = actualCounted - expectedCash;
+
+          // Read-only: do NOT write to the database
+          res.json({
+            preview: true,
+            start_time: startTime,
+            start_cash: startCash,
+            end_cash: expectedCash,
+            counted_cash: actualCounted,
+            difference: difference,
+            cash_sales: cashSales,
+            momo_sales: momoSales,
+            total_sales: totalSales,
+            expenses: expenses,
+            cash_in: cashIn,
+            discount_amount: discountAmount,
+            invoice_collected: invoiceCollected,
+            cashier_name: req.user.name || "Cashier"
+          });
+        });
+      }
+    );
+  });
+});
 // 3. End Shift API — Cashier inserts counted cash in drawer; system calculates expected cash and reconciles (Only Cashier)
 app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
   const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();

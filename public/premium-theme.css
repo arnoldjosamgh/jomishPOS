@@ -476,7 +476,7 @@ body.dark-theme input[type="text"], body.dark-theme input[type="number"] {
   background: var(--background) !important;
   border-bottom: none !important;
   position: sticky !important;
-  top: 0 !important;
+  top: 50px !important;
   z-index: 100 !important;
 }
 

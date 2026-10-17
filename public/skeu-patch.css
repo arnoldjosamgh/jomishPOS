@@ -1,4 +1,4 @@
-
+﻿
 /* ============================================================
    JOMISHPOS — SKEUOMORPHIC REDESIGN PATCH
    Neumorphic light theme with tactile 3D buttons & inputs
@@ -509,7 +509,7 @@ header h1 { font-weight: 800 !important; color: var(--text) !important; }
   background: var(--background) !important;
   border-bottom: none !important;
   position: sticky !important;
-  top: 0 !important;
+  top: 50px !important;
   z-index: 100 !important;
 }
 
