@@ -2058,6 +2058,9 @@ function initSockets() {
     } else if (data.module === "transactions") {
       if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
         window.OfflineDB.bustCache("/transactions").catch(() => {});
+        window.OfflineDB.bustCache("/deliveries").catch(() => {});
+        window.OfflineDB.bustCache("/customer-invoices").catch(() => {});
+        window.OfflineDB.bustCache("/pos_orders").catch(() => {});
       }
       if (USER_PERMISSIONS.can_see_sme || document.querySelector("#transactions-table")) {
         loadTransactions();
@@ -2067,6 +2070,15 @@ function initSockets() {
       if (expView && !expView.classList.contains("hidden")) {
         loadPOSExpenses();
       }
+      if (data.pos_order_id || data.transaction_id || data.pos_order_ids) {
+        if (typeof removePendingOrderFromUI === "function") {
+          const ids = data.pos_order_ids || (data.pos_order_id ? [data.pos_order_id] : []);
+          ids.forEach(pId => removePendingOrderFromUI(pId, data.transaction_id));
+          if (!ids.length && data.transaction_id) removePendingOrderFromUI(null, data.transaction_id);
+        }
+      }
+      if (typeof loadPendingCOD === "function") loadPendingCOD(true);
+      if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
     } else if (
       data.module === "schedules" ||
       data.module === "shift_assignments"
@@ -2084,9 +2096,22 @@ function initSockets() {
       }
     } else if (data.module === "shifts") {
       if (typeof updateCashierShiftUI === "function") updateCashierShiftUI();
-    } else if (data.module === "deliveries") {
+    } else if (data.module === "deliveries" || data.module === "pos") {
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        window.OfflineDB.bustCache("/deliveries").catch(() => {});
+        window.OfflineDB.bustCache("/customer-invoices").catch(() => {});
+        window.OfflineDB.bustCache("/pos_orders").catch(() => {});
+      }
+      if (data.pos_order_id || data.transaction_id || data.pos_order_ids) {
+        if (typeof removePendingOrderFromUI === "function") {
+          const ids = data.pos_order_ids || (data.pos_order_id ? [data.pos_order_id] : []);
+          ids.forEach(pId => removePendingOrderFromUI(pId, data.transaction_id));
+          if (!ids.length && data.transaction_id) removePendingOrderFromUI(null, data.transaction_id);
+        }
+      }
       if (typeof loadDeliveries === "function") loadDeliveries();
-      if (typeof loadPendingCOD === "function") loadPendingCOD();
+      if (typeof loadPendingCOD === "function") loadPendingCOD(true);
+      if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
     } else if (data.module === "products") {
       cachedProducts = []; // Bust cache so next POS scan fetches fresh data with additional_barcodes
       if (USER_PERMISSIONS.can_see_pos && !window._skipProductReload)
@@ -2114,6 +2139,24 @@ function initSockets() {
       const devTable = document.querySelector("#connected-devices-table tbody");
       if (devTable) loadDevices();
     }
+  });
+
+  // Real-time order deleted notification
+  socket.on("order_deleted", (data) => {
+    if (!data) return;
+    if (typeof removePendingOrderFromUI === "function") {
+      const ids = data.pos_order_ids || (data.pos_order_id ? [data.pos_order_id] : []);
+      ids.forEach(pId => removePendingOrderFromUI(pId, data.transaction_id));
+      if (!ids.length && data.transaction_id) removePendingOrderFromUI(null, data.transaction_id);
+    }
+    if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+      window.OfflineDB.bustCache("/deliveries").catch(() => {});
+      window.OfflineDB.bustCache("/customer-invoices").catch(() => {});
+      window.OfflineDB.bustCache("/pos_orders").catch(() => {});
+      window.OfflineDB.bustCache("/transactions").catch(() => {});
+    }
+    if (typeof loadPendingCOD === "function") loadPendingCOD(true);
+    if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
   });
 
   // Real-time message notification
@@ -2790,7 +2833,7 @@ async function fetchAuth(url, options = {}) {
         { pattern: "/roles",          busts: ["/api/roles"] },
         { pattern: "/pos/cash-in",    busts: ["/api/transactions", "/api/finance"] },
         { pattern: "/cash-in",        busts: ["/api/transactions", "/api/finance"] },
-        { pattern: "/transactions",   busts: ["/api/transactions", "/api/finance"] },
+        { pattern: "/transactions",   busts: ["/api/transactions", "/api/finance", "/api/deliveries", "/api/pos_orders", "/api/customer-invoices"] },
         { pattern: "/pos_orders",     busts: ["/api/pos_orders", "/api/transactions", "/api/deliveries"] },
         { pattern: "/checkout",       busts: ["/api/products", "/api/pos_orders", "/api/transactions", "/api/deliveries"] },
         { pattern: "/attendance",     busts: ["/api/attendance"] },
@@ -7160,15 +7203,29 @@ async function deleteTransaction(id, silent = false) {
       method: "DELETE",
     });
     if (res.ok) {
+      const resData = await res.json().catch(() => ({}));
+      const deletedPosOrderId = resData.pos_order_id;
       if (!silent) {
         showToast(
           `Transaction RCPT-${receiptNo} deleted successfully.`,
           "success",
         );
       }
-      // If silent, just reload UI without notification
+      // Instantly remove from Pending tab and Customer Invoices
+      if (typeof removePendingOrderFromUI === "function") {
+        removePendingOrderFromUI(deletedPosOrderId, id);
+      }
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        window.OfflineDB.bustCache("/deliveries").catch(() => {});
+        window.OfflineDB.bustCache("/customer-invoices").catch(() => {});
+        window.OfflineDB.bustCache("/transactions").catch(() => {});
+        window.OfflineDB.bustCache("/pos_orders").catch(() => {});
+      }
+      // Reload UI
       loadTransactions();
       loadDashboard();
+      if (typeof loadPendingCOD === "function") loadPendingCOD(true);
+      if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
     } else {
       if (!silent) {
         const data = await res.json();
@@ -11749,16 +11806,99 @@ window.closeCodModal = function () {
   switchPOSView("register");
 };
 
-window.loadPendingCOD = async function () {
+window.removePendingOrderFromUI = function (posOrderId, txId) {
+  const pId = posOrderId ? Number(posOrderId) : null;
+  const tId = txId ? Number(txId) : null;
+
+  // 1. Instantly remove card(s) from the Pending tab
+  const listContainer = document.getElementById("cod-list-container");
+  if (listContainer) {
+    const cards = listContainer.querySelectorAll("[data-pos-order-id], [id^='pending-order-card-']");
+    cards.forEach((card) => {
+      const cardPId = Number(card.getAttribute("data-pos-order-id"));
+      const cardTId = Number(card.getAttribute("data-tx-id"));
+      if ((pId && cardPId === pId) || (tId && cardTId === tId)) {
+        card.remove();
+      }
+    });
+
+    const remainingCards = listContainer.querySelectorAll("[data-pos-order-id], [id^='pending-order-card-']");
+    const badge = document.getElementById("cod-badge-count");
+    if (badge) {
+      if (remainingCards.length > 0) {
+        badge.style.display = "inline-block";
+        badge.textContent = remainingCards.length;
+      } else {
+        badge.style.display = "none";
+      }
+    }
+    if (remainingCards.length === 0) {
+      listContainer.innerHTML =
+        '<p style="text-align:center;color:var(--text-muted);padding:20px;">No pending sales / transactions.</p>';
+    }
+  }
+
+  // 2. Instantly remove row(s) from Customer Invoices table if present
+  const custInvoicesTbody = document.getElementById("customer-invoices-tbody");
+  if (custInvoicesTbody) {
+    const rows = custInvoicesTbody.querySelectorAll("tr");
+    rows.forEach((r) => {
+      const rowPId = Number(r.getAttribute("data-pos-order-id"));
+      const rowTId = Number(r.getAttribute("data-tx-id"));
+      if ((pId && rowPId === pId) || (tId && rowTId === tId)) {
+        r.remove();
+      }
+    });
+    if (typeof _allCustomerInvoices !== "undefined" && Array.isArray(_allCustomerInvoices)) {
+      _allCustomerInvoices = _allCustomerInvoices.filter((inv) => {
+        if (pId && Number(inv.pos_order_id) === pId) return false;
+        if (tId && Number(inv.transaction_id) === tId) return false;
+        return true;
+      });
+      const invBadge = document.getElementById("sme-invoice-badge");
+      if (invBadge) {
+        if (_allCustomerInvoices.length > 0) {
+          invBadge.style.display = "inline-block";
+          invBadge.textContent = _allCustomerInvoices.length;
+        } else {
+          invBadge.style.display = "none";
+        }
+      }
+      if (_allCustomerInvoices.length === 0) {
+        custInvoicesTbody.innerHTML =
+          '<tr><td colspan="8" style="text-align:center; padding:30px; color:var(--text-muted);">No unpaid customer invoices found.</td></tr>';
+      }
+    }
+  }
+
+  // 3. If cashier currently has this order open in payment panel or edit mode:
+  if (window._pendingOrderId && pId && Number(window._pendingOrderId) === pId) {
+    if (typeof closePaymentPanel === "function") closePaymentPanel();
+    posCart = [];
+    if (typeof renderCart === "function") renderCart();
+    if (typeof showToast === "function") {
+      showToast("Notice: The pending order you were collecting was deleted by an admin.", "warning");
+    }
+  }
+  if (typeof _currentEditOrder !== "undefined" && _currentEditOrder && pId && Number(_currentEditOrder.id) === pId) {
+    if (typeof cancelEditOrder === "function") cancelEditOrder();
+    if (typeof showToast === "function") {
+      showToast("Notice: The pending order you were editing was deleted by an admin.", "warning");
+    }
+  }
+};
+
+window.loadPendingCOD = async function (force = false) {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
   const isWaiterUser = _role === "WAITER" || _role === "SUPERVISOR";
   const listContainer = document.getElementById("cod-list-container");
-  if (listContainer) {
+  if (listContainer && (!listContainer.children.length || listContainer.innerText.includes("Loading"))) {
     listContainer.innerHTML =
       '<p style="text-align:center;color:var(--text-muted);padding:30px;"><i class="fa-solid fa-spinner fa-spin"></i> Loading pending orders...</p>';
   }
   try {
-    const res = await fetchAuth(`${API_URL}/deliveries/pending-cod`);
+    const fetchUrl = `${API_URL}/deliveries/pending-cod${force ? "?force_refresh=1&_t=" + Date.now() : ""}`;
+    const res = await fetchAuth(fetchUrl);
     if (res.ok) {
       const deliveries = await res.json();
       const badge = document.getElementById("cod-badge-count");
@@ -11792,7 +11932,7 @@ window.loadPendingCOD = async function () {
                </div>`
             : "";
           html += `
-            <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
+            <div id="pending-order-card-${d.pos_order_id}" data-pos-order-id="${d.pos_order_id}" data-tx-id="${d.transaction_id || ''}" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
               <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
                 <div style="flex:1;">
                   <h4 style="margin:0 0 3px 0; color:var(--text); font-size:1rem;">${invoiceLabel}</h4>
@@ -13289,7 +13429,7 @@ window.renderCustomerInvoicesTable = function(searchTerm = "") {
     const safeServer = (inv.served_by || "").replace(/'/g, "\\'");
     const dStr = formatDisplayDate ? formatDisplayDate(inv.order_date || inv.transaction_date, true) : (new Date(inv.order_date || Date.now()).toLocaleDateString());
     return `
-      <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+      <tr id="customer-invoice-row-${inv.pos_order_id}" data-pos-order-id="${inv.pos_order_id}" data-tx-id="${inv.transaction_id || ''}" style="border-bottom:1px solid rgba(255,255,255,0.05);">
         <td style="font-weight:700; color:var(--primary);">${formatDocNo("INV", invNum)}</td>
         <td style="font-size:0.83rem; color:var(--text-muted); white-space:nowrap;">${dStr}</td>
         <td style="font-weight:600;">${inv.client_name || 'Customer'}</td>

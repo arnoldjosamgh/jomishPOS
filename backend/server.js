@@ -181,6 +181,8 @@ const RATE_LIMIT_EXCLUDED = [
   "/api/finance/summary",
   "/api/pos/current-shift",
   "/api/alerts/low-stock",
+  "/api/deliveries",
+  "/api/customer-invoices",
 ];
 app.use("/api/", (req, res, next) => {
   // Skip read-only endpoints that fire on every POS page refresh
@@ -1575,26 +1577,33 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   const { id } = req.params;
   
   try {
+    const deletedPosOrderIds = [];
     await db.withTransaction(async (q) => {
-      // 1. Find the pos_order linked to this transaction
+      // 1. Find the pos_order(s) linked to this transaction
       const posOrderRes = await q("SELECT id FROM pos_orders WHERE transaction_id = ?", [id]);
       if (posOrderRes.rows && posOrderRes.rows.length > 0) {
-        const posOrderId = posOrderRes.rows[0].id;
-        
-        // 2. Fetch order items to return stock
-        const itemsRes = await q("SELECT oi.product_id, oi.qty, p.track_stock FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.pos_order_id = ?", [posOrderId]);
-        if (itemsRes.rows && itemsRes.rows.length > 0) {
-          for (let item of itemsRes.rows) {
-            if (item.track_stock === 0) continue; // Made-to-order: no stock to restore
-            await q("UPDATE products SET stock = stock + ? WHERE id = ?", [item.qty, item.product_id]);
+        for (const poRow of posOrderRes.rows) {
+          const posOrderId = poRow.id;
+          deletedPosOrderIds.push(posOrderId);
+          
+          // 2. Fetch order items to return stock
+          const itemsRes = await q(
+            "SELECT oi.product_id, oi.qty, p.track_stock FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.pos_order_id = ?",
+            [posOrderId]
+          );
+          if (itemsRes.rows && itemsRes.rows.length > 0) {
+            for (let item of itemsRes.rows) {
+              if (item.track_stock === 0) continue; // Made-to-order: no stock to restore
+              await q("UPDATE products SET stock = stock + ? WHERE id = ?", [item.qty, item.product_id]);
+            }
           }
+          
+          // 3. Delete from pos_orders and order_items (if not cascaded)
+          await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+          await q("DELETE FROM pos_orders WHERE id = ?", [posOrderId]);
+          // Note: also clear pending deliveries just in case
+          await q("DELETE FROM deliveries WHERE order_id = ?", [posOrderId]);
         }
-        
-        // 3. Delete from pos_orders and order_items (if not cascaded)
-        await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
-        await q("DELETE FROM pos_orders WHERE id = ?", [posOrderId]);
-        // Note: also clear pending deliveries just in case
-        await q("DELETE FROM deliveries WHERE order_id = ?", [posOrderId]);
       }
       
       // 4. Delete the transaction itself
@@ -1604,7 +1613,30 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
 
     emitAndBust("transactions", "finance_summary");
     io.emit("db_updated", { module: "products" }); // update stock on clients
-    res.json({ message: "Transaction successfully deleted and stock returned." });
+    io.emit("db_updated", {
+      module: "deliveries",
+      action: "delete",
+      transaction_id: Number(id),
+      pos_order_id: deletedPosOrderIds[0] || null,
+      pos_order_ids: deletedPosOrderIds,
+    });
+    io.emit("db_updated", {
+      module: "pos",
+      action: "delete",
+      transaction_id: Number(id),
+      pos_order_id: deletedPosOrderIds[0] || null,
+      pos_order_ids: deletedPosOrderIds,
+    });
+    io.emit("order_deleted", {
+      transaction_id: Number(id),
+      pos_order_id: deletedPosOrderIds[0] || null,
+      pos_order_ids: deletedPosOrderIds,
+    });
+    res.json({
+      message: "Transaction successfully deleted and stock returned.",
+      pos_order_id: deletedPosOrderIds[0] || null,
+      pos_order_ids: deletedPosOrderIds,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
