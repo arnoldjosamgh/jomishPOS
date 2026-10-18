@@ -5460,7 +5460,9 @@ window.cancelEndShift = function () {
 function _buildShiftPreview(r) {
   const el = document.getElementById("shift-preview-content");
   if (!el) return;
-  const expectedCash = Number(r.end_cash || 0);
+  const grandTotal   = Number(r.end_cash || 0);          // cash + momo
+  const cashOnly     = Number(r.cash_in_drawer !== undefined ? r.cash_in_drawer : (grandTotal - Number(r.momo_sales || 0)));
+  const momoSales    = Number(r.momo_sales || 0);
   const fmt = (n) => "UGX " + Number(n || 0).toLocaleString();
   const row = (label, val, color) =>
     '<div style="display:flex;justify-content:space-between;margin-bottom:6px;' + (color ? 'color:' + color + ';font-weight:700;' : '') + '">' +
@@ -5472,21 +5474,31 @@ function _buildShiftPreview(r) {
     '<div style="text-align:center;margin-bottom:12px;font-size:0.82rem;color:var(--text-muted);">Cashier: <strong>' + (r.cashier_name || "Cashier") + '</strong></div>' +
     divider +
     row("Shift Started:", new Date(r.start_time).toLocaleString("en-UG")) +
-    row("Starting Capital:", fmt(r.start_cash)) +
+    row("(+) Starting Capital:", fmt(r.start_cash)) +
     divider +
     row("(+) Cash Sales:", fmt(r.cash_sales)) +
-    (Number(r.income_transactions || 0) > 0 ? row("(+) Income (Transactions):", fmt(r.income_transactions), "#16a34a") : "") +
+    row("(+) Mobile Money Sales:", fmt(momoSales), "#7c3aed") +
+    (Number(r.income_transactions || 0) > 0 ? row("(+) Income (Manual):", fmt(r.income_transactions), "#16a34a") : "") +
     row("(+) Cash In (Float):", fmt(r.cash_in), "#16a34a") +
     row("(-) Expenses / Cash Out:", "-" + fmt(r.expenses), "#dc2626") +
     divider +
-    '<div style="display:flex;justify-content:space-between;font-weight:800;font-size:1.05rem;margin:8px 0;color:var(--text);background:rgba(99,102,241,0.08);padding:8px 10px;border-radius:6px;">' +
-      '<span>Total Cash in Drawer:</span><span>' + fmt(expectedCash) + '</span>' +
+    // Grand total (cash + momo)
+    '<div style="display:flex;justify-content:space-between;font-weight:800;font-size:1.05rem;margin:6px 0;color:var(--text);background:rgba(99,102,241,0.08);padding:8px 10px;border-radius:6px;">' +
+      '<span>Total Collected:</span><span>' + fmt(grandTotal) + '</span>' +
     '</div>' +
+    // MOMO sub-note
+    (momoSales > 0 ?
+      '<div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#7c3aed;padding:4px 10px 0;">' +
+        '<span>&#x2937; of which on Mobile Money:</span><span>' + fmt(momoSales) + '</span>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:0.82rem;color:var(--text-muted);padding:2px 10px 6px;">' +
+        '<span>&#x2937; Physical Cash in Drawer:</span><span>' + fmt(cashOnly) + '</span>' +
+      '</div>'
+    : "") +
     divider +
     '<div style="font-size:0.8rem;color:var(--text-muted);">' +
-      row("Mobile Money Sales:", fmt(r.momo_sales)) +
       row("Total Sales (All Methods):", fmt(r.total_sales)) +
-      (Number(r.income_transactions || 0) > 0 ? row("Income Transactions:", fmt(r.income_transactions)) : "") +
+      (r.invoice_collected ? row("Invoices/COD Collected:", fmt(r.invoice_collected)) : "") +
       (r.discount_amount ? row("Discounts Given:", "-" + fmt(r.discount_amount), "#f59e0b") : "") +
     '</div>';
 }
@@ -5539,9 +5551,11 @@ window.endCashierShift = function () {
 
 window.printEndShiftReport = function(report) {
   const bizName = localStorage.getItem("jomish_biz_name") || "Jomish Business";
-  const expectedCash = Number(report.end_cash || 0);
-  const countedCash = Number(report.counted_cash !== undefined ? report.counted_cash : expectedCash);
-  const diff = Number(report.difference !== undefined ? report.difference : (countedCash - expectedCash));
+  const grandTotal  = Number(report.end_cash || 0);
+  const cashOnly    = Number(report.cash_in_drawer !== undefined ? report.cash_in_drawer : (grandTotal - Number(report.momo_sales || 0)));
+  const momoSales   = Number(report.momo_sales || 0);
+  const countedCash = Number(report.counted_cash !== undefined ? report.counted_cash : grandTotal);
+  const diff = Number(report.difference !== undefined ? report.difference : (countedCash - grandTotal));
 
   let diffLabel = "BALANCED";
   let diffColor = "#16a34a";
@@ -5580,12 +5594,15 @@ window.printEndShiftReport = function(report) {
         <div style="font-weight:bold; font-size:11pt; margin-bottom:5px;">CASH DRAWER RECONCILIATION</div>
         <div class="row"><span>Starting Capital:</span><span>UGX ${(report.start_cash || 0).toLocaleString()}</span></div>
         <div class="row"><span>(+) Cash Sales:</span><span>UGX ${(report.cash_sales || 0).toLocaleString()}</span></div>
-        ${Number(report.income_transactions || 0) > 0 ? `<div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Income (Transactions):</span><span>+UGX ${Number(report.income_transactions).toLocaleString()}</span></div>` : ""}
+        <div class="row" style="color:#7c3aed; font-weight:bold;"><span>(+) Mobile Money:</span><span>+UGX ${momoSales.toLocaleString()}</span></div>
+        ${Number(report.income_transactions || 0) > 0 ? `<div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Income (Manual):</span><span>+UGX ${Number(report.income_transactions).toLocaleString()}</span></div>` : ""}
         <div class="row" style="color:#16a34a; font-weight:bold;"><span>(+) Cash In (Float):</span><span>+UGX ${(report.cash_in || 0).toLocaleString()}</span></div>
         <div class="row" style="color:#dc2626; font-weight:bold;"><span>(-) Cashier Expenses:</span><span>-UGX ${(report.expenses || 0).toLocaleString()}</span></div>
         <div class="divider"></div>
-        <div class="row bold" style="font-size:12.5pt;"><span>Expected Cash in Drawer:</span><span>UGX ${expectedCash.toLocaleString()}</span></div>
-        <div class="row bold" style="font-size:12.5pt;"><span>Cash in Drawer (Counted):</span><span>UGX ${countedCash.toLocaleString()}</span></div>
+        <div class="row bold" style="font-size:12.5pt;"><span>Total Collected:</span><span>UGX ${grandTotal.toLocaleString()}</span></div>
+        ${momoSales > 0 ? `<div class="row" style="font-size:9.5pt;color:#7c3aed;"><span>  ↳ on Mobile Money:</span><span>UGX ${momoSales.toLocaleString()}</span></div>
+        <div class="row" style="font-size:9.5pt;color:#555;"><span>  ↳ Physical Cash in Drawer:</span><span>UGX ${cashOnly.toLocaleString()}</span></div>` : ""}
+        <div class="row bold" style="font-size:12.5pt;"><span>Cash Counted (Actual):</span><span>UGX ${countedCash.toLocaleString()}</span></div>
         <div class="row bold" style="font-size:11pt; color:${diffColor};"><span>Reconciliation:</span><span>${diffLabel}</span></div>
         <div class="divider"></div>
         <div style="font-weight:bold; margin-bottom:4px;">SALES BREAKDOWN</div>

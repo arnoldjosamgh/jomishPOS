@@ -3537,7 +3537,9 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
 
           // Cash in Drawer = Opening Float + Cash Sales (all staff) + Extra Float Added + Manual Income - Expenses
           // (MOMO sales do NOT enter the physical drawer, so momoSales is excluded from expectedCash)
-          const expectedCash = startCash + cashSales + cashIn + incomeTransactions - expenses;
+          const cashInDrawer = startCash + cashSales + cashIn + incomeTransactions - expenses;
+          // Grand Total = all money collected this shift (cash + momo + manual income)
+          const expectedCash = cashInDrawer + momoSales;
           const actualCounted = countedCash !== null ? countedCash : expectedCash;
           const difference = actualCounted - expectedCash;
 
@@ -3547,6 +3549,7 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
             start_time: startTime,
             start_cash: startCash,
             end_cash: expectedCash,
+            cash_in_drawer: cashInDrawer,
             counted_cash: actualCounted,
             difference: difference,
             cash_sales: cashSales,
@@ -3635,7 +3638,9 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
 
         // Cash in Drawer = Opening Float + Cash Sales (all staff) + Extra Float Added + Manual Income - Expenses
         // MOMO sales are excluded because they go to mobile wallet, not the physical drawer
-        const expectedCash = startCash + cashSales + cashIn + incomeTransactions - expenses;
+        const cashInDrawer = startCash + cashSales + cashIn + incomeTransactions - expenses;
+        // Grand Total = all money collected this shift (cash + momo)
+        const expectedCash = cashInDrawer + momoSales;
         const actualCounted = countedCash !== null ? countedCash : expectedCash;
         const difference = actualCounted - expectedCash; // > 0 = overage, < 0 = shortage
 
@@ -3669,6 +3674,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
             end_time: endTime,
             start_cash: startCash,
             end_cash: expectedCash,
+            cash_in_drawer: cashInDrawer,
             counted_cash: actualCounted,
             difference: difference,
             cash_sales: cashSales,
@@ -3679,7 +3685,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
             income_transactions: incomeTransactions,
             discount_amount: discountAmount,
             invoice_collected: invoiceCollected,
-            cashier_name: req.user.name || "Cashier"
+            cashier_name: req.user.name || "Cashier",
           });
         }
       });
