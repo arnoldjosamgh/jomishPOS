@@ -7183,15 +7183,18 @@ async function loadCashierReport() {
 
     let txRows = "";
     txList.forEach((tx) => {
-      const color = tx.type === "INCOME" ? "#10b981" : "#ef4444";
-      const sign = tx.type === "INCOME" ? "+" : "-";
+      // FLOAT_IN and CASH_IN are cash going INTO the drawer — treat as income
+      const isIncome = tx.type === "INCOME" || tx.type === "FLOAT_IN" || tx.type === "CASH_IN";
+      const color = isIncome ? "#10b981" : "#ef4444";
+      const sign = isIncome ? "+" : "-";
+      const typeLabel = tx.type === "FLOAT_IN" ? "Opening Float" : tx.type === "CASH_IN" ? "Cash In" : tx.type;
       const rn = formatDocNo("RCPT", tx.order_invoice_number || tx.receipt_no || tx.id);
       txRows += `
         <tr>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">${rn}</td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${formatDisplayDate(tx.transaction_date, true)}</td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${tx.cashier_name || "—"}</td>
-          <td style="padding:6px 8px; border-bottom:1px solid var(--border);">${tx.description || "—"}</td>
+          <td style="padding:6px 8px; border-bottom:1px solid var(--border);">${tx.description || "—"} <span style="font-size:0.75rem;color:var(--text-muted);">[${typeLabel}]</span></td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-weight:bold; color:${color}; text-align:right;">${sign}UGX ${Number(tx.amount || 0).toLocaleString()}</td>
         </tr>`;
     });
