@@ -27,4 +27,5 @@ updates/staging/
 
 # OS files
 .DS_Store
-Thumbs.db
+# Scratch scripts
+scratch/

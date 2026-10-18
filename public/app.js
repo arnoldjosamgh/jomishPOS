@@ -2158,7 +2158,14 @@ function initSockets() {
       loadHardwareRadar();
       // Refresh HR Blueprint devices table if it's present in the DOM
       const devTable = document.querySelector("#connected-devices-table tbody");
-      if (devTable) loadDevices();
+    } else if (data.module === "credits") {
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        window.OfflineDB.bustCache("/credits").catch(() => {});
+        window.OfflineDB.bustCache("/api/credits").catch(() => {});
+      }
+      if (typeof loadCredits === "function") {
+        loadCredits();
+      }
     }
   });
 
@@ -4295,6 +4302,21 @@ function updateChange() {
     return;
   }
 
+  if (method === "CREDIT") {
+    const diff = Math.round(total) - paid;
+    if (paid > Math.round(total)) {
+      changeEl.textContent = "Deposit cannot exceed Total!";
+      changeEl.style.color = "#EF4444";
+    } else if (paid === 0 || diff === Math.round(total)) {
+      changeEl.textContent = "Full Credit: UGX " + Math.round(total).toLocaleString();
+      changeEl.style.color = "#F59E0B";
+    } else {
+      changeEl.textContent = `Deposit: UGX ${paid.toLocaleString()} | Due: UGX ${diff.toLocaleString()}`;
+      changeEl.style.color = "#F59E0B";
+    }
+    return;
+  }
+
   const change = paid - Math.round(total);
   if (change >= 0) {
     changeEl.textContent = "UGX " + change.toLocaleString();
@@ -4387,11 +4409,22 @@ window.handlePaymentMethodChange = async function () {
       payAmountInput.focus();
       payAmountInput.select();
     }
+  } else if (method === "CREDIT") {
+    if (payAmountInput) {
+      payAmountInput.removeAttribute("readonly");
+      payAmountInput.value = "0"; // default to 0 deposit for full credit
+    }
+    if (buyerContainer) buyerContainer.style.display = "block";
+    const payLabel = document.getElementById("pay-amount-label") || (payAmountInput ? payAmountInput.previousElementSibling : null);
+    if (payLabel) payLabel.textContent = "Deposit Paid Now (UGX) — Leave 0 for Full Credit";
+    if (typeof updateChange === "function") updateChange();
+    const buyerInput = document.getElementById("buyer-name-input");
+    if (buyerInput) buyerInput.focus();
   } else {
     if (payAmountInput) payAmountInput.removeAttribute("readonly");
-    if (buyerContainer) {
-      buyerContainer.style.display = method === "CREDIT" ? "block" : "none";
-    }
+    const payLabel = document.getElementById("pay-amount-label") || (payAmountInput ? payAmountInput.previousElementSibling : null);
+    if (payLabel) payLabel.textContent = "Amount Paid";
+    if (buyerContainer) buyerContainer.style.display = "none";
     if (typeof updateChange === "function") updateChange();
   }
 
@@ -4490,6 +4523,8 @@ async function confirmPayment() {
 
   const client_uuid = generateClientUUID("pos");
 
+  const effectivePaid = paymentMethod === "CREDIT" && paid >= Math.round(total) ? 0 : paid;
+
   try {
     const res = await fetchAuth(`${API_URL}/checkout`, {
       method: "POST",
@@ -4500,7 +4535,7 @@ async function confirmPayment() {
         original_total: total,
         items: posCart,
         payment_method: paymentMethod,
-        amount_paid: paid,
+        amount_paid: effectivePaid,
         buyer_name: buyerName,
         buyer_phone: buyerPhone,
         is_delivery: isDelivery,
@@ -4551,6 +4586,9 @@ async function confirmPayment() {
       loadPOSProducts();
       loadDashboard();
       loadTransactions();
+      if (paymentMethod === "CREDIT" && typeof loadCredits === "function") {
+        loadCredits();
+      }
       const smeProdView = document.getElementById("sme-view-products");
       if (smeProdView && smeProdView.style.display !== "none" && typeof loadSmeProductSales === "function") {
         loadSmeProductSales();
@@ -4688,7 +4726,21 @@ async function submitWaiterOrder() {
         dateStr,
         cashierName: staffFirstName,
         servedBy: _currentEditOrder.served_by || staffFirstName,
-        items: posCart.map((i) => ({ name: i.name, qty: i.qty || 1, price: i.price })),
+        items: posCart.map((i) => {
+          const itemId = i.id || i.product_id;
+          const orig = _editOrderOriginalQtys && _editOrderOriginalQtys[itemId];
+          const origQty = orig !== undefined ? Number(orig) : 0;
+          const currentQty = Number(i.qty) || 1;
+          const addedQty = Math.max(0, currentQty - origQty);
+          return {
+            name: i.name,
+            qty: currentQty,
+            price: i.price,
+            origQty,
+            addedQty,
+            isNew: origQty === 0,
+          };
+        }),
       };
       _printHTMLQueue([_buildKitchenTokenHTML(tokenData)]);
 
@@ -5643,12 +5695,31 @@ function closeReceipt() {
 
 function _buildKitchenTokenHTML(d) {
   let tokenItems = "";
+  const isEdited = !!d.isEdited;
+
   d.items.forEach((i) => {
     const qty = i.qty || 1;
+    const addedQty = i.addedQty !== undefined ? i.addedQty : (isEdited ? qty : 0);
+    const origQty = i.origQty !== undefined ? i.origQty : 0;
+
+    let editBadge = "";
+    if (isEdited) {
+      if (origQty === 0 || i.isNew) {
+        editBadge = `<div style="font-size:11pt; font-weight:bold; color:#000; margin-top:2px;">&#9658; [ADDED: ${i.name} x ${qty}]</div>`;
+      } else if (addedQty > 0) {
+        editBadge = `<div style="font-size:10pt; font-weight:bold; color:#000; margin-top:2px;">&#9658; [+${addedQty} ADDED (Was ${origQty}, Now ${qty})]</div>`;
+      } else {
+        editBadge = `<div style="font-size:9pt; color:#666; font-style:italic; margin-top:1px;">(Prev. ordered: ${origQty})</div>`;
+      }
+    }
+
     tokenItems += `
       <tr>
-          <td style="padding:3px 0; word-break:break-word; white-space:normal; font-size:12pt; font-weight:bold;">${i.name}</td>
-          <td style="padding:3px 0; text-align:right; font-size:14pt; font-weight:bold;">${qty}</td>
+          <td style="padding:4px 0; word-break:break-word; white-space:normal; font-size:13pt; font-weight:bold;">
+            ${i.name} x ${qty}
+            ${editBadge}
+          </td>
+          <td style="padding:4px 0; text-align:right; font-size:15pt; font-weight:bold; vertical-align:top;">x${qty}</td>
       </tr>`;
   });
 
@@ -5672,7 +5743,7 @@ table { width: 100%; border-collapse: collapse; }
 </head>
 <body>
     <div class="center heading" style="font-size:16pt;">KITCHEN TOKEN</div>
-    ${d.isEdited ? `<div class="center" style="background:#000;color:#fff;font-weight:bold;font-size:13pt;padding:4px;letter-spacing:2px;margin:4px 0;">*** EDITED ORDER ***</div>` : ""}
+    ${d.isEdited ? `<div class="center" style="background:#000;color:#fff;font-weight:bold;font-size:13pt;padding:4px;letter-spacing:1px;margin:4px 0;">*** EDITED ORDER ***<br><span style="font-size:10pt;">SEE ADDED ITEMS BELOW</span></div>` : ""}
     <div class="row"><span style="font-size:12pt; font-weight:bold;">Order: ${d.orderId}</span></div>
     <div class="row"><span>Date: ${d.dateStr}</span></div>
     ${d.servedBy ? `<div class="row"><span>Served by: ${d.servedBy}</span></div>` : ""}
@@ -5680,8 +5751,8 @@ table { width: 100%; border-collapse: collapse; }
     <table>
         <thead>
             <tr>
-                <th style="text-align:left; width:80%;">Item</th>
-                <th style="text-align:right; width:20%;">Qty</th>
+                <th style="text-align:left; width:75%;">Item</th>
+                <th style="text-align:right; width:25%;">Qty</th>
             </tr>
         </thead>
         <tbody>${tokenItems}</tbody>
@@ -12707,14 +12778,25 @@ let _isCollectingPending = false;
 // Called when cashier confirms payment for a pending order
 window.collectPendingPayment = async function (posOrderId, totalAmount) {
   if (_isCollectingPending) return;
+  const paymentMethodSelect = document.getElementById("payment-method-select");
+  const paymentMethod = (paymentMethodSelect ? paymentMethodSelect.value : "CASH").toUpperCase();
   const paid = parseInt(document.getElementById("pay-amount").value) || 0;
-  if (paid < Math.round(totalAmount)) {
+  const buyerName = document.getElementById("buyer-name-input")?.value?.trim() || "";
+  const buyerPhone = document.getElementById("buyer-phone-input")?.value?.trim() || "";
+
+  if (paymentMethod === "CREDIT") {
+    if (!buyerName) {
+      alert("Please enter a Customer / Buyer Name for Credit transactions.");
+      return;
+    }
+    if (paid > Math.round(totalAmount)) {
+      alert("For credit, deposit paid cannot exceed the total amount.");
+      return;
+    }
+  } else if (paid < Math.round(totalAmount)) {
     alert("Amount paid is less than total! Customer still owes UGX " + (Math.round(totalAmount) - paid).toLocaleString());
     return;
   }
-
-  const paymentMethodSelect = document.getElementById("payment-method-select");
-  const paymentMethod = (paymentMethodSelect ? paymentMethodSelect.value : "CASH").toUpperCase();
 
   const btnConfirm = document.getElementById("btn-confirm-pay");
   const origBtnHtml = btnConfirm ? btnConfirm.innerHTML : "";
@@ -12725,10 +12807,16 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
   }
 
   try {
+    const effectivePaid = paymentMethod === "CREDIT" && paid >= Math.round(totalAmount) ? 0 : paid;
     const res = await fetchAuth(`${API_URL}/pos_orders/${posOrderId}/cod-received`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ payment_method: paymentMethod }),
+      body: JSON.stringify({
+        payment_method: paymentMethod,
+        amount_paid: effectivePaid,
+        buyer_name: buyerName,
+        buyer_phone: buyerPhone,
+      }),
     });
     const data = await res.json();
     if (res.ok) {
@@ -12743,6 +12831,9 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
       closePaymentPanel();
       showToast("Payment collected!", "success");
       loadPendingCOD();
+      if (paymentMethod === "CREDIT" && typeof loadCredits === "function") {
+        loadCredits();
+      }
 
       const receiptItems = posCart.length > 0 ? [...posCart] : [{ name: "Invoice Payment", qty: 1, price: data.total_amount }];
       const serverName = data.served_by || window._pendingServedBy || null;

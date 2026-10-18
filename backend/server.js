@@ -3190,8 +3190,9 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   if (!items || items.length === 0)
     return res.status(400).json({ error: "Cart is empty" });
 
-  let paid = amount_paid !== undefined ? amount_paid : total_amount;
+  let paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
   let payment_status = "PAID";
+  const isCredit = (payment_method || "").toUpperCase() === "CREDIT";
 
   if (payment_method === "COD") {
     paid = 0;
@@ -3202,6 +3203,12 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   } else if (payment_method === "DISCOUNT") {
     paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
     payment_status = "PAID";
+  } else if (isCredit) {
+    // If cashier entered total_amount as paid (or clicked EXACT), it represents full credit (0 deposit paid)
+    if (paid >= total_amount) {
+      paid = 0;
+    }
+    payment_status = paid === 0 ? "UNPAID" : "PARTIAL";
   }
 
   // INVOICE stores as COD in pos_orders (pending COD)
@@ -3315,11 +3322,12 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       }
 
       // CREDIT record
-      if (payment_method === "CREDIT" && paid < total_amount) {
-        const balance = total_amount - paid;
+      if (isCredit) {
+        const creditDeposit = Math.min(paid, total_amount);
+        const balance = Math.max(0, total_amount - creditDeposit);
         await q(
           "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance, promised_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [buyer_name || "Unknown", buyer_phone || "", pos_order_id, total_amount, paid, balance, promised_date || null]
+          [buyer_name || "Walk-in", buyer_phone || "", pos_order_id, total_amount, creditDeposit, balance, req.body.promised_date || null]
         );
       }
 
@@ -3360,6 +3368,10 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     emitAndBust("transactions", "finance_summary");
     emitAndBust("products", "products");
     io.emit("db_updated", { module: "pos" });
+    if (isCredit) {
+      emitAndBust("credits", "credits");
+      io.emit("db_updated", { module: "credits" });
+    }
     if (effectiveIsDelivery || effectivePaymentMethod === "COD") {
       io.emit("db_updated", { module: "deliveries" });
     }
@@ -6360,21 +6372,57 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
   try {
     let transactionData = null;
     const paymentMethod = (req.body && req.body.payment_method) ? String(req.body.payment_method).toUpperCase() : "CASH";
-    const desc = `POS Sale (${paymentMethod})`;
+    const isCredit = paymentMethod === "CREDIT";
+    const amountPaid = req.body && req.body.amount_paid !== undefined ? parseFloat(req.body.amount_paid) || 0 : null;
+    const buyerNameInput = req.body && req.body.buyer_name ? String(req.body.buyer_name).trim() : null;
+    const buyerPhoneInput = req.body && req.body.buyer_phone ? String(req.body.buyer_phone).trim() : null;
+    const desc = isCredit ? "POS Sale (CREDIT)" : `POS Sale (${paymentMethod})`;
+
     await db.withTransaction(async (q) => {
       const rowRes = await q(
-        "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, served_by, invoice_number FROM pos_orders WHERE id = ?",
+        "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, buyer_phone, served_by, invoice_number FROM pos_orders WHERE id = ?",
         [req.params.id]
       );
       if (!rowRes.rows || rowRes.rows.length === 0) {
         throw new Error("Order not found");
       }
       const row = rowRes.rows[0];
+      const effBuyerName = buyerNameInput || row.buyer_name || "Walk-in";
+      const effBuyerPhone = buyerPhoneInput || row.buyer_phone || "";
+      const totalAmt = parseFloat(row.total_amount) || 0;
+
+      let effectivePaid = amountPaid !== null ? amountPaid : totalAmt;
+      if (isCredit && effectivePaid >= totalAmt) {
+        effectivePaid = 0; // full credit
+      }
 
       await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
-      // Stamp the cashier who physically collected the payment on both the order and its transaction
-      await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ? WHERE id = ?", [req.user.id, "PAID", desc, row.transaction_id]);
-      await q("UPDATE pos_orders SET cashier_id = ?, amount_paid = ?, payment_method = ? WHERE id = ?", [req.user.id, row.total_amount, paymentMethod, row.pos_order_id]);
+
+      const paymentStatus = isCredit ? (effectivePaid === 0 ? "UNPAID" : "PARTIAL") : "PAID";
+      await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ?, amount = ? WHERE id = ?", [
+        req.user.id,
+        paymentStatus,
+        desc,
+        isCredit ? effectivePaid : totalAmt,
+        row.transaction_id
+      ]);
+
+      await q("UPDATE pos_orders SET cashier_id = ?, amount_paid = ?, payment_method = ?, buyer_name = ?, buyer_phone = ? WHERE id = ?", [
+        req.user.id,
+        effectivePaid,
+        paymentMethod,
+        effBuyerName,
+        effBuyerPhone,
+        row.pos_order_id
+      ]);
+
+      if (isCredit) {
+        const balance = Math.max(0, totalAmt - effectivePaid);
+        await q(
+          "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
+          [effBuyerName, effBuyerPhone, row.pos_order_id, totalAmt, effectivePaid, balance]
+        );
+      }
       
       transactionData = row;
     });
@@ -6382,6 +6430,10 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
     emitAndBust("transactions", "finance_summary");
     io.emit("db_updated", { module: "pos" });
     io.emit("db_updated", { module: "deliveries" });
+    if (isCredit) {
+      emitAndBust("credits", "credits");
+      io.emit("db_updated", { module: "credits" });
+    }
 
     // Compute sequential receipt_no
     let receipt_no = transactionData.transaction_id;
