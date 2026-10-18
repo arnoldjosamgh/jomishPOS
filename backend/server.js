@@ -3180,7 +3180,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   }
 
   const userRoleForShift = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  if (userRoleForShift === "CASHIER" && payment_method !== "INVOICE" && payment_method !== "COD") {
+  if (userRoleForShift === "CASHIER") {
     const openShift = await new Promise((resolve) => {
       db.get(
         "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
@@ -3189,7 +3189,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       );
     });
     if (!openShift) {
-      return res.status(403).json({ error: "Please start your shift before processing checkouts." });
+      return res.status(403).json({ error: "Please start your shift before adding or processing orders." });
     }
   }
 
@@ -3506,6 +3506,20 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
             if (insertErr) return res.status(500).json({ error: insertErr.message });
             const shiftId = this.lastID;
 
+            // Re-assign all pending COD / Invoice orders to the new cashier opening the shift
+            db.run(
+              `UPDATE pos_orders SET cashier_id = ?
+               WHERE id IN (
+                 SELECT p.id FROM pos_orders p
+                 JOIN transactions t ON p.transaction_id = t.id
+                 WHERE p.payment_method IN ('COD', 'INVOICE') AND t.payment_status = 'PENDING'
+               )`,
+              [cashierId],
+              (reassignErr) => {
+                if (reassignErr) console.warn("[Start Shift] Could not reassign pending orders:", reassignErr.message);
+              }
+            );
+
             if (startCash > 0) {
               db.run(
                 "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, 'FLOAT_IN', ?, ?, ?, 'PAID')",
@@ -3795,6 +3809,20 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
   const { items } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "Order must have at least one item." });
+  }
+
+  const userRoleNow = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  if (userRoleNow === "CASHIER") {
+    const openShift = await new Promise((resolve) => {
+      db.get(
+        "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
+        [req.user.id],
+        (err, row) => resolve(row || null)
+      );
+    });
+    if (!openShift) {
+      return res.status(403).json({ error: "Please start your shift before editing orders." });
+    }
   }
 
   const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";

@@ -4781,6 +4781,12 @@ async function submitWaiterOrder() {
   if (_isSubmittingWaiterOrder) return;
   if (posCart.length === 0) return alert("Cart is empty!");
 
+  const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_roleNow === "CASHIER" && !window._hasActiveCashierShift) {
+    const hasShift = await window.ensureCashierShiftActive("add or submit orders");
+    if (!hasShift) return;
+  }
+
   if (_currentEditOrder && _currentEditOrder.id) {
     _isSubmittingWaiterOrder = true;
     // Target whichever button is visible — cashier sees btn-print-invoice, waiter sees btn-send-to-cashier
@@ -12739,6 +12745,12 @@ let _editOrderItems = [];
 let _editOrderOriginalQtys = {}; // tracks original item qtys to prevent reduction
 
 async function openEditPendingOrder(posOrderId) {
+  const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_roleNow === "CASHIER" && !window._hasActiveCashierShift) {
+    const hasShift = await window.ensureCashierShiftActive("edit pending orders");
+    if (!hasShift) return;
+  }
+
   try {
     showToast('Loading order...', 'info');
 
@@ -12878,6 +12890,12 @@ window.saveEditedPendingOrder = saveEditedPendingOrder;
 
 // Opens the standard payment panel pre-filled for a pending order (Cashier collects payment)
 window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clientName, servedBy) {
+  const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_roleNow === "CASHIER" && !window._hasActiveCashierShift) {
+    const hasShift = await window.ensureCashierShiftActive("collect payment for orders");
+    if (!hasShift) return;
+  }
+
   // 1. Switch to Register view first so the cart is visible
   switchPOSView("register");
 
