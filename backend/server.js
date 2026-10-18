@@ -3179,6 +3179,20 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     }
   }
 
+  const userRoleForShift = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  if (userRoleForShift === "CASHIER" && payment_method !== "INVOICE" && payment_method !== "COD") {
+    const openShift = await new Promise((resolve) => {
+      db.get(
+        "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
+        [req.user.id],
+        (err, row) => resolve(row || null)
+      );
+    });
+    if (!openShift) {
+      return res.status(403).json({ error: "Please start your shift before processing checkouts." });
+    }
+  }
+
   const isReqUserWaiter = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
   const userFirstName = (req.user && req.user.name ? req.user.name : "").trim().split(/\s+/)[0] || "";
   const effectiveServedBy = (served_by ? String(served_by).trim().split(/\s+/)[0] : "") || (isReqUserWaiter ? userFirstName : null);
@@ -3186,6 +3200,10 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   const discount_amount = payment_method === "DISCOUNT"
     ? Math.max(0, (parseFloat(req.body.original_total || total_amount) || 0) - (parseFloat(amount_paid) || 0))
     : 0;
+
+  const split_cash_amount = payment_method === "SPLIT" ? (parseFloat(req.body.split_cash_amount) || 0) : 0;
+  const split_second_amount = payment_method === "SPLIT" ? (parseFloat(req.body.split_second_amount) || 0) : 0;
+  const split_second_method = payment_method === "SPLIT" ? String(req.body.split_second_method || "MOBILE MONEY").toUpperCase() : "";
 
   if (!items || items.length === 0)
     return res.status(400).json({ error: "Cart is empty" });
@@ -3203,6 +3221,14 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
   } else if (payment_method === "DISCOUNT") {
     paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
     payment_status = "PAID";
+  } else if (payment_method === "SPLIT") {
+    if (split_second_method === "CREDIT") {
+      paid = split_cash_amount;
+      payment_status = split_second_amount > 0 ? "PARTIAL" : "PAID";
+    } else {
+      paid = total_amount;
+      payment_status = "PAID";
+    }
   } else if (isCredit) {
     // If cashier entered total_amount as paid (or clicked EXACT), it represents full credit (0 deposit paid)
     if (paid >= total_amount) {
@@ -3252,6 +3278,8 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         ? "POS Sale (COD - Pending Invoice)"
         : payment_method === "DISCOUNT"
         ? `POS Sale (DISCOUNT: UGX ${paid.toLocaleString()})`
+        : payment_method === "SPLIT"
+        ? `POS Sale (SPLIT: Cash UGX ${split_cash_amount.toLocaleString()} + ${split_second_method} UGX ${split_second_amount.toLocaleString()})`
         : `POS Sale (${payment_method})`;
       const txAmount = payment_method === "COD" || payment_method === "INVOICE"
         ? total_amount : paid;
@@ -3284,10 +3312,17 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       }
 
       const orderResult = await q(
-        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid]
+        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid, split_cash_amount, split_second_amount, split_second_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid, split_cash_amount, split_second_amount, split_second_method]
       );
       const pos_order_id = orderResult.lastID;
+
+      if (payment_method === "SPLIT" && split_second_method === "CREDIT" && split_second_amount > 0) {
+        await q(
+          "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
+          [buyer_name || "Customer", buyer_phone || "", pos_order_id, total_amount, split_cash_amount, split_second_amount]
+        ).catch((e) => console.error("[credit_records] SPLIT credit error:", e.message));
+      }
 
       // Stock deductions (skip for Made-To-Order items where track_stock = 0)
       const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
@@ -3523,8 +3558,8 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
           // Shift covers ALL orders checked out at the till during the shift window,
           // regardless of which employee (waiter/cashier) originally created the order.
           // Cash sales = physical cash that landed in the drawer (CASH + DISCOUNT orders from all staff)
-          cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method = 'MOBILE MONEY' AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          momoSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN payment_method = 'MOBILE MONEY' THEN total_amount WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           // totalSales = ALL sales from every waiter & cashier during the shift (informational total)
           totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
@@ -3612,7 +3647,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
       // Re-attribute ALL orders and income transactions in this shift window to the shift cashier.
       // Waiters create orders but the cashier on the till is accountable for all cash collected.
       const endTimeNow = new Date().toISOString();
-      db.run("UPDATE pos_orders SET cashier_id = ? WHERE order_date >= ? AND cashier_id != ?", [cashierId, startTime, cashierId]);
+      db.run("UPDATE pos_orders SET cashier_id = ? WHERE order_date >= ? AND payment_method NOT IN ('COD', 'INVOICE') AND cashier_id != ?", [cashierId, startTime, cashierId]);
       db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'INCOME' AND transaction_date >= ? AND recorded_by != ?", [cashierId, startTime, cashierId]);
       // Associate expenses and float during this shift to the cashier
       db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date >= ?", [cashierId, startTime]);
@@ -3621,8 +3656,8 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
       const queries = {
         // Shift covers ALL orders checked out at the till — no cashier_id filter
         // Cash sales = physical cash in drawer (CASH + DISCOUNT from every waiter & cashier)
-        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method = 'MOBILE MONEY' AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        momoSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN payment_method = 'MOBILE MONEY' THEN total_amount WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // totalSales = ALL sales from every waiter & cashier during the shift (informational)
         totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Expenses = all cash handed out of drawer during this shift
@@ -3950,8 +3985,8 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
             (SELECT COALESCE(SUM(tx.amount), 0) FROM transactions tx
              WHERE tx.type = 'EXPENSE' AND tx.recorded_by = po.cashier_id
                AND tx.transaction_date >= ? AND tx.transaction_date <= ?) AS total_expense,
-            SUM(CASE WHEN po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT' THEN po.total_amount ELSE 0 END) AS cash_sales,
-            SUM(CASE WHEN po.payment_method = 'MOBILE MONEY' THEN po.total_amount ELSE 0 END) AS momo_sales,
+            SUM(CASE WHEN po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT' THEN po.total_amount WHEN po.payment_method = 'SPLIT' THEN COALESCE(po.split_cash_amount, 0) ELSE 0 END) AS cash_sales,
+            SUM(CASE WHEN po.payment_method = 'MOBILE MONEY' THEN po.total_amount WHEN po.payment_method = 'SPLIT' AND (po.split_second_method = 'MOBILE MONEY' OR po.split_second_method = 'MOMO') THEN COALESCE(po.split_second_amount, 0) ELSE 0 END) AS momo_sales,
             SUM(po.total_amount) AS total_sales
         FROM pos_orders po
         LEFT JOIN employees e ON po.cashier_id = e.id
@@ -4086,6 +4121,46 @@ app.post("/api/credits/pay", authenticateToken, (req, res) => {
       );
     },
   );
+});
+
+// Delete an entire credit account (all credit records for a customer)
+app.delete("/api/credits/account/:buyer_name", authenticateToken, (req, res) => {
+  const buyer_name = decodeURIComponent(req.params.buyer_name || "").trim();
+  if (!buyer_name) {
+    return res.status(400).json({ error: "Buyer name is required." });
+  }
+
+  db.run("DELETE FROM credit_records WHERE buyer_name = ?", [buyer_name], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    emitAndBust("credits", "credits");
+    io.emit("db_updated", { module: "credits" });
+    res.json({ success: true, message: `Credit account for "${buyer_name}" has been deleted.` });
+  });
+});
+
+app.delete("/api/credits/account", authenticateToken, (req, res) => {
+  const buyer_name = (req.body && req.body.buyer_name ? String(req.body.buyer_name) : "").trim();
+  if (!buyer_name) {
+    return res.status(400).json({ error: "Buyer name is required." });
+  }
+
+  db.run("DELETE FROM credit_records WHERE buyer_name = ?", [buyer_name], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    emitAndBust("credits", "credits");
+    io.emit("db_updated", { module: "credits" });
+    res.json({ success: true, message: `Credit account for "${buyer_name}" has been deleted.` });
+  });
+});
+
+// Delete an individual credit record by ID
+app.delete("/api/credits/:id", authenticateToken, (req, res) => {
+  const creditId = req.params.id;
+  db.run("DELETE FROM credit_records WHERE id = ?", [creditId], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    emitAndBust("credits", "credits");
+    io.emit("db_updated", { module: "credits" });
+    res.json({ success: true, message: "Credit record deleted." });
+  });
 });
 
 app.get("/api/buyers", authenticateToken, (req, res) => {
@@ -6329,7 +6404,28 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
 
   db.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows || []);
+    if (!rows || rows.length === 0) return res.json([]);
+    const orderIds = rows.map((r) => r.pos_order_id).filter(Boolean);
+    if (!orderIds.length) return res.json(rows);
+    const placeholders = orderIds.map(() => "?").join(",");
+    db.all(
+      `SELECT oi.pos_order_id, oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
+       FROM order_items oi WHERE oi.pos_order_id IN (${placeholders})`,
+      orderIds,
+      (itemErr, items) => {
+        const itemMap = {};
+        if (!itemErr && items) {
+          items.forEach((it) => {
+            if (!itemMap[it.pos_order_id]) itemMap[it.pos_order_id] = [];
+            itemMap[it.pos_order_id].push(it);
+          });
+        }
+        rows.forEach((r) => {
+          r.items = itemMap[r.pos_order_id] || [];
+        });
+        res.json(rows);
+      }
+    );
   });
 });
 
@@ -6370,13 +6466,32 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
 // Use pos_order_id to mark COD/Invoice as received, since Invoices don't have delivery records
 app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res) => {
   try {
+    const userRoleNow = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+    if (userRoleNow === "CASHIER") {
+      const openShift = await new Promise((resolve) => {
+        db.get(
+          "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL AND (cashier_id = ? OR cashier_id IS NULL) ORDER BY id DESC LIMIT 1",
+          [req.user.id],
+          (err, row) => resolve(row || null)
+        );
+      });
+      if (!openShift) {
+        return res.status(403).json({ error: "Please start your shift before collecting payments." });
+      }
+    }
+
     let transactionData = null;
     const paymentMethod = (req.body && req.body.payment_method) ? String(req.body.payment_method).toUpperCase() : "CASH";
-    const isCredit = paymentMethod === "CREDIT";
+    const splitCashAmount = paymentMethod === "SPLIT" ? (parseFloat(req.body.split_cash_amount) || 0) : 0;
+    const splitSecondAmount = paymentMethod === "SPLIT" ? (parseFloat(req.body.split_second_amount) || 0) : 0;
+    const splitSecondMethod = paymentMethod === "SPLIT" ? String(req.body.split_second_method || "MOBILE MONEY").toUpperCase() : "";
+    const isCredit = paymentMethod === "CREDIT" || (paymentMethod === "SPLIT" && splitSecondMethod === "CREDIT");
     const amountPaid = req.body && req.body.amount_paid !== undefined ? parseFloat(req.body.amount_paid) || 0 : null;
     const buyerNameInput = req.body && req.body.buyer_name ? String(req.body.buyer_name).trim() : null;
     const buyerPhoneInput = req.body && req.body.buyer_phone ? String(req.body.buyer_phone).trim() : null;
-    const desc = isCredit ? "POS Sale (CREDIT)" : `POS Sale (${paymentMethod})`;
+    const desc = paymentMethod === "SPLIT"
+      ? `POS Sale (SPLIT: Cash UGX ${splitCashAmount.toLocaleString()} + ${splitSecondMethod} UGX ${splitSecondAmount.toLocaleString()})`
+      : (isCredit ? "POS Sale (CREDIT)" : `POS Sale (${paymentMethod})`);
 
     await db.withTransaction(async (q) => {
       const rowRes = await q(
@@ -6392,32 +6507,49 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       const totalAmt = parseFloat(row.total_amount) || 0;
 
       let effectivePaid = amountPaid !== null ? amountPaid : totalAmt;
-      if (isCredit && effectivePaid >= totalAmt) {
+      if (paymentMethod === "SPLIT") {
+        if (splitSecondMethod === "CREDIT") {
+          effectivePaid = splitCashAmount;
+        } else {
+          effectivePaid = totalAmt;
+        }
+      } else if (isCredit && effectivePaid >= totalAmt) {
         effectivePaid = 0; // full credit
       }
 
       await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
 
+      const now = new Date().toISOString();
       const paymentStatus = isCredit ? (effectivePaid === 0 ? "UNPAID" : "PARTIAL") : "PAID";
-      await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ?, amount = ? WHERE id = ?", [
+      await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ?, amount = ?, transaction_date = ? WHERE id = ?", [
         req.user.id,
         paymentStatus,
         desc,
         isCredit ? effectivePaid : totalAmt,
+        now,
         row.transaction_id
       ]);
 
-      await q("UPDATE pos_orders SET cashier_id = ?, amount_paid = ?, payment_method = ?, buyer_name = ?, buyer_phone = ? WHERE id = ?", [
-        req.user.id,
-        effectivePaid,
-        paymentMethod,
-        effBuyerName,
-        effBuyerPhone,
-        row.pos_order_id
-      ]);
+      await q(
+        "UPDATE pos_orders SET cashier_id = ?, amount_paid = ?, payment_method = ?, buyer_name = ?, buyer_phone = ?, split_cash_amount = ?, split_second_amount = ?, split_second_method = ?, order_date = ? WHERE id = ?",
+        [
+          req.user.id,
+          effectivePaid,
+          paymentMethod,
+          effBuyerName,
+          effBuyerPhone,
+          splitCashAmount,
+          splitSecondAmount,
+          splitSecondMethod,
+          now,
+          row.pos_order_id
+        ]
+      );
 
       if (isCredit) {
-        const balance = Math.max(0, totalAmt - effectivePaid);
+        const balance = paymentMethod === "SPLIT"
+          ? splitSecondAmount
+          : Math.max(0, totalAmt - effectivePaid);
         await q(
           "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
           [effBuyerName, effBuyerPhone, row.pos_order_id, totalAmt, effectivePaid, balance]

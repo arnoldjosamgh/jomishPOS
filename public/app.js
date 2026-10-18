@@ -694,13 +694,17 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (btnCheckout) {
-    btnCheckout.addEventListener("click", () => {
+    btnCheckout.addEventListener("click", async () => {
       if (posCart.length === 0) return alert("Cart is empty!");
+      const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+      if (_roleNow === "CASHIER" && !window._hasActiveCashierShift) {
+        const hasShift = await window.ensureCashierShiftActive("checkout orders");
+        if (!hasShift) return;
+      }
       if (_currentEditOrder && _currentEditOrder.id) {
         alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
         return;
       }
-      const _roleNow = (USER_ROLE || "").toUpperCase();
       if (_roleNow === "WAITER") {
         alert("Waiters cannot collect payment. Please click 'SEND TO CASHIER'.");
         return;
@@ -2617,9 +2621,9 @@ function enforceRBAC() {
 
   const posNavMap = {
     // Register — Cashier + Tech + Waiter + Supervisor
-    "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor,
+    "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor || isAdminLike,
     // Pending Sales — Cashier + Waiter + Supervisor + Tech
-    "pos-nav-pending":  isCashier || isWaiter || isSupervisor || isTech,
+    "pos-nav-pending":  isCashier || isWaiter || isSupervisor || isTech || isAdminLike,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
     // Low Stock — Admin-like + Tech
@@ -3924,9 +3928,10 @@ function _renderPOSGrid(products, searchTerm = "") {
     const prodPrice = Number(p.price) || 0;
     const prodStock = Number(p.stock) || 0;
     const prodCat = p.category || "General";
+    const isUnlimited = p.track_stock === 0;
 
     const card = document.createElement("div");
-    card.className = `product-card ${prodStock <= 0 ? "empty" : ""}`;
+    card.className = `product-card ${!isUnlimited && prodStock <= 0 ? "empty" : ""}`;
 
     const catClass = `category-${prodCat.toLowerCase()}`;
     let imageHtml;
@@ -3958,12 +3963,12 @@ function _renderPOSGrid(products, searchTerm = "") {
                 <h4>${prodName}</h4>
                 <div class="price">UGX ${prodPrice.toLocaleString()}</div>
                 <div class="stock" style="display:flex;justify-content:space-between;align-items:center;">
-                    <span>${prodStock > 0 ? "In Stock: " + prodStock : "\u26a0\ufe0f Out of Stock"}</span>
+                    <span>${isUnlimited ? '<span style="color:#8B5CF6; font-weight:700;"><i class="fa-solid fa-infinity"></i> Unlimited</span>' : (prodStock > 0 ? "In Stock: " + prodStock : "\u26a0\ufe0f Out of Stock")}</span>
                     ${p.barcode ? `<span style="font-size:0.6rem;background:rgba(99,102,241,0.15);color:var(--primary);padding:2px 6px;border-radius:4px;">#${p.barcode}</span>` : ""}
                 </div>
             </div>
         `;
-    if (prodStock > 0) card.onclick = () => addToCart(p);
+    if (isUnlimited || prodStock > 0) card.onclick = () => addToCart(p);
     grid.appendChild(card);
   });
 
@@ -4102,7 +4107,37 @@ async function stopProductScanner() {
   document.getElementById("product-scanner-modal").classList.add("hidden");
 }
 
+window.ensureCashierShiftActive = async function (actionName = "proceed") {
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_role !== "CASHIER") return true;
+
+  if (window._hasActiveCashierShift === true) return true;
+
+  try {
+    const res = await fetchAuth(`${API_URL}/pos/current-shift`);
+    if (res.ok) {
+      const data = await res.json();
+      window._hasActiveCashierShift = !!(data.has_active_shift && data.shift);
+      window._activeCashierShiftData = data.shift || null;
+      if (window._hasActiveCashierShift) return true;
+    }
+  } catch (_) {}
+
+  showToast(`Please tap "Start Shift" before you can ${actionName}.`, "warning");
+  if (typeof openStartShiftModal === "function") {
+    openStartShiftModal();
+  }
+  return false;
+};
+
 function addToCart(p, scannedBarcode = null) {
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_role === "CASHIER" && !window._hasActiveCashierShift) {
+    window.ensureCashierShiftActive("add items to cart").then((active) => {
+      if (active) addToCart(p, scannedBarcode);
+    });
+    return;
+  }
   const existing = posCart.find((i) => i.id === p.id);
   
   // Calculate what the stock will be after adding 1 more to the cart
@@ -4144,46 +4179,35 @@ function addToCart(p, scannedBarcode = null) {
 function updateCartQty(id, delta) {
   const item = posCart.find((i) => i.id === id);
   if (!item) return;
-  // In edit-order mode: cannot reduce below original qty (items already made)
-  if (_currentEditOrder && _currentEditOrder.id && delta < 0) {
-    const originalItem = _editOrderOriginalQtys && _editOrderOriginalQtys[id];
-    const minQty = originalItem !== undefined ? originalItem : 1;
-    if ((item.qty + delta) < minQty) {
-      showToast(`Cannot reduce "${item.name}" — already prepared. You can only add more.`, "warning");
-      return;
-    }
-  }
   item.qty += delta;
-  if (item.qty <= 0) posCart = posCart.filter((i) => i.id !== id);
+  if (item.qty <= 0) {
+    removeFromCart(id);
+    return;
+  }
   renderCart();
 }
 
+window.removeFromCart = function (id) {
+  if (posCart.length <= 1) {
+    showToast("An order must have at least one item. If you wish to cancel this order, tap Cancel.", "warning");
+    return;
+  }
+  const item = posCart.find((i) => i.id === id);
+  const name = item ? item.name : "Item";
+  posCart = posCart.filter((i) => i.id !== id);
+  showToast(`Removed "${name}" from order`, "info");
+  renderCart();
+};
+
 function setCartQty(id, val) {
   const qty = parseInt(val);
-  // In edit-order mode: cannot reduce below original qty
-  if (_currentEditOrder && _currentEditOrder.id) {
-    const originalQty = _editOrderOriginalQtys && _editOrderOriginalQtys[id];
-    const minQty = originalQty !== undefined ? originalQty : 1;
-    if (!isNaN(qty) && qty < minQty) {
-      showToast(`Cannot reduce below original quantity (${minQty}) — item already prepared.`, "warning");
-      const item = posCart.find((i) => i.id === id);
-      if (item) renderCart(); // reset input visually
-      return;
-    }
-  }
   if (isNaN(qty) || qty <= 0) {
-    // In edit mode, don't allow removing original items
-    if (_currentEditOrder && _currentEditOrder.id && _editOrderOriginalQtys && _editOrderOriginalQtys[id] !== undefined) {
-      showToast(`Cannot remove "${posCart.find(i=>i.id===id)?.name}" — already prepared.`, "warning");
-      renderCart();
-      return;
-    }
-    posCart = posCart.filter((i) => i.id !== id);
+    removeFromCart(id);
   } else {
     const item = posCart.find((i) => i.id === id);
     if (item) item.qty = qty;
+    renderCart();
   }
-  renderCart();
 }
 
 function renderCart() {
@@ -4211,6 +4235,7 @@ function renderCart() {
                     onchange="setCartQty(${item.id}, this.value)"
                     oninput="setCartQty(${item.id}, this.value)">
                 <button class="qty-btn" onclick="updateCartQty(${item.id}, 1)">+</button>
+                <button class="qty-btn" onclick="removeFromCart(${item.id})" title="Remove item" style="color:var(--danger, #EF4444); border-color:rgba(239, 68, 68, 0.35); margin-left:4px;"><i class="fa-solid fa-trash-can"></i></button>
             </div>`;
     container.appendChild(el);
   });
@@ -4381,6 +4406,40 @@ window.handleDeliveryCheckboxChange = function () {
   }
 };
 
+window.updateSplitBalance = function () {
+  const btnCheckout = document.getElementById("btn-checkout");
+  const total = parseFloat(
+    btnCheckout?.getAttribute("data-total") || window._pendingOrderTotal || "0"
+  ) || 0;
+  const cashInput = document.getElementById("split-cash-amount");
+  const secSelect = document.getElementById("split-second-method");
+  const balEl = document.getElementById("split-remaining-balance");
+  const buyerContainer = document.getElementById("buyer-name-container");
+
+  const cashVal = parseFloat(cashInput?.value) || 0;
+  const remaining = Math.max(0, total - cashVal);
+
+  if (balEl) {
+    balEl.textContent = `UGX ${Math.round(remaining).toLocaleString()}`;
+  }
+
+  const payInput = document.getElementById("pay-amount");
+  if (payInput) {
+    payInput.value = total;
+  }
+  if (typeof updateChange === "function") updateChange();
+
+  const secMethod = secSelect ? secSelect.value : "MOBILE MONEY";
+  if (secMethod === "CREDIT") {
+    if (buyerContainer) buyerContainer.style.display = "block";
+  } else {
+    const deliveryChk = document.getElementById("send-to-transport-chk");
+    if (!deliveryChk || !deliveryChk.checked) {
+      if (buyerContainer) buyerContainer.style.display = "none";
+    }
+  }
+};
+
 window.handlePaymentMethodChange = async function () {
   const methodSelect = document.getElementById("payment-method-select");
   if (!methodSelect) return;
@@ -4388,6 +4447,19 @@ window.handlePaymentMethodChange = async function () {
   const buyerContainer = document.getElementById("buyer-name-container");
   const payAmountInput = document.getElementById("pay-amount");
   const deliveryChk = document.getElementById("send-to-transport-chk");
+  const splitContainer = document.getElementById("split-payment-container");
+
+  if (method === "SPLIT") {
+    if (splitContainer) splitContainer.style.display = "block";
+    if (payAmountInput) payAmountInput.removeAttribute("readonly");
+    const payLabel = document.getElementById("pay-amount-label") || (payAmountInput ? payAmountInput.previousElementSibling : null);
+    if (payLabel) payLabel.textContent = "Total Amount Due (UGX)";
+    if (typeof window.updateSplitBalance === "function") {
+      window.updateSplitBalance();
+    }
+  } else {
+    if (splitContainer) splitContainer.style.display = "none";
+  }
 
   if (method === "COD") {
     if (deliveryChk) {
@@ -4462,6 +4534,8 @@ async function confirmPayment() {
     alert("Only a Cashier can collect direct payment. Use 'PRINT INVOICE' instead.");
     return;
   }
+  const hasActiveShift = await window.ensureCashierShiftActive("process payments");
+  if (!hasActiveShift) return;
   // Block: if we are in edit-order mode, save the edit instead of creating a new order
   if (_currentEditOrder && _currentEditOrder.id) {
     alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
@@ -4484,7 +4558,27 @@ async function confirmPayment() {
   const isDelivery = document.getElementById("send-to-transport-chk")?.checked || false;
   const deliveryAddress = document.getElementById("delivery-address-input")?.value?.trim() || "";
 
-  if (paymentMethod === "CREDIT") {
+  let splitCash = 0;
+  let splitSec = 0;
+  let splitSecMethod = "MOBILE MONEY";
+
+  if (paymentMethod === "SPLIT") {
+    splitCash = parseFloat(document.getElementById("split-cash-amount")?.value) || 0;
+    if (splitCash < 0) {
+      alert("Cash amount cannot be negative!");
+      return;
+    }
+    if (splitCash > Math.round(total)) {
+      alert(`Cash amount (UGX ${splitCash.toLocaleString()}) cannot exceed total due (UGX ${Math.round(total).toLocaleString()})!`);
+      return;
+    }
+    splitSec = Math.max(0, Math.round(total) - splitCash);
+    splitSecMethod = document.getElementById("split-second-method")?.value || "MOBILE MONEY";
+    if (splitSecMethod === "CREDIT" && !buyerName) {
+      alert("Please enter Customer / Buyer Name for the remaining Credit balance.");
+      return;
+    }
+  } else if (paymentMethod === "CREDIT") {
     if (paid > Math.round(total)) {
       alert("For credit, amount paid cannot exceed the total amount.");
       return;
@@ -4540,6 +4634,9 @@ async function confirmPayment() {
         buyer_phone: buyerPhone,
         is_delivery: isDelivery,
         delivery_address: deliveryAddress,
+        split_cash_amount: splitCash,
+        split_second_amount: splitSec,
+        split_second_method: splitSecMethod,
       }),
     });
     if (res.ok) {
@@ -4568,11 +4665,15 @@ async function confirmPayment() {
         }
       });
 
+      const methodLabel = paymentMethod === "SPLIT"
+        ? `SPLIT (Cash: UGX ${splitCash.toLocaleString()} + ${splitSecMethod}: UGX ${splitSec.toLocaleString()})`
+        : paymentMethod;
+
       printReceipt(
         posCart,
         effectiveTotal,
         result.receipt_no || result.transaction_id,
-        paymentMethod,
+        methodLabel,
         paid,
         buyerName,
         null,
@@ -5299,6 +5400,8 @@ window.updateCashierShiftUI = async function () {
     const res = await fetchAuth(`${API_URL}/pos/current-shift`);
     if (res.ok) {
       const data = await res.json();
+      window._hasActiveCashierShift = !!(data.has_active_shift && data.shift);
+      window._activeCashierShiftData = data.shift || null;
       if (data.has_active_shift && data.shift) {
         // Active shift is running: Start Shift is faded/disabled, End Shift is unfaded/active
         if (btnStartShift) {
@@ -5348,6 +5451,8 @@ window.updateCashierShiftUI = async function () {
           btnEndShift.title = "Start a shift first before ending";
           btnEndShift.innerHTML = '<i class="fa-solid fa-power-off"></i> End Shift';
         }
+        window._hasActiveCashierShift = false;
+        window._activeCashierShiftData = null;
         if (shiftBanner) {
           shiftBanner.style.setProperty("display", "none", "important");
         }
@@ -5434,6 +5539,7 @@ window.confirmStartShift = async function () {
         info.textContent = `Started ${timeStr} • Starting Capital: UGX ${startCash.toLocaleString()}`;
       }
 
+      window._hasActiveCashierShift = true;
       showToast(`Shift started! Starting Capital: UGX ${startCash.toLocaleString()}`, "success");
       await updateCashierShiftUI();
     } else {
@@ -5573,6 +5679,8 @@ window.finaliseEndShift = async function () {
     const report = await res.json();
     if (res.ok) {
       closeEndShiftPreviewModal();
+      window._hasActiveCashierShift = false;
+      window._activeCashierShiftData = null;
       showToast(`Shift ended! Total Cash: UGX ${Number(report.end_cash || 0).toLocaleString()}`, "success");
 
       // Print then log out — shift is already CLOSED in the DB
@@ -6925,7 +7033,7 @@ function renderSmeProductsTable(products) {
     const totalSold = Number(p.total_sold) || 0;
     const soldToday = Number(p.sold_today) || 0;
     const rev = Number(p.total_revenue) || (totalSold * (Number(p.price) || 0));
-    const statusText = p.track_stock === 0 ? '<span style="color:#8B5CF6; font-weight:600;"><i class="fa-solid fa-infinity"></i> Made to Order</span>' : `Stock: <strong>${p.stock}</strong>`;
+    const statusText = p.track_stock === 0 ? '<span style="color:#8B5CF6; font-weight:700;"><i class="fa-solid fa-infinity"></i> Unlimited</span>' : `Stock: <strong>${p.stock}</strong>`;
 
     return `
       <tr style="border-bottom:1px solid var(--border);">
@@ -7050,7 +7158,7 @@ function renderModalProductSalesTable(products) {
     const totalSold = Number(p.total_sold) || 0;
     const soldToday = Number(p.sold_today) || 0;
     const rev = Number(p.total_revenue) || (totalSold * (Number(p.price) || 0));
-    const statusText = p.track_stock === 0 ? '<span style="color:#8B5CF6; font-weight:600;"><i class="fa-solid fa-infinity"></i> Made to Order</span>' : `Stock: <strong>${p.stock}</strong>`;
+    const statusText = p.track_stock === 0 ? '<span style="color:#8B5CF6; font-weight:700;"><i class="fa-solid fa-infinity"></i> Unlimited</span>' : `Stock: <strong>${p.stock}</strong>`;
 
     return `
       <tr style="border-bottom:1px solid var(--border);">
@@ -8462,7 +8570,7 @@ async function loadInventory() {
                     ${soldCounterHtml}
                     <div style="margin-top:6px; display:flex; justify-content:space-between; align-items:center;">
                         <div class="stock" style="font-weight:bold; color:${p.track_stock === 0 ? "var(--text-muted)" : (p.stock < thresh ? "var(--danger)" : "var(--primary)")};">
-                            ${p.track_stock === 0 ? "∞ Made to Order" : "Stock: " + p.stock + (p.stock < thresh ? ` <small style="color:var(--danger);font-size:0.7rem;">(Alert &lt; ${thresh})</small>` : "")}
+                            ${p.track_stock === 0 ? '<span style="color:#8B5CF6; font-weight:700;"><i class="fa-solid fa-infinity"></i> Unlimited</span>' : "Stock: " + p.stock + (p.stock < thresh ? ` <small style="color:var(--danger);font-size:0.7rem;">(Alert &lt; ${thresh})</small>` : "")}
                         </div>
                         <div style="display:flex; gap:4px; align-items:center;">
                             <input type="number" id="restock-qty-${p.id}" value="10" min="1" style="width:55px; background:#fff; border:1px solid #ccc; border-radius:6px; color:#111 !important; font-size:0.8rem; padding:4px 4px; text-align:center; font-weight:700;">
@@ -12198,9 +12306,137 @@ window.removePendingOrderFromUI = function (posOrderId, txId) {
   }
 };
 
-window.loadPendingCOD = async function (force = false) {
+let _allPendingOrders = [];
+
+window.filterPendingOrders = function (query) {
+  const q = (query || "").trim();
+  const filtered = _filterPendingOrdersList(_allPendingOrders, q);
+  _renderPendingOrders(filtered, q);
+};
+
+function _filterPendingOrdersList(list, query) {
+  if (!query || !query.trim()) return list;
+  const q = query.trim().toLowerCase();
+  const digitsOnly = q.replace(/\D/g, "");
+
+  return list.filter((d) => {
+    // 1. Invoice number match: e.g. "003", "3", "ivn003", "inv003"
+    const invNum = d.invoice_number || d.pos_order_id;
+    const invLabel = formatDocNo("INV", invNum).toLowerCase();
+    const rawInv = String(invNum).toLowerCase();
+    const padded = String(invNum).padStart(3, "0");
+    const invoiceMatch =
+      invLabel.includes(q) ||
+      rawInv.includes(q) ||
+      (digitsOnly.length > 0 && (padded.includes(digitsOnly) || rawInv.includes(digitsOnly)));
+
+    // 2. Server name match
+    const serverMatch = (d.served_by || "").toLowerCase().includes(q);
+
+    // 3. Client name match
+    const clientMatch =
+      (d.client_name || "").toLowerCase().includes(q) ||
+      (d.buyer_name || "").toLowerCase().includes(q);
+
+    // 4. Specific product match: brings all orders with the product
+    const productMatch =
+      Array.isArray(d.items) &&
+      d.items.some((it) => (it.name || it.product_name || "").toLowerCase().includes(q));
+
+    return invoiceMatch || serverMatch || clientMatch || productMatch;
+  });
+}
+
+function _renderPendingOrders(deliveries, currentQuery = "") {
+  const listContainer = document.getElementById("cod-list-container");
+  if (!listContainer) return;
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isWaiterUser = _role === "WAITER" || _role === "SUPERVISOR";
+  const isCashierRole = _role === "CASHIER";
+
+  if (deliveries.length === 0) {
+    if (currentQuery) {
+      listContainer.innerHTML = `<p style="text-align:center;color:var(--text-muted);padding:30px;"><i class="fa-solid fa-magnifying-glass"></i> No pending orders match "${currentQuery}".</p>`;
+    } else {
+      listContainer.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:20px;">No pending sales / transactions.</p>';
+    }
+    return;
+  }
+
+  let html = "";
+  deliveries.forEach((d) => {
+    const safeClient = (d.client_name || "").replace(/'/g, "\\'");
+    const safeServer = (d.served_by || "").replace(/'/g, "\\'");
+    const invNum = d.invoice_number || d.pos_order_id;
+    const invoiceLabel = formatDocNo("INV", invNum);
+
+    const waiterBadge = d.served_by
+      ? `<div style="display:inline-flex; align-items:center; gap:5px; background:rgba(79, 70, 229, 0.12); color:var(--primary, #4F46E5); padding:3px 9px; border-radius:12px; font-size:0.83rem; font-weight:700; margin-top:4px;">
+           <i class="fa-solid fa-bell-concierge"></i> Served by: ${d.served_by}
+         </div>`
+      : "";
+    html += `
+      <div id="pending-order-card-${d.pos_order_id}" data-pos-order-id="${d.pos_order_id}" data-tx-id="${d.transaction_id || ''}" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+          <div style="flex:1;">
+            <h4 style="margin:0 0 3px 0; color:var(--text); font-size:1rem;">${invoiceLabel}</h4>
+            <p style="margin:0 0 2px 0; font-size:0.88rem; color:var(--text-muted);"><i class="fa-solid fa-user"></i> ${d.client_name}</p>
+            <p style="margin:0 0 2px 0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || 'In-Store'}</p>
+            ${waiterBadge}
+            <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button onclick="openEditPendingOrder(${d.pos_order_id})"
+              style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
+              <i class="fa-solid fa-pen-to-square"></i> Edit Order
+            </button>
+            ${isCashierRole ? `<button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
+              style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
+              <i class="fa-solid fa-cash-register"></i> Collect Payment
+            </button>` : ''}
+          </div>
+        </div>
+        <div id="items-${d.pos_order_id}" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:0.83rem; color:var(--text-muted);">
+          ${
+            Array.isArray(d.items) && d.items.length > 0
+              ? d.items.map(i =>
+                  `<div style="display:flex; justify-content:space-between; padding:3px 0;">
+                    <span>${i.name} &times; ${i.qty}</span>
+                    <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
+                  </div>`
+                ).join("")
+              : "Loading items..."
+          }
+        </div>
+      </div>
+    `;
+  });
+  listContainer.innerHTML = html;
+
+  // Fallback: If items weren't pre-loaded, fetch them asynchronously
+  deliveries.forEach(async (d) => {
+    if (Array.isArray(d.items) && d.items.length > 0) return;
+    try {
+      const ir = await fetchAuth(`${API_URL}/pos_orders/${d.pos_order_id}/items`);
+      if (ir.ok) {
+        const items = await ir.json();
+        d.items = items;
+        const el = document.getElementById(`items-${d.pos_order_id}`);
+        if (el && items && items.length > 0) {
+          el.innerHTML = items.map(i =>
+            `<div style="display:flex; justify-content:space-between; padding:3px 0;">
+              <span>${i.name} &times; ${i.qty}</span>
+              <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
+            </div>`
+          ).join("");
+        } else if (el) {
+          el.textContent = "No item details available.";
+        }
+      }
+    } catch (_) {}
+  });
+}
+
+window.loadPendingCOD = async function (force = false) {
   const listContainer = document.getElementById("cod-list-container");
   if (listContainer && (!listContainer.children.length || listContainer.innerText.includes("Loading"))) {
     listContainer.innerHTML =
@@ -12222,76 +12458,10 @@ window.loadPendingCOD = async function (force = false) {
         }
       }
 
-      if (listContainer) {
-        if (deliveries.length === 0) {
-          listContainer.innerHTML =
-            '<p style="text-align:center;color:var(--text-muted);padding:20px;">No pending sales / transactions.</p>';
-          return;
-        }
-
-        let html = "";
-        deliveries.forEach((d) => {
-          const safeClient = (d.client_name || "").replace(/'/g, "\\'");
-          const safeServer = (d.served_by || "").replace(/'/g, "\\'");
-          const invNum = d.invoice_number || d.pos_order_id;
-          const invoiceLabel = formatDocNo("INV", invNum);
-
-          const waiterBadge = d.served_by
-            ? `<div style="display:inline-flex; align-items:center; gap:5px; background:rgba(79, 70, 229, 0.12); color:var(--primary, #4F46E5); padding:3px 9px; border-radius:12px; font-size:0.83rem; font-weight:700; margin-top:4px;">
-                 <i class="fa-solid fa-bell-concierge"></i> Served by: ${d.served_by}
-               </div>`
-            : "";
-          html += `
-            <div id="pending-order-card-${d.pos_order_id}" data-pos-order-id="${d.pos_order_id}" data-tx-id="${d.transaction_id || ''}" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
-              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
-                <div style="flex:1;">
-                  <h4 style="margin:0 0 3px 0; color:var(--text); font-size:1rem;">${invoiceLabel}</h4>
-                  <p style="margin:0 0 2px 0; font-size:0.88rem; color:var(--text-muted);"><i class="fa-solid fa-user"></i> ${d.client_name}</p>
-                  <p style="margin:0 0 2px 0; font-size:0.85rem; color:var(--text-muted);"><i class="fa-solid fa-location-dot"></i> ${d.client_location || 'In-Store'}</p>
-                  ${waiterBadge}
-                  <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
-                </div>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  <button onclick="openEditPendingOrder(${d.pos_order_id})"
-                    style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
-                    <i class="fa-solid fa-pen-to-square"></i> Edit Order
-                  </button>
-                  ${isWaiterUser ? '' : `<button onclick="openPendingOrderCheckout(${d.pos_order_id}, ${d.total_amount}, '${safeClient}', '${safeServer}')"
-                    style="background:var(--primary); color:white; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
-                    <i class="fa-solid fa-cash-register"></i> Collect Payment
-                  </button>`}
-                </div>
-              </div>
-              <div id="items-${d.pos_order_id}" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:0.83rem; color:var(--text-muted); font-style:italic;">
-                Loading items...
-              </div>
-            </div>
-          `;
-        });
-        listContainer.innerHTML = html;
-
-        // Load items for each pending order asynchronously
-        deliveries.forEach(async (d) => {
-          try {
-            const ir = await fetchAuth(`${API_URL}/pos_orders/${d.pos_order_id}/items`);
-            if (ir.ok) {
-              const items = await ir.json();
-              const el = document.getElementById(`items-${d.pos_order_id}`);
-              if (el && items && items.length > 0) {
-                el.style.fontStyle = "normal";
-                el.innerHTML = items.map(i =>
-                  `<div style="display:flex; justify-content:space-between; padding:3px 0;">
-                    <span>${i.name} &times; ${i.qty}</span>
-                    <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
-                  </div>`
-                ).join("");
-              } else if (el) {
-                el.textContent = "No item details available.";
-              }
-            }
-          } catch (_) {}
-        });
-      }
+      _allPendingOrders = deliveries;
+      const searchVal = document.getElementById("pending-orders-search")?.value || "";
+      const toShow = _filterPendingOrdersList(_allPendingOrders, searchVal);
+      _renderPendingOrders(toShow, searchVal);
     } else {
       const err = await res.json().catch(() => ({}));
       if (listContainer) {
@@ -12778,13 +12948,38 @@ let _isCollectingPending = false;
 // Called when cashier confirms payment for a pending order
 window.collectPendingPayment = async function (posOrderId, totalAmount) {
   if (_isCollectingPending) return;
+  const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_roleNow === "CASHIER") {
+    const hasShift = await window.ensureCashierShiftActive("collect payments");
+    if (!hasShift) return;
+  }
   const paymentMethodSelect = document.getElementById("payment-method-select");
   const paymentMethod = (paymentMethodSelect ? paymentMethodSelect.value : "CASH").toUpperCase();
   const paid = parseInt(document.getElementById("pay-amount").value) || 0;
   const buyerName = document.getElementById("buyer-name-input")?.value?.trim() || "";
   const buyerPhone = document.getElementById("buyer-phone-input")?.value?.trim() || "";
 
-  if (paymentMethod === "CREDIT") {
+  let splitCash = 0;
+  let splitSec = 0;
+  let splitSecMethod = "MOBILE MONEY";
+
+  if (paymentMethod === "SPLIT") {
+    splitCash = parseFloat(document.getElementById("split-cash-amount")?.value) || 0;
+    if (splitCash < 0) {
+      alert("Cash amount cannot be negative!");
+      return;
+    }
+    if (splitCash > Math.round(totalAmount)) {
+      alert(`Cash amount (UGX ${splitCash.toLocaleString()}) cannot exceed total due (UGX ${Math.round(totalAmount).toLocaleString()})!`);
+      return;
+    }
+    splitSec = Math.max(0, Math.round(totalAmount) - splitCash);
+    splitSecMethod = document.getElementById("split-second-method")?.value || "MOBILE MONEY";
+    if (splitSecMethod === "CREDIT" && !buyerName) {
+      alert("Please enter Customer / Buyer Name for the remaining Credit balance.");
+      return;
+    }
+  } else if (paymentMethod === "CREDIT") {
     if (!buyerName) {
       alert("Please enter a Customer / Buyer Name for Credit transactions.");
       return;
@@ -12816,6 +13011,9 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
         amount_paid: effectivePaid,
         buyer_name: buyerName,
         buyer_phone: buyerPhone,
+        split_cash_amount: splitCash,
+        split_second_amount: splitSec,
+        split_second_method: splitSecMethod,
       }),
     });
     const data = await res.json();

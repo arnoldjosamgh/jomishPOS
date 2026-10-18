@@ -484,7 +484,7 @@ const schema = [
         order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, transaction_id INTEGER,
         payment_method TEXT DEFAULT 'CASH', amount_paid REAL DEFAULT 0,
         buyer_name TEXT, buyer_phone TEXT, served_by TEXT, waiter_id INTEGER,
-        invoice_number INTEGER
+        invoice_number INTEGER, split_cash_amount REAL DEFAULT 0, split_second_amount REAL DEFAULT 0, split_second_method TEXT DEFAULT ''
     )`,
     `CREATE TABLE IF NOT EXISTS schedules (
         id SERIAL PRIMARY KEY, employee_id INTEGER, shift_date TEXT,
@@ -1529,6 +1529,29 @@ function runMigrations(fromVersion) {
             });
         });
     }
+
+    if (fromVersion < 149) {
+        // v149: Split payment columns on pos_orders
+        const alterSplitCash = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_cash_amount REAL DEFAULT 0"
+            : "ALTER TABLE pos_orders ADD COLUMN split_cash_amount REAL DEFAULT 0";
+        const alterSplitSec = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_second_amount REAL DEFAULT 0"
+            : "ALTER TABLE pos_orders ADD COLUMN split_second_amount REAL DEFAULT 0";
+        const alterSplitMethod = config.dbType === 'postgres'
+            ? "ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_second_method TEXT DEFAULT ''"
+            : "ALTER TABLE pos_orders ADD COLUMN split_second_method TEXT DEFAULT ''";
+
+        db.run(alterSplitCash, () => {
+            db.run(alterSplitSec, () => {
+                db.run(alterSplitMethod, () => {
+                    db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '149'], () => {
+                        console.log('Migration to v149 complete: Added split payment columns on pos_orders.');
+                    });
+                });
+            });
+        });
+    }
 }
 
 initDb();
@@ -1632,6 +1655,15 @@ if (config.dbType === 'postgres') {
                             ).catch(() => {});
                             await sc_client.query(
                                 `ALTER TABLE cashier_shifts ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0`
+                            ).catch(() => {});
+                            await sc_client.query(
+                                `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_cash_amount REAL DEFAULT 0`
+                            ).catch(() => {});
+                            await sc_client.query(
+                                `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_second_amount REAL DEFAULT 0`
+                            ).catch(() => {});
+                            await sc_client.query(
+                                `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_second_method TEXT DEFAULT ''`
                             ).catch(() => {});
                             // Ensure Supervisor has full admin privileges in roles_config
                             await sc_client.query(`

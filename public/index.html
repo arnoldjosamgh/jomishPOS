@@ -214,6 +214,7 @@
                         <input type="text" id="sme-search" placeholder="Search Receipt No or Item..." style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); width: 220px;">
                         <button id="btn-sme-transactions" class="secondary-btn" onclick="toggleSmeView('transactions')"><i class="fa-solid fa-money-bill-transfer"></i> Transactions</button>
                         <button id="btn-sme-invoices" class="secondary-btn" onclick="toggleSmeView('invoices')"><i class="fa-solid fa-file-invoice-dollar"></i> Customer Invoices <span id="sme-invoice-badge" style="background:#EF4444; color:#fff; border-radius:10px; padding:1px 6px; font-size:0.72rem; margin-left:4px; display:none;">0</span></button>
+                        <button id="btn-sme-pending" class="secondary-btn" onclick="switchPOSView('pending')"><i class="fa-solid fa-clock-rotate-left"></i> Pending Orders</button>
                         <button id="btn-sme-reports" class="secondary-btn" onclick="toggleSmeView('reports')"><i class="fa-solid fa-user-tie"></i> Cashier Reports</button>
                         <button id="btn-sme-product-sales" class="secondary-btn" onclick="toggleSmeView('products')"><i class="fa-solid fa-chart-pie"></i> Products Sold Counter</button>
                         <button id="btn-add-tx" class="primary-btn">+ New Transaction</button>
@@ -482,11 +483,36 @@
                                     <label style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;display:block;">Payment Method</label>
                                     <select id="payment-method-select" style="width:100%;padding:10px;background:var(--background);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:10px;" onchange="handlePaymentMethodChange()">
                                         <option value="CASH"><i class="fa-solid fa-money-bill-wave"></i> Cash</option>
+                                        <option value="SPLIT"><i class="fa-solid fa-arrows-split-up-and-left"></i> Split Payment</option>
                                         <option value="MOBILE MONEY"><i class="fa-solid fa-mobile-screen"></i> Mobile Money</option>
                                         <option value="DISCOUNT"><i class="fa-solid fa-tags"></i> Discount / Custom Price</option>
                                         <option value="CREDIT"><i class="fa-solid fa-handshake"></i> Credit</option>
                                         <option value="COD"><i class="fa-solid fa-clock"></i> Pending Payment</option>
                                     </select>
+                                </div>
+
+                                <!-- Split Payment Details Container -->
+                                <div id="split-payment-container" style="display:none; margin:10px 0; padding:12px; background:rgba(99,102,241,0.06); border:1px solid rgba(99,102,241,0.22); border-radius:8px;">
+                                    <div style="font-size:0.85rem; font-weight:700; color:var(--primary); margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+                                        <i class="fa-solid fa-arrows-split-up-and-left"></i> Split Payment
+                                    </div>
+                                    <div style="margin-bottom:8px;">
+                                        <label style="font-size:0.75rem; color:var(--text-muted); display:block; margin-bottom:4px;">1. Cash Amount (UGX)</label>
+                                        <input type="number" id="split-cash-amount" placeholder="Enter cash portion" style="width:100%; padding:10px; font-size:1.1rem; font-weight:700; background:var(--background); border:1px solid var(--border); border-radius:6px; color:var(--text);" oninput="updateSplitBalance()" onclick="this.select()">
+                                    </div>
+                                    <div style="margin-bottom:8px;">
+                                        <label style="font-size:0.75rem; color:var(--text-muted); display:block; margin-bottom:4px;">2. Second Payment Form (for Remaining Balance)</label>
+                                        <select id="split-second-method" style="width:100%; padding:9px; background:var(--background); border:1px solid var(--border); border-radius:6px; color:var(--text);" onchange="updateSplitBalance()">
+                                            <option value="MOBILE MONEY">Mobile Money</option>
+                                            <option value="CREDIT">Credit</option>
+                                            <option value="VISA / CARD">Visa / Card</option>
+                                            <option value="BANK TRANSFER">Bank Transfer</option>
+                                        </select>
+                                    </div>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; background:var(--surface); padding:8px 10px; border-radius:6px; border:1px solid var(--border); font-size:0.9rem;">
+                                        <span style="color:var(--text-muted); font-weight:600;">Remaining Balance:</span>
+                                        <strong id="split-remaining-balance" style="color:var(--primary); font-size:1.05rem;">UGX 0</strong>
+                                    </div>
                                 </div>
 
                                 <div style="margin:10px 0; display:flex; align-items:center; gap:8px;">
@@ -541,8 +567,14 @@
                 <!-- Pending Sales / COD View -->
                 <div id="pos-pending-view" class="pos-sub-view hidden" style="display: none;">
                     <div class="card" style="background: var(--surface); padding: 25px; border-radius: 12px; border: 1px solid var(--border);">
-                        <header style="margin-bottom:20px;">
+                        <header style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; flex-wrap:wrap; gap:10px;">
                             <h2><i class="fa-solid fa-file-invoice-dollar"></i> Pending Transactions</h2>
+                            <div style="display:flex; gap:10px; flex-wrap:wrap; flex:1; justify-content:flex-end; max-width:480px;">
+                                <div style="position:relative; width:100%;">
+                                    <i class="fa-solid fa-magnifying-glass" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:0.85rem;"></i>
+                                    <input type="text" id="pending-orders-search" placeholder="Search invoice (e.g. 003, IVN003), server, or product..." oninput="filterPendingOrders(this.value)" onkeyup="filterPendingOrders(this.value)" style="width:100%; padding:9px 12px 9px 34px; border-radius:8px; border:1px solid var(--border); background:var(--background); color:var(--text); font-size:0.9rem;">
+                                </div>
+                            </div>
                         </header>
                         <div id="cod-list-container" style="padding:10px 0;">
                             <!-- Injected via JS -->
