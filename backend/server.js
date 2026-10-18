@@ -3792,10 +3792,12 @@ app.post("/api/pos/cash-in", authenticateToken, (req, res) => {
 
 // Get order items by pos_order_id (used when cashier collects payment for a pending invoice)
 app.get("/api/pos_orders/:id/items", authenticateToken, (req, res) => {
+  const orderId = parseInt(req.params.id, 10);
+  if (isNaN(orderId)) return res.json([]);
   db.all(
     `SELECT oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
      FROM order_items oi WHERE oi.pos_order_id = ?`,
-    [req.params.id],
+    [orderId],
     (err, items) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json(items || []);
@@ -6433,23 +6435,30 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
   db.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!rows || rows.length === 0) return res.json([]);
-    const orderIds = rows.map((r) => r.pos_order_id).filter(Boolean);
-    if (!orderIds.length) return res.json(rows);
+    const orderIds = rows.map((r) => parseInt(r.pos_order_id, 10)).filter((id) => !isNaN(id) && id > 0);
+    if (!orderIds.length) {
+      rows.forEach(r => r.items = []);
+      return res.json(rows);
+    }
     const placeholders = orderIds.map(() => "?").join(",");
     db.all(
       `SELECT oi.pos_order_id, oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
        FROM order_items oi WHERE oi.pos_order_id IN (${placeholders})`,
       orderIds,
       (itemErr, items) => {
+        if (itemErr) {
+          console.error("[pending-cod] Error querying order_items:", itemErr.message);
+        }
         const itemMap = {};
-        if (!itemErr && items) {
+        if (items && Array.isArray(items)) {
           items.forEach((it) => {
-            if (!itemMap[it.pos_order_id]) itemMap[it.pos_order_id] = [];
-            itemMap[it.pos_order_id].push(it);
+            const pId = Number(it.pos_order_id);
+            if (!itemMap[pId]) itemMap[pId] = [];
+            itemMap[pId].push(it);
           });
         }
         rows.forEach((r) => {
-          r.items = itemMap[r.pos_order_id] || [];
+          r.items = itemMap[Number(r.pos_order_id)] || [];
         });
         res.json(rows);
       }

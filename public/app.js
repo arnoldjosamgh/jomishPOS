@@ -2620,9 +2620,9 @@ function enforceRBAC() {
   const isWaiter    = role === "WAITER";
 
   const posNavMap = {
-    // Register — Cashier + Tech + Waiter + Supervisor
-    "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor || isAdminLike,
-    // Pending Sales — Cashier + Waiter + Supervisor + Tech
+    // Register — Cashier + Tech + Waiter + Supervisor (Admin does NOT have register)
+    "pos-nav-register": isCashier || isTech || isWaiter || isSupervisor,
+    // Pending Sales — Cashier + Waiter + Supervisor + Tech + Admin-like
     "pos-nav-pending":  isCashier || isWaiter || isSupervisor || isTech || isAdminLike,
     // Inventory — Admin-like + Tech
     "pos-nav-stock":    isAdminLike || isTech,
@@ -2715,6 +2715,7 @@ function enforceRBAC() {
     if (currentView) {
       const viewToNav = {
         "pos-register-view": "pos-nav-register",
+        "pos-pending-view":  "pos-nav-pending",
         "pos-stock-view":    "pos-nav-stock",
         "pos-expenses-view": "pos-nav-expenses",
         "pos-credits-view":  "pos-nav-credits",
@@ -2725,7 +2726,7 @@ function enforceRBAC() {
       const navBtn = navId ? document.getElementById(navId) : null;
       if (navBtn && navBtn.style.display === "none") {
         // Current tab is now hidden — switch to first visible POS tab
-        const posNavOrder = ["pos-nav-register", "pos-nav-stock", "pos-nav-expenses", "pos-nav-credits", "pos-nav-finance", "pos-nav-hr"];
+        const posNavOrder = ["pos-nav-pending", "pos-nav-stock", "pos-nav-register", "pos-nav-expenses", "pos-nav-credits", "pos-nav-finance", "pos-nav-hr"];
         const firstVisibleTab = posNavOrder
           .map(id => document.getElementById(id))
           .find(btn => btn && btn.style.display !== "none");
@@ -2743,7 +2744,7 @@ function enforceRBAC() {
   } else if (isCashier) {
     setTimeout(() => switchPOSView("register"), 400);   // Cashier → Register
   } else if (isAdminLike) {
-    setTimeout(() => switchPOSView("stock"), 400);      // Admin-like → Inventory
+    setTimeout(() => switchPOSView("pending"), 400);    // Admin-like → Pending tab (no register)
   } else if (isSupervisor) {
     setTimeout(() => switchPOSView("register"), 400);   // Supervisor → Register
   } else if (isHRRole) {
@@ -12406,11 +12407,11 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
             Array.isArray(d.items) && d.items.length > 0
               ? d.items.map(i =>
                   `<div style="display:flex; justify-content:space-between; padding:3px 0;">
-                    <span>${i.name} &times; ${i.qty}</span>
+                    <span>${i.name || i.product_name || 'Item'} &times; ${i.qty}</span>
                     <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
                   </div>`
                 ).join("")
-              : "Loading items..."
+              : '<span style="color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading item details...</span>'
           }
         </div>
       </div>
@@ -12427,15 +12428,17 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
         const items = await ir.json();
         d.items = items;
         const el = document.getElementById(`items-${d.pos_order_id}`);
-        if (el && items && items.length > 0) {
-          el.innerHTML = items.map(i =>
-            `<div style="display:flex; justify-content:space-between; padding:3px 0;">
-              <span>${i.name} &times; ${i.qty}</span>
-              <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
-            </div>`
-          ).join("");
-        } else if (el) {
-          el.textContent = "No item details available.";
+        if (el) {
+          if (items && items.length > 0) {
+            el.innerHTML = items.map(i =>
+              `<div style="display:flex; justify-content:space-between; padding:3px 0;">
+                <span>${i.name || i.product_name || 'Item'} &times; ${i.qty}</span>
+                <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
+              </div>`
+            ).join("");
+          } else {
+            el.textContent = "No item details available.";
+          }
         }
       }
     } catch (_) {}
