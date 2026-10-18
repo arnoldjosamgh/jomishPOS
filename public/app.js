@@ -12478,7 +12478,9 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
                     <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
                   </div>`
                 ).join("")
-              : '<span style="color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading item details...</span>'
+              : d.items === null || d.items === undefined
+                ? '<span style="color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading item details...</span>'
+                : '<span style="color:var(--text-muted); font-style:italic;">No items recorded for this order.</span>'
           }
         </div>
       </div>
@@ -12486,29 +12488,35 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
   });
   listContainer.innerHTML = html;
 
-  // Fallback: If items weren't pre-loaded, fetch them asynchronously
+  // Fallback: If items weren't pre-loaded (null/undefined), fetch them asynchronously
   deliveries.forEach(async (d) => {
-    if (Array.isArray(d.items) && d.items.length > 0) return;
+    // If items were pre-loaded (even as empty array), skip fetch
+    if (Array.isArray(d.items)) return;
+    const el = document.getElementById(`items-${d.pos_order_id}`);
+    if (!el) return;
+    // Show spinner
+    el.innerHTML = '<span style="color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading item details...</span>';
     try {
       const ir = await fetchAuth(`${API_URL}/pos_orders/${d.pos_order_id}/items`);
       if (ir.ok) {
         const items = await ir.json();
-        d.items = items;
-        const el = document.getElementById(`items-${d.pos_order_id}`);
-        if (el) {
-          if (items && items.length > 0) {
-            el.innerHTML = items.map(i =>
-              `<div style="display:flex; justify-content:space-between; padding:3px 0;">
-                <span>${i.name || i.product_name || 'Item'} &times; ${i.qty}</span>
-                <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
-              </div>`
-            ).join("");
-          } else {
-            el.textContent = "No item details available.";
-          }
+        d.items = items || [];
+        if (items && items.length > 0) {
+          el.innerHTML = items.map(i =>
+            `<div style="display:flex; justify-content:space-between; padding:3px 0;">
+              <span>${i.name || i.product_name || 'Item'} &times; ${i.qty}</span>
+              <span style="color:var(--text); font-weight:600;">UGX ${Number(i.total || i.price * i.qty).toLocaleString()}</span>
+            </div>`
+          ).join("");
+        } else {
+          el.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No items recorded for this order.</span>';
         }
+      } else {
+        el.innerHTML = `<span style="color:var(--text-muted); font-style:italic;">Could not load items.</span>`;
       }
-    } catch (_) {}
+    } catch (_) {
+      if (el) el.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Could not load items.</span>';
+    }
   });
 }
 
