@@ -2460,7 +2460,15 @@ app.get("/api/products", authenticateToken, (req, res) => {
           });
         }
 
-        const todayStr = new Date().toISOString().split("T")[0];
+        let todayDateStr = "";
+        try {
+          todayDateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Kampala" });
+        } catch (_) {
+          todayDateStr = new Date().toISOString().split("T")[0];
+        }
+        const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
+        const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
+
         const salesSql = `
           SELECT 
             oi.product_id, 
@@ -2468,47 +2476,50 @@ app.get("/api/products", authenticateToken, (req, res) => {
             COALESCE(SUM(oi.qty), 0) AS total_sold,
             COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today
           FROM order_items oi
-          LEFT JOIN pos_orders po ON oi.pos_order_id = po.id
+          JOIN pos_orders po ON oi.pos_order_id = po.id
           GROUP BY oi.product_id, oi.product_name
         `;
 
-        db.all(salesSql, [todayStr], (salesErr, salesRows) => {
-          const soldById = {};
-          const soldByName = {};
-          const soldTodayById = {};
-          const soldTodayByName = {};
+        db.all(salesSql, [todayStartSql], (salesErr, salesRows) => {
+          const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+          const prodById = new Map();
+          const prodByName = new Map();
+          const prodSales = new Map();
+
+          products.forEach((p) => {
+            prodById.set(Number(p.id), p);
+            const n = norm(p.name);
+            if (n && !prodByName.has(n)) prodByName.set(n, p);
+            prodSales.set(p.id, { total_sold: 0, sold_today: 0 });
+          });
 
           if (!salesErr && salesRows) {
             salesRows.forEach((r) => {
               const qty = Number(r.total_sold) || 0;
               const todayQty = Number(r.sold_today) || 0;
-              if (r.product_id) {
-                soldById[r.product_id] = (soldById[r.product_id] || 0) + qty;
-                soldTodayById[r.product_id] = (soldTodayById[r.product_id] || 0) + todayQty;
-              }
-              if (r.product_name) {
-                const nameKey = String(r.product_name).trim().toLowerCase();
-                soldByName[nameKey] = (soldByName[nameKey] || 0) + qty;
-                soldTodayByName[nameKey] = (soldTodayByName[nameKey] || 0) + todayQty;
+              const pid = Number(r.product_id);
+              const pNameNorm = norm(r.product_name);
+              const matchedProd = (pid && prodById.get(pid)) || (pNameNorm && prodByName.get(pNameNorm));
+              if (matchedProd) {
+                const s = prodSales.get(matchedProd.id);
+                s.total_sold += qty;
+                s.sold_today += todayQty;
               }
             });
           }
 
           const productsWithDetails = products.map((p) => {
-            const nameKey = p.name ? String(p.name).trim().toLowerCase() : "";
-            const totalSold = (p.id && soldById[p.id]) || (nameKey && soldByName[nameKey]) || 0;
-            const soldToday = (p.id && soldTodayById[p.id]) || (nameKey && soldTodayByName[nameKey]) || 0;
-
+            const s = prodSales.get(p.id) || { total_sold: 0, sold_today: 0 };
             return {
               ...p,
               additional_barcodes: barcodeMap[p.id] || [],
-              total_sold: totalSold,
-              sold_today: soldToday,
+              total_sold: s.total_sold,
+              sold_today: s.sold_today,
             };
           });
 
           const result = { products: productsWithDetails };
-          setCache(schema, "products", result, 30); // 30s TTL
+          setCache(schema, "products", result, 15); // 15s TTL
           res.json(result);
         });
       },
@@ -2519,7 +2530,14 @@ app.get("/api/products", authenticateToken, (req, res) => {
 // Dedicated product sales analytics / counter report for CEO and Management
 app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
   const { start_date, end_date } = req.query;
-  const todayStr = new Date().toISOString().split("T")[0];
+  let todayDateStr = "";
+  try {
+    todayDateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Kampala" });
+  } catch (_) {
+    todayDateStr = new Date().toISOString().split("T")[0];
+  }
+  const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
+  const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
 
   let dateFilter = "";
   let params = [];
@@ -2528,53 +2546,119 @@ app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
     params = [start_date, end_date + " 23:59:59"];
   }
 
-  const sql = `
-    SELECT 
-      p.id,
-      p.name,
-      p.category,
-      p.price,
-      p.buying_price,
-      p.stock,
-      p.track_stock,
-      COALESCE(SUM(oi.qty), 0) AS total_sold,
-      COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today,
-      COALESCE(SUM(oi.total), 0) AS total_revenue
-    FROM products p
-    LEFT JOIN order_items oi ON (oi.product_id = p.id OR LOWER(oi.product_name) = LOWER(p.name))
-    LEFT JOIN pos_orders po ON oi.pos_order_id = po.id ${dateFilter}
-    GROUP BY p.id, p.name, p.category, p.price, p.buying_price, p.stock, p.track_stock
-    ORDER BY total_sold DESC, p.name ASC
-  `;
+  // 1. Fetch current catalog products
+  db.all(
+    "SELECT id, name, category, price, buying_price, stock, track_stock, low_stock_threshold FROM products ORDER BY name ASC",
+    [],
+    (pErr, products) => {
+      if (pErr) return res.status(500).json({ error: pErr.message });
 
-  const queryParams = [todayStr, ...params];
-  db.all(sql, queryParams, (err, rows) => {
-    if (err) {
-      // Fallback in case of join issue
-      return db.all("SELECT id, name, category, price, buying_price, stock, track_stock, 0 as total_sold, 0 as sold_today, 0 as total_revenue FROM products ORDER BY name ASC", [], (e2, fallbackRows) => {
-        if (e2) return res.status(500).json({ error: err.message });
-        res.json({ products: fallbackRows || [], totalItemsSold: 0, totalItemsSoldToday: 0 });
+      // 2. Fetch aggregated sales from order_items joined with pos_orders
+      const salesSql = `
+        SELECT 
+          oi.product_id, 
+          oi.product_name, 
+          COALESCE(SUM(oi.qty), 0) AS total_sold,
+          COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today,
+          COALESCE(SUM(oi.total), 0) AS total_revenue
+        FROM order_items oi
+        JOIN pos_orders po ON oi.pos_order_id = po.id ${dateFilter}
+        GROUP BY oi.product_id, oi.product_name
+      `;
+
+      db.all(salesSql, [todayStartSql, ...params], (salesErr, salesRows) => {
+        if (salesErr) return res.status(500).json({ error: salesErr.message });
+
+        const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+        const prodById = new Map();
+        const prodByName = new Map();
+        const prodSales = new Map();
+
+        (products || []).forEach((p) => {
+          prodById.set(Number(p.id), p);
+          const n = norm(p.name);
+          if (n && !prodByName.has(n)) prodByName.set(n, p);
+          prodSales.set(p.id, {
+            id: p.id,
+            name: p.name,
+            category: p.category || "General",
+            price: Number(p.price) || 0,
+            buying_price: Number(p.buying_price) || 0,
+            stock: Number(p.stock) || 0,
+            track_stock: p.track_stock,
+            low_stock_threshold: p.low_stock_threshold || 10,
+            total_sold: 0,
+            sold_today: 0,
+            total_revenue: 0,
+          });
+        });
+
+        const unlinkedMap = new Map();
+
+        (salesRows || []).forEach((r) => {
+          const qty = Number(r.total_sold) || 0;
+          const todayQty = Number(r.sold_today) || 0;
+          const rev = Number(r.total_revenue) || 0;
+          const pid = Number(r.product_id);
+          const pNameNorm = norm(r.product_name);
+
+          // Priority 1: Match by Product ID
+          // Priority 2: Match by Normalized Name (handles case & multi-space variations)
+          const matchedProd = (pid && prodById.get(pid)) || (pNameNorm && prodByName.get(pNameNorm));
+
+          if (matchedProd) {
+            const entry = prodSales.get(matchedProd.id);
+            entry.total_sold += qty;
+            entry.sold_today += todayQty;
+            entry.total_revenue += rev;
+          } else {
+            // Uncataloged or deleted product sales: keep track so totals are 100% accurate
+            const key = pNameNorm || `archived_${pid || 'item'}`;
+            if (!unlinkedMap.has(key)) {
+              unlinkedMap.set(key, {
+                id: pid || 0,
+                name: r.product_name || "Uncataloged Item",
+                category: "Archived / Custom",
+                price: qty > 0 ? Math.round(rev / qty) : 0,
+                buying_price: 0,
+                stock: 0,
+                track_stock: 0,
+                low_stock_threshold: 0,
+                total_sold: 0,
+                sold_today: 0,
+                total_revenue: 0,
+                is_archived: true,
+              });
+            }
+            const unEntry = unlinkedMap.get(key);
+            unEntry.total_sold += qty;
+            unEntry.sold_today += todayQty;
+            unEntry.total_revenue += rev;
+          }
+        });
+
+        const allItems = [...prodSales.values(), ...unlinkedMap.values()];
+        allItems.sort((a, b) => b.total_sold - a.total_sold || (a.name || "").localeCompare(b.name || ""));
+
+        let totalItemsSold = 0;
+        let totalItemsSoldToday = 0;
+        let totalRevenue = 0;
+
+        allItems.forEach((item) => {
+          totalItemsSold += item.total_sold;
+          totalItemsSoldToday += item.sold_today;
+          totalRevenue += item.total_revenue;
+        });
+
+        res.json({
+          products: allItems,
+          totalItemsSold,
+          totalItemsSoldToday,
+          totalRevenue,
+        });
       });
     }
-
-    const items = rows || [];
-    let totalItemsSold = 0;
-    let totalItemsSoldToday = 0;
-    let totalRevenue = 0;
-
-    items.forEach((item) => {
-      totalItemsSold += Number(item.total_sold) || 0;
-      totalItemsSoldToday += Number(item.sold_today) || 0;
-      totalRevenue += Number(item.total_revenue) || 0;
-    });
-
-    res.json({
-      products: items,
-      totalItemsSold,
-      totalItemsSoldToday,
-      totalRevenue,
-    });
-  });
+  );
 });
 
 

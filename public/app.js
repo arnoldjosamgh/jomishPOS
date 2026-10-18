@@ -2118,8 +2118,25 @@ function initSockets() {
       if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
     } else if (data.module === "products") {
       cachedProducts = []; // Bust cache so next POS scan fetches fresh data with additional_barcodes
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        window.OfflineDB.bustCache("/api/products").catch(() => {});
+        window.OfflineDB.bustCache("/reports/products-sold").catch(() => {});
+        window.OfflineDB.bustCache("/api/reports/products-sold").catch(() => {});
+      }
       if (USER_PERMISSIONS.can_see_pos && !window._skipProductReload)
         loadPOSProducts();
+      const smeProdView = document.getElementById("sme-view-products");
+      if (smeProdView && smeProdView.style.display !== "none" && typeof loadSmeProductSales === "function") {
+        loadSmeProductSales();
+      }
+      const invSection = document.getElementById("inventory");
+      if (invSection && invSection.classList.contains("active") && typeof loadInventory === "function") {
+        loadInventory();
+      }
+      const pModal = document.getElementById("product-sales-counter-modal");
+      if (pModal && !pModal.classList.contains("hidden") && typeof fetchAndRenderProductSalesModal === "function") {
+        fetchAndRenderProductSalesModal();
+      }
     } else if (data.module === "logo" || data.module === "settings") {
       loadBrandLogo();
       loadBusinessConfig();
@@ -2835,15 +2852,15 @@ async function fetchAuth(url, options = {}) {
     if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && res.ok && window.OfflineDB) {
       // Map URL patterns to the cache keys they affect
       const CACHE_BUST_MAP = [
-        { pattern: "/products",       busts: ["/api/products", "/api/categories"] },
+        { pattern: "/products",       busts: ["/api/products", "/api/categories", "/api/reports/products-sold", "/reports/products-sold"] },
         { pattern: "/employees",      busts: ["/api/employees"] },
         { pattern: "/users/",         busts: ["/api/employees"] },
         { pattern: "/roles",          busts: ["/api/roles"] },
         { pattern: "/pos/cash-in",    busts: ["/api/transactions", "/api/finance"] },
         { pattern: "/cash-in",        busts: ["/api/transactions", "/api/finance"] },
         { pattern: "/transactions",   busts: ["/api/transactions", "/api/finance", "/api/deliveries", "/api/pos_orders", "/api/customer-invoices"] },
-        { pattern: "/pos_orders",     busts: ["/api/pos_orders", "/api/transactions", "/api/deliveries"] },
-        { pattern: "/checkout",       busts: ["/api/products", "/api/pos_orders", "/api/transactions", "/api/deliveries"] },
+        { pattern: "/pos_orders",     busts: ["/api/pos_orders", "/api/transactions", "/api/deliveries", "/api/reports/products-sold", "/reports/products-sold"] },
+        { pattern: "/checkout",       busts: ["/api/products", "/api/reports/products-sold", "/reports/products-sold", "/api/pos_orders", "/api/transactions", "/api/deliveries"] },
         { pattern: "/attendance",     busts: ["/api/attendance"] },
         { pattern: "/schedules",      busts: ["/api/schedules"] },
         { pattern: "/shift",          busts: ["/api/shifts", "/api/shift-assignments"] },
@@ -3823,7 +3840,10 @@ async function loadPOSProducts(searchTerm = "") {
   clearTimeout(_posProductsRetryTimer);
 
   try {
-    const res = await fetchAuth(`${API_URL}/products`);
+    if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+      await window.OfflineDB.bustCache("/api/products").catch(() => {});
+    }
+    const res = await fetchAuth(`${API_URL}/products?force_refresh=true&_t=${Date.now()}`);
 
     if (res.status === 429) {
       // Rate limited — keep the current grid intact and silently retry after 3 s
@@ -3987,7 +4007,10 @@ let cachedProducts = []; // Needed for instant barcode lookup
 async function handleBarcodeScan(code) {
   // Always fetch fresh products to ensure additional_barcodes (from product_barcodes table) are included
   try {
-    const res = await fetchAuth(`${API_URL}/products`);
+    if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+      await window.OfflineDB.bustCache("/api/products").catch(() => {});
+    }
+    const res = await fetchAuth(`${API_URL}/products?force_refresh=true&_t=${Date.now()}`);
     const data = await res.json();
     if (data.products) cachedProducts = data.products;
   } catch (e) {
@@ -4528,6 +4551,14 @@ async function confirmPayment() {
       loadPOSProducts();
       loadDashboard();
       loadTransactions();
+      const smeProdView = document.getElementById("sme-view-products");
+      if (smeProdView && smeProdView.style.display !== "none" && typeof loadSmeProductSales === "function") {
+        loadSmeProductSales();
+      }
+      const invSection = document.getElementById("inventory");
+      if (invSection && invSection.classList.contains("active") && typeof loadInventory === "function") {
+        loadInventory();
+      }
     } else {
       const data = await res.json();
       alert("Error: " + data.error);
@@ -4874,6 +4905,14 @@ async function getInvoice() {
       loadPOSProducts();
       loadDashboard();
       loadTransactions();
+      const smeProdView = document.getElementById("sme-view-products");
+      if (smeProdView && smeProdView.style.display !== "none" && typeof loadSmeProductSales === "function") {
+        loadSmeProductSales();
+      }
+      const invSection = document.getElementById("inventory");
+      if (invSection && invSection.classList.contains("active") && typeof loadInventory === "function") {
+        loadInventory();
+      }
       if (typeof loadPendingCOD === "function") loadPendingCOD();
     } else {
       const data = await res.json();
@@ -6754,7 +6793,11 @@ async function loadSmeProductSales() {
   tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:25px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>';
 
   try {
-    const res = await fetchAuth(`${API_URL}/reports/products-sold`);
+    if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+      await window.OfflineDB.bustCache("/reports/products-sold").catch(() => {});
+      await window.OfflineDB.bustCache("/api/reports/products-sold").catch(() => {});
+    }
+    const res = await fetchAuth(`${API_URL}/reports/products-sold?force_refresh=true&_t=${Date.now()}`);
     const data = await res.json();
     _allSmeProducts = data.products || [];
 
@@ -6880,7 +6923,11 @@ async function fetchAndRenderProductSalesModal() {
   tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>';
 
   try {
-    const res = await fetchAuth(`${API_URL}/reports/products-sold`);
+    if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+      await window.OfflineDB.bustCache("/reports/products-sold").catch(() => {});
+      await window.OfflineDB.bustCache("/api/reports/products-sold").catch(() => {});
+    }
+    const res = await fetchAuth(`${API_URL}/reports/products-sold?force_refresh=true&_t=${Date.now()}`);
     const data = await res.json();
     _allModalProducts = data.products || [];
 
@@ -8213,7 +8260,10 @@ window.filterInventory = function(query) {
 
 async function loadInventory() {
   try {
-    const res = await fetchAuth(`${API_URL}/products`);
+    if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+      await window.OfflineDB.bustCache("/api/products").catch(() => {});
+    }
+    const res = await fetchAuth(`${API_URL}/products?force_refresh=true&_t=${Date.now()}`);
     const data = await res.json();
     const grid = document.getElementById("inventory-grid");
     if (!grid) return;
