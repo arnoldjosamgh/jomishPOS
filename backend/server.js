@@ -3922,7 +3922,8 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   // not by transactions.recorded_by. This means waiter-placed orders that were
   // checked out by a cashier correctly appear under that cashier.
   // Exclude employees whose ONLY role is 'Waiter' (they don't collect cash).
-  const summaryParams = [start_date, end_date + " 23:59:59"];
+  // Expenses are pulled as a correlated subquery from transactions (recorded_by = cashier).
+  const summaryParams = [start_date, end_date + " 23:59:59", start_date, end_date + " 23:59:59", start_date, end_date + " 23:59:59"];
   let summarySql = `
         SELECT
             po.cashier_id AS recorded_by,
@@ -3930,9 +3931,13 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
                  ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name)
             END AS cashier_name,
             COUNT(po.id) AS income_count,
-            0 AS expense_count,
+            (SELECT COUNT(*) FROM transactions tx
+             WHERE tx.type = 'EXPENSE' AND tx.recorded_by = po.cashier_id
+               AND tx.transaction_date >= ? AND tx.transaction_date <= ?) AS expense_count,
             SUM(po.total_amount) AS total_income,
-            0 AS total_expense,
+            (SELECT COALESCE(SUM(tx.amount), 0) FROM transactions tx
+             WHERE tx.type = 'EXPENSE' AND tx.recorded_by = po.cashier_id
+               AND tx.transaction_date >= ? AND tx.transaction_date <= ?) AS total_expense,
             SUM(CASE WHEN po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT' THEN po.total_amount ELSE 0 END) AS cash_sales,
             SUM(CASE WHEN po.payment_method = 'MOBILE MONEY' THEN po.total_amount ELSE 0 END) AS momo_sales,
             SUM(po.total_amount) AS total_sales
