@@ -7,6 +7,12 @@ window.API_URL = `${BASE_URL}/api`;
 const API_URL = window.API_URL;
 let USER_ROLE = "";
 let USER_NAME = "";
+window._hasActiveCashierShift = false;
+try {
+  if (localStorage.getItem("jomish_active_shift") === "true") {
+    window._hasActiveCashierShift = true;
+  }
+} catch (_) {}
 window.USER_PERMISSIONS = {
   can_see_dashboard: 0,
   can_see_hr: 0,
@@ -4110,6 +4116,7 @@ async function stopProductScanner() {
 
 window.ensureCashierShiftActive = async function (actionName = "proceed") {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  // Non-cashier roles (waiter, admin, manager, etc.) NEVER need a cashier shift
   if (_role !== "CASHIER") return true;
 
   if (window._hasActiveCashierShift === true) return true;
@@ -4120,7 +4127,10 @@ window.ensureCashierShiftActive = async function (actionName = "proceed") {
       const data = await res.json();
       window._hasActiveCashierShift = !!(data.has_active_shift && data.shift);
       window._activeCashierShiftData = data.shift || null;
-      if (window._hasActiveCashierShift) return true;
+      if (window._hasActiveCashierShift) {
+        try { localStorage.setItem("jomish_active_shift", "true"); } catch (_) {}
+        return true;
+      }
     }
   } catch (_) {}
 
@@ -5410,6 +5420,7 @@ window.updateCashierShiftUI = async function () {
       window._hasActiveCashierShift = !!(data.has_active_shift && data.shift);
       window._activeCashierShiftData = data.shift || null;
       if (data.has_active_shift && data.shift) {
+        try { localStorage.setItem("jomish_active_shift", "true"); } catch (_) {}
         // Active shift is running: Start Shift is faded/disabled, End Shift is unfaded/active
         if (btnStartShift) {
           btnStartShift.style.setProperty("display", "inline-flex", "important");
@@ -5437,6 +5448,7 @@ window.updateCashierShiftUI = async function () {
           shiftInfo.textContent = `Started ${startTimeStr} • Starting Capital: UGX ${Number(data.shift.start_cash || 0).toLocaleString()}`;
         }
       } else {
+        try { localStorage.removeItem("jomish_active_shift"); } catch (_) {}
         // No shift started yet: Start Shift is unfaded/active, End Shift is faded/disabled
         if (btnStartShift) {
           btnStartShift.style.setProperty("display", "inline-flex", "important");
@@ -5547,6 +5559,7 @@ window.confirmStartShift = async function () {
       }
 
       window._hasActiveCashierShift = true;
+      try { localStorage.setItem("jomish_active_shift", "true"); } catch (_) {}
       showToast(`Shift started! Starting Capital: UGX ${startCash.toLocaleString()}`, "success");
       await updateCashierShiftUI();
     } else {
@@ -5688,6 +5701,7 @@ window.finaliseEndShift = async function () {
       closeEndShiftPreviewModal();
       window._hasActiveCashierShift = false;
       window._activeCashierShiftData = null;
+      try { localStorage.removeItem("jomish_active_shift"); } catch (_) {}
       showToast(`Shift ended! Total Cash: UGX ${Number(report.end_cash || 0).toLocaleString()}`, "success");
 
       // Print then log out — shift is already CLOSED in the DB
