@@ -3124,7 +3124,22 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     waiter_id,
     client_uuid,
   } = req.body;
-  const cashier_id = req.user.id;
+  // If the requesting user is a Waiter, attribute the order to the open shift cashier (if any).
+  // Waiters take orders but don't cash out — the cashier on shift is accountable for the drawer.
+  let cashier_id = req.user.id;
+  const isReqUserWaiterForCheckout = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
+  if (isReqUserWaiterForCheckout) {
+    const openShiftRow = await new Promise((resolve) => {
+      db.get(
+        "SELECT cashier_id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+        [],
+        (err, row) => resolve(row || null)
+      );
+    });
+    if (openShiftRow && openShiftRow.cashier_id) {
+      cashier_id = openShiftRow.cashier_id;
+    }
+  }
 
   const trimmedUuid = client_uuid ? String(client_uuid).trim() : null;
 
@@ -3493,15 +3508,17 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
         const startCash = Number(openShift.start_cash || 0);
 
         const queries = {
-          cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          // Shift covers ALL orders checked out at the till during the shift window,
+          // regardless of which employee (waiter/cashier) originally created the order.
+          cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method = 'MOBILE MONEY' AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           // INCOME transactions manually recorded during this shift (cash received into drawer)
-          incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+          incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
         };
 
         Promise.all(Object.values(queries)).then(results => {
@@ -3572,24 +3589,30 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
     );
 
     function proceedWithReconciliation(startTime, startCash, shiftId) {
+      // Re-attribute ALL orders and income transactions in this shift window to the shift cashier.
+      // Waiters create orders but the cashier on the till is accountable for all cash collected.
+      const endTimeNow = new Date().toISOString();
+      db.run("UPDATE pos_orders SET cashier_id = ? WHERE order_date >= ? AND cashier_id != ?", [cashierId, startTime, cashierId]);
+      db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'INCOME' AND transaction_date >= ? AND recorded_by != ?", [cashierId, startTime, cashierId]);
       // Associate expenses and float during this shift to the cashier
-      db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date > ?", [cashierId, startTime]);
-      db.run("UPDATE transactions SET recorded_by = ? WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date > ?", [cashierId, startTime]);
+      db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date >= ?", [cashierId, startTime]);
+      db.run("UPDATE transactions SET recorded_by = ? WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date >= ?", [cashierId, startTime]);
 
       const queries = {
-        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method = 'MOBILE MONEY' AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        // Shift covers ALL orders checked out at the till — no cashier_id filter
+        cashSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (payment_method = 'CASH' OR payment_method = 'DISCOUNT') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        momoSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method = 'MOBILE MONEY' AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Expenses = all cash handed out of drawer during this shift
-        expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Cash In = all float added during this shift (excluding the opening float if already counted in startCash)
-        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // COD/Invoice collections during this shift
-        invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND payment_method IN ('COD','INVOICE') AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Total discount amount given during this shift
-        discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE (cashier_id = ? OR cashier_id IS NULL) AND order_date > ?", [cashierId, startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // INCOME transactions manually recorded during this shift (cash received into drawer)
-        incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND transaction_date > ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+        incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
       };
 
       Promise.all(Object.values(queries)).then(results => {
@@ -3608,9 +3631,6 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         const difference = actualCounted - expectedCash; // > 0 = overage, < 0 = shortage
 
         const endTime = new Date().toISOString();
-
-        // Also attribute income transactions to this cashier
-        db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'INCOME' AND transaction_date > ?", [cashierId, startTime]);
 
         if (shiftId) {
           db.run(
@@ -3883,30 +3903,33 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   if (!start_date || !end_date)
     return res.status(400).json({ error: "Start and end dates required" });
 
-  const summaryParams = [
-    start_date, end_date + " 23:59:59", 
-    start_date, end_date + " 23:59:59", 
-    start_date, end_date + " 23:59:59", 
-    start_date, end_date + " 23:59:59"
-  ];
+  // ── Summary: group sales by pos_orders.cashier_id (the person who cashed out),
+  // not by transactions.recorded_by. This means waiter-placed orders that were
+  // checked out by a cashier correctly appear under that cashier.
+  // Exclude employees whose ONLY role is 'Waiter' (they don't collect cash).
+  const summaryParams = [start_date, end_date + " 23:59:59"];
   let summarySql = `
-        SELECT 
-            t.recorded_by,
-            CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
-            COUNT(CASE WHEN t.type = 'INCOME' THEN 1 END) as income_count,
-            COUNT(CASE WHEN t.type = 'EXPENSE' THEN 1 END) as expense_count,
-            SUM(CASE WHEN t.type = 'INCOME' THEN t.amount ELSE 0 END) as total_income,
-            SUM(CASE WHEN t.type = 'EXPENSE' THEN t.amount ELSE 0 END) as total_expense,
-            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ? AND (payment_method = 'CASH' OR payment_method = 'DISCOUNT')) as cash_sales,
-            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ? AND payment_method = 'MOBILE MONEY') as momo_sales,
-            (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = t.recorded_by AND order_date >= ? AND order_date <= ?) as total_sales
-        FROM transactions t
-        LEFT JOIN employees e ON t.recorded_by = e.id
-        WHERE t.transaction_date >= ? AND t.transaction_date <= ?
+        SELECT
+            po.cashier_id AS recorded_by,
+            CASE WHEN po.cashier_id = 9999 THEN 'System Technician'
+                 ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name)
+            END AS cashier_name,
+            COUNT(po.id) AS income_count,
+            0 AS expense_count,
+            SUM(po.total_amount) AS total_income,
+            0 AS total_expense,
+            SUM(CASE WHEN po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT' THEN po.total_amount ELSE 0 END) AS cash_sales,
+            SUM(CASE WHEN po.payment_method = 'MOBILE MONEY' THEN po.total_amount ELSE 0 END) AS momo_sales,
+            SUM(po.total_amount) AS total_sales
+        FROM pos_orders po
+        LEFT JOIN employees e ON po.cashier_id = e.id
+        WHERE po.order_date >= ? AND po.order_date <= ?
+          AND COALESCE(UPPER(e.role), '') NOT IN ('WAITER')
     `;
-  if (cashier_id) { summarySql += ` AND t.recorded_by = ?`; summaryParams.push(cashier_id); }
-  summarySql += ` GROUP BY t.recorded_by, e.nickname, e.first_name, e.last_name ORDER BY total_income DESC`;
+  if (cashier_id) { summarySql += ` AND po.cashier_id = ?`; summaryParams.push(cashier_id); }
+  summarySql += ` GROUP BY po.cashier_id, e.nickname, e.first_name, e.last_name, e.role ORDER BY total_income DESC`;
 
+  // ── Detail: transactions in window, attributed to the cashier who recorded them
   const detailParams = [start_date, end_date + " 23:59:59"];
   let detailSql = `
         SELECT 
@@ -6329,8 +6352,9 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       const row = rowRes.rows[0];
 
       await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
-      await q("UPDATE transactions SET payment_status = ?, description = ? WHERE id = ?", ["PAID", desc, row.transaction_id]);
-      await q("UPDATE pos_orders SET amount_paid = ?, payment_method = ? WHERE id = ?", [row.total_amount, paymentMethod, row.pos_order_id]);
+      // Stamp the cashier who physically collected the payment on both the order and its transaction
+      await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ? WHERE id = ?", [req.user.id, "PAID", desc, row.transaction_id]);
+      await q("UPDATE pos_orders SET cashier_id = ?, amount_paid = ?, payment_method = ? WHERE id = ?", [req.user.id, row.total_amount, paymentMethod, row.pos_order_id]);
       
       transactionData = row;
     });
