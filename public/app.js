@@ -11281,6 +11281,7 @@ async function loadCredits() {
                                 <th style="padding:6px; text-align:right; border-bottom:1px solid var(--border);">Total</th>
                                 <th style="padding:6px; text-align:right; border-bottom:1px solid var(--border);">Paid</th>
                                 <th style="padding:6px; text-align:right; border-bottom:1px solid var(--border);">Balance</th>
+                                <th style="padding:6px; text-align:center; border-bottom:1px solid var(--border); width:32px;"></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -11301,6 +11302,13 @@ async function loadCredits() {
                                 <td style="padding:6px; text-align:right; border-bottom:1px solid var(--border);">${isPayment ? "-" : Number(t.total_amount).toLocaleString()}</td>
                                 <td style="padding:6px; text-align:right; border-bottom:1px solid var(--border); color:#10B981;">${Number(t.amount_paid).toLocaleString()}</td>
                                 <td style="padding:6px; text-align:right; border-bottom:1px solid var(--border);">${balDisplay}</td>
+                                <td style="padding:6px; text-align:center; border-bottom:1px solid var(--border);">
+                                  <button onclick="event.stopPropagation(); deleteSingleCreditRecord(${t.id}, '${g.buyer_name.replace(/'/g, "\\'")}')" 
+                                    title="Delete record" 
+                                    style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; padding:2px 5px; font-size:0.75rem;">
+                                      <i class="fa-solid fa-trash"></i>
+                                  </button>
+                                </td>
                             </tr>
                     `;
         });
@@ -11310,8 +11318,18 @@ async function loadCredits() {
         item.className = "credit-accordion-item";
         item.innerHTML = `
                     <div class="credit-accordion-header" onclick="this.parentElement.classList.toggle('active')">
-                        <div style="font-weight:700; font-size:1.05rem;">${g.buyer_name}</div>
-                        <div style="color:${balanceColor}; font-weight:600;">${balanceText}</div>
+                        <div style="font-weight:700; font-size:1.05rem; display:flex; align-items:center; gap:8px;">
+                            <i class="fa-solid fa-user-tag" style="color:var(--text-muted); font-size:0.9rem;"></i>
+                            ${g.buyer_name}
+                        </div>
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <div style="color:${balanceColor}; font-weight:700; font-size:1rem;">${balanceText}</div>
+                            <button onclick="event.stopPropagation(); deleteCreditAccount('${g.buyer_name.replace(/'/g, "\\'")}')" 
+                              title="Delete Credit Account" 
+                              style="background:rgba(239, 68, 68, 0.12); color:#ef4444; border:1px solid rgba(239, 68, 68, 0.25); border-radius:6px; padding:5px 10px; cursor:pointer; font-size:0.8rem; font-weight:700; display:inline-flex; align-items:center; gap:5px; transition:all 0.15s ease;">
+                                <i class="fa-solid fa-trash-can"></i> Delete
+                            </button>
+                        </div>
                     </div>
                     <div class="credit-accordion-content">
                         <div class='credit-detail-row'><span><i class="fa-solid fa-mobile-screen"></i> Phone Number:</span> <strong>${g.buyer_phone || "N/A"}</strong></div>
@@ -11322,13 +11340,17 @@ async function loadCredits() {
                             ${historyHtml}
                         </div>
 
-                        <div style="margin-top: 20px; display:flex; gap:10px;">
-                            <button class="primary-btn" onclick="openCreditPaymentModal('${g.buyer_name.replace(/'/g, "\\'")}',${g.total_balance})" style="flex:1; padding: 12px; font-size:0.95rem; background: linear-gradient(135deg,#10B981,#059669);">
+                        <div style="margin-top: 20px; display:flex; gap:10px; flex-wrap:wrap;">
+                            <button class="primary-btn" onclick="openCreditPaymentModal('${g.buyer_name.replace(/'/g, "\\'")}',${g.total_balance})" style="flex:1; min-width:140px; padding: 12px; font-size:0.95rem; background: linear-gradient(135deg,#10B981,#059669);">
                                 <i class="fa-solid fa-credit-card"></i> Make a Payment
                             </button>
                             <button class="primary-btn" onclick="printStatement('${g.buyer_name.replace(/'/g, "\\'")}')"
-                                style="flex:1; padding: 12px; font-size:0.95rem;">
+                                style="flex:1; min-width:140px; padding: 12px; font-size:0.95rem;">
                                 <i class="fa-solid fa-inbox"></i> Statement
+                            </button>
+                            <button onclick="deleteCreditAccount('${g.buyer_name.replace(/'/g, "\\'")}')"
+                                style="flex:0 0 auto; padding: 12px 18px; font-size:0.95rem; background:rgba(239, 68, 68, 0.12); color:#ef4444; border:1px solid rgba(239, 68, 68, 0.3); border-radius:6px; font-weight:700; cursor:pointer;">
+                                <i class="fa-solid fa-trash-can"></i> Delete Account
                             </button>
                         </div>
                     </div>
@@ -11349,6 +11371,51 @@ async function loadCredits() {
         '<div style="text-align:center; padding:30px; color:#EF4444;">Connection error. Is the server running?</div>';
   }
 }
+
+window.deleteCreditAccount = async function (buyerName) {
+  if (!buyerName) return;
+  const confirmed = confirm(`Are you sure you want to delete the entire credit account for "${buyerName}"? This will permanently delete all associated credit history and records.`);
+  if (!confirmed) return;
+
+  try {
+    const encodedName = encodeURIComponent(buyerName);
+    const res = await fetchAuth(`${API_URL}/credits/account/${encodedName}`, {
+      method: "DELETE",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      showToast(`Credit account for "${buyerName}" deleted.`, "success");
+      loadCredits();
+    } else {
+      alert("Error deleting credit account: " + (data.error || "Failed to delete account."));
+    }
+  } catch (err) {
+    console.error("Failed to delete credit account:", err);
+    alert("Network error while deleting credit account.");
+  }
+};
+
+window.deleteSingleCreditRecord = async function (creditId, buyerName) {
+  if (!creditId) return;
+  const confirmed = confirm("Are you sure you want to delete this specific credit transaction record?");
+  if (!confirmed) return;
+
+  try {
+    const res = await fetchAuth(`${API_URL}/credits/${creditId}`, {
+      method: "DELETE",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      showToast("Credit transaction record deleted.", "success");
+      loadCredits();
+    } else {
+      alert("Error deleting record: " + (data.error || "Failed to delete record."));
+    }
+  } catch (err) {
+    console.error("Failed to delete credit record:", err);
+    alert("Network error while deleting credit record.");
+  }
+};
 
 function openCreditPaymentModal(buyerName, totalBalance) {
   document.getElementById("credit-payment-buyer").value = buyerName;
