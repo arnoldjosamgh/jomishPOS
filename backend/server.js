@@ -931,11 +931,22 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
 
             // Helper: do the actual INSERT and call done(err, ctx)
             function doInsert(emailVal, done) {
-              db.run(
-                "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [first_name, last_name, emailVal, auto_username, role, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
-                function(err) { done(err, this); }
-              );
+              // If safeEmail provided, remove any old inactive/terminated record so it doesn't cause collision or stay terminated
+              if (emailVal) {
+                db.run("DELETE FROM employees WHERE is_active = 0 AND LOWER(email) = LOWER(?)", [emailVal], () => {
+                  db.run(
+                    "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                    [first_name, last_name, emailVal, auto_username, role, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
+                    function(err) { done(err, this); }
+                  );
+                });
+              } else {
+                db.run(
+                  "INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, photo_base64, profile_color, layout_type, next_pay_date, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                  [first_name, last_name, null, auto_username, role, department, salary, hashedPassword, auto_employee_code, photo_base64, profile_color, layout_type, nextPayDateStr],
+                  function(err) { done(err, this); }
+                );
+              }
             }
 
             doInsert(safeEmail, function(err, ctx) {
@@ -1083,39 +1094,54 @@ app.delete("/api/employees/:id", authenticateToken, (req, res) => {
     return res.status(403).json({ error: "Forbidden" });
   const { id } = req.params;
 
-  // Step 1: Deactivate the employee record
-  db.run(
-    "UPDATE employees SET is_active = 0 WHERE id = ?",
-    [id],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
+  // Fully delete the employee from the database so they are completely removed and do not stay terminated
+  db.run("DELETE FROM employees WHERE id = ?", [id], function (err) {
+    if (err) {
+      console.error("[TERMINATION DELETE ERROR]", err);
+      return res.status(500).json({ error: err.message });
+    }
+    // Clean up dependent notes or open shifts
+    db.run("DELETE FROM employee_notes WHERE employee_id = ?", [id], () => {});
+    db.run("UPDATE shifts SET status = 'CLOSED', close_time = CURRENT_TIMESTAMP WHERE opened_by = ? AND status = 'OPEN'", [id], () => {});
 
-      // Step 2: Revoke login credentials â€” null out username & password, and free up email
-      // so the fired employee can never log back in, and their email can be reused if needed
-      db.run(
-        'UPDATE employees SET username = NULL, password = NULL, email = email || "-revoked-" || id WHERE id = ?',
-        [id],
-        function (credErr) {
-          if (credErr) {
-            // Log but don't block the response; deactivation already succeeded
-            console.error(
-              `[TERMINATION] Failed to revoke credentials for employee #${id}:`,
-              credErr.message,
-            );
-          } else {
-            console.log(
-              `[TERMINATION] Login credentials revoked for employee #${id}.`,
-            );
-          }
-          emitAndBust("employees", "employees");
-          res.json({
-            message:
-              "Employee terminated, ID revoked, and login access permanently removed.",
-          });
-        },
-      );
-    },
-  );
+    emitAndBust("employees", "employees");
+    res.json({
+      message: "Employee terminated and deleted successfully.",
+    });
+  });
+});
+
+// Admin change any employee's PIN directly
+app.patch("/api/employees/:id/pin", authenticateToken, async (req, res) => {
+  const _role = (req.user.role || "").toLowerCase();
+  if (_role !== "ceo" && _role !== "hr" && _role !== "admin" && _role !== "tech" && _role !== "manager") {
+    return res.status(403).json({ error: "Forbidden: Only Admin, HR, Manager or CEO can change staff PINs." });
+  }
+  const { id } = req.params;
+  const { pin, password } = req.body;
+  const newPin = (pin || password || "").toString().trim();
+
+  if (!newPin || newPin.length < 4) {
+    return res.status(400).json({ error: "PIN must be at least 4 digits" });
+  }
+
+  try {
+    const hashed = await bcrypt.hash(newPin, 10);
+    db.run("UPDATE employees SET password = ? WHERE id = ?", [hashed, id], function (err) {
+      if (err) {
+        console.error("[UPDATE PIN ERROR]", err);
+        return res.status(500).json({ error: err.message });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ error: "Employee not found." });
+      }
+      emitAndBust("employees", "employees");
+      res.json({ message: "Staff PIN changed successfully." });
+    });
+  } catch (e) {
+    console.error("[HASH PIN ERROR]", e);
+    res.status(500).json({ error: "Failed to process PIN" });
+  }
 });
 
 // Suspend an employee account (reversible — preserves credentials)
@@ -4463,18 +4489,48 @@ app.patch("/api/users/:id/credentials", authenticateToken, async (req, res) => {
   if (_role !== "ceo" && _role !== "hr" && _role !== "admin" && _role !== "tech" && _role !== "manager")
     return res.status(403).json({ error: "Forbidden" });
   const { id } = req.params;
-  const { password, role, username, nickname } = req.body;
+  const { password, pin, role, username, nickname } = req.body;
+  const newPass = (password || pin || "").toString().trim();
 
   try {
-    let sql = "UPDATE employees SET role = ?, username = ? WHERE id = ?";
-    let params = [role || null, username || null, id];
+    const updates = [];
+    const params = [];
 
-    if (password && password.trim().length > 0) {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      sql =
-        "UPDATE employees SET password = ?, role = ?, username = ? WHERE id = ?";
-      params = [hashedPassword, role || null, username || null, id];
+    if (newPass.length > 0) {
+      const hashedPassword = await bcrypt.hash(newPass, 10);
+      updates.push("password = ?");
+      params.push(hashedPassword);
     }
+
+    if (role && role.trim().length > 0) {
+      updates.push("role = ?");
+      params.push(role.trim());
+    }
+
+    if (nickname !== undefined && nickname !== null) {
+      updates.push("nickname = ?");
+      params.push(nickname.trim() || null);
+    }
+
+    if (username && username.trim().length > 0) {
+      // Check if username is already taken by a different employee
+      const existing = await new Promise((resolve) => {
+        db.get("SELECT id FROM employees WHERE LOWER(username) = LOWER(?) AND id != ?", [username.trim(), id], (err, row) => {
+          resolve(row);
+        });
+      });
+      if (!existing) {
+        updates.push("username = ?");
+        params.push(username.trim());
+      }
+    }
+
+    if (updates.length === 0) {
+      return res.json({ message: "No updates needed" });
+    }
+
+    params.push(id);
+    const sql = `UPDATE employees SET ${updates.join(", ")} WHERE id = ?`;
 
     db.run(sql, params, function (err) {
       if (err) {

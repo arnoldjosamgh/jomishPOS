@@ -3044,7 +3044,8 @@ async function loadEmployees() {
                             ${
                               ["CEO", "HR", "MANAGER", "ADMIN"].includes((USER_ROLE || "").toUpperCase())
                                 ? `
-                                <button class='sm-btn primary' onclick="openPassModal(${JSON.stringify(emp).replace(/"/g, "&quot;")})" title="Edit Access, Role, and Termination"><i class="fa-solid fa-key"></i> Edit Access</button>
+                                <button class='sm-btn warning' onclick="openAdminChangePinModal(${emp.id}, '${(emp.first_name + ' ' + (emp.last_name || '')).trim().replace(/'/g, "\\'")}')" title="Change Staff PIN"><i class="fa-solid fa-key"></i> Change PIN</button>
+                                <button class='sm-btn primary' onclick="openPassModal(${JSON.stringify(emp).replace(/"/g, "&quot;")})" title="Edit Access, Role, and Termination"><i class="fa-solid fa-user-gear"></i> Edit Access</button>
                             `
                                 : ""
                             }
@@ -3061,26 +3062,105 @@ async function loadEmployees() {
   }
 }
 
+// ── ADMIN CHANGE STAFF PIN MODAL HELPERS ─────────────────────────────
+window.openAdminChangePinModal = function(empId, staffName) {
+  const empInput = document.getElementById("admin-change-pin-emp-id");
+  const nameEl = document.getElementById("admin-change-pin-staff-name");
+  const pinInput = document.getElementById("admin-change-pin-input");
+  const errEl = document.getElementById("admin-change-pin-error");
+  if (empInput) empInput.value = empId;
+  if (nameEl) nameEl.textContent = staffName || `Staff #${empId}`;
+  if (pinInput) pinInput.value = "";
+  if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+
+  const modal = document.getElementById("admin-change-pin-modal");
+  if (modal) modal.classList.remove("hidden");
+  setTimeout(() => pinInput && pinInput.focus(), 100);
+};
+
+window.closeAdminChangePinModal = function() {
+  const modal = document.getElementById("admin-change-pin-modal");
+  if (modal) modal.classList.add("hidden");
+};
+
+window.generateStaffPinAuto = function() {
+  const pin = String(Math.floor(1000 + Math.random() * 9000));
+  const pinInput = document.getElementById("admin-change-pin-input");
+  if (pinInput) pinInput.value = pin;
+};
+
+window.submitAdminChangePin = async function() {
+  const empId = document.getElementById("admin-change-pin-emp-id").value;
+  const pin = document.getElementById("admin-change-pin-input").value.trim();
+  const staffName = document.getElementById("admin-change-pin-staff-name").textContent;
+  const errEl = document.getElementById("admin-change-pin-error");
+  const btn = document.getElementById("btn-submit-admin-pin");
+
+  if (!pin || pin.length < 4) {
+    if (errEl) {
+      errEl.textContent = "Please enter a PIN with at least 4 digits.";
+      errEl.style.display = "block";
+    }
+    return;
+  }
+
+  const origHtml = btn ? btn.innerHTML : "";
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...'; }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/employees/${empId}/pin`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`PIN for ${staffName} updated successfully!`, "success");
+      closeAdminChangePinModal();
+      loadEmployees();
+    } else {
+      if (errEl) {
+        errEl.textContent = data.error || "Failed to update PIN.";
+        errEl.style.display = "block";
+      } else {
+        alert(data.error || "Failed to update PIN.");
+      }
+    }
+  } catch (e) {
+    console.error("Error changing staff PIN:", e);
+    if (errEl) {
+      errEl.textContent = "Network error while saving PIN.";
+      errEl.style.display = "block";
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = origHtml || '<i class="fa-solid fa-check"></i> Save PIN'; }
+  }
+};
+
 async function deleteEmployee(id) {
   const confirmed = confirm(
     "  TERMINATION CONFIRMATION\n\n" +
       "This action will:\n" +
-      "  • Deactivate the employee record\n" +
-      "  • Permanently revoke their ID / QR access\n" +
-      "  • DELETE their system login (username & password)\n\n" +
-      "The fired employee will be IMMEDIATELY locked out.\n" +
-      "This cannot be undone. Proceed?",
+      "  • Permanently DELETE this employee record\n" +
+      "  • Revoke their ID / QR access and login account\n\n" +
+      "Proceed to terminate and delete this staff member?",
   );
   if (!confirmed) return;
 
   try {
+    try {
+      const saved = JSON.parse(localStorage.getItem("jomish_saved_users") || "[]");
+      const filtered = saved.filter(u => u.id !== id && u.id !== Number(id));
+      localStorage.setItem("jomish_saved_users", JSON.stringify(filtered));
+    } catch (_) {}
+
     const res = await fetchAuth(`${API_URL}/employees/${id}`, {
       method: "DELETE",
     });
     const data = await res.json();
     if (res.ok) {
       showToast(
-        `Employee terminated. ID revoked & login access permanently deleted.`,
+        "Employee terminated and permanently deleted.",
         "success",
       );
       loadEmployees();
@@ -3088,7 +3168,7 @@ async function deleteEmployee(id) {
       document.getElementById("set-password-modal").classList.add("hidden");
     } else {
       showToast(
-        data.error || "Failed to terminate employee" || "An error occurred",
+        data.error || "Failed to delete employee",
         "danger",
       );
     }
@@ -9302,8 +9382,9 @@ async function handleUpdateAccess(e) {
     if (res.ok) {
       showToast(`User credentials updated!`, "success");
       document.getElementById("set-password-modal").classList.add("hidden");
-      loadUserAccounts();
-      loadSystemUsers();
+      if (typeof loadEmployees === "function") loadEmployees();
+      if (typeof loadUserAccounts === "function") loadUserAccounts();
+      if (typeof loadSystemUsers === "function") loadSystemUsers();
     } else {
       const data = await res.json();
       alert(

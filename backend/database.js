@@ -1552,6 +1552,16 @@ function runMigrations(fromVersion) {
             });
         });
     }
+
+    if (fromVersion < 150) {
+        // v150: Purge old terminated/inactive employees so they are completely removed and do not linger
+        db.run("DELETE FROM employees WHERE is_active = 0", (err) => {
+            if (err) console.error('[Migration v150] Error purging terminated employees:', err.message);
+            db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '150'], () => {
+                console.log('Migration to v150 complete: Purged inactive/terminated employees.');
+            });
+        });
+    }
 }
 
 initDb();

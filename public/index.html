@@ -1508,7 +1508,7 @@
                 <div class="form-group">
                     <label>Password</label>
                     <div style="display:flex; gap:10px;">
-                        <input type="text" id="pass-new-pwd" placeholder="4-digit PIN (e.g. 1234)" maxlength="4" inputmode="numeric" pattern="[0-9]{4}" style="flex:1; letter-spacing:4px;">
+                        <input type="text" id="pass-new-pwd" placeholder="e.g. 1234" maxlength="20" style="flex:1; letter-spacing:3px;">
                         <button type="button" class="secondary-btn" onclick="generateAutoPassword()"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto</button>
                     </div>
                     <p id="pass-pwd-hint" style="font-size:0.8rem; color:var(--text-muted); margin-top:5px; display:none;">
@@ -1520,12 +1520,42 @@
                     <div style="display:flex; gap:10px;">
                         <button type="button" id="btn-suspend-account" class="danger-btn" style="background:none; border:1px solid var(--danger); color:var(--danger);" onclick="handleSuspendAccount()"><i class="fa-solid fa-ban"></i> Suspend</button>
                         <button type="button" id="btn-restore-account" class="primary-btn" style="display:none; background:none; border:1px solid var(--success); color:var(--success);" onclick="handleRestoreAccount()"><i class="fa-solid fa-check"></i> Restore</button>
-                        <button type="button" id="btn-delete-account" class="danger-btn" onclick="handleDeleteAccount()"><i class="fa-solid fa-trash"></i> Terminate</button>
+                        <button type="button" id="btn-delete-account" class="danger-btn" onclick="handleDeleteAccount()"><i class="fa-solid fa-trash"></i> Terminate &amp; Delete</button>
                     </div>
                     <div style="display:flex; gap:10px;">
                         <button type="button" class="secondary-btn" onclick="document.getElementById('set-password-modal').classList.add('hidden')">Cancel</button>
                         <button type="submit" id="btn-pass-submit" class="primary-btn">Save Changes</button>
                     </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Admin Change Staff PIN Modal -->
+    <div id="admin-change-pin-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:420px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-key"></i> Change Staff PIN</h3>
+                <button class="btn-close" onclick="closeAdminChangePinModal()"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <form id="form-admin-change-pin" onsubmit="event.preventDefault(); submitAdminChangePin();">
+                <input type="hidden" id="admin-change-pin-emp-id">
+                <div style="background:var(--background); padding:12px; border-radius:8px; margin-bottom:15px; text-align:center;">
+                    <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Staff Member</div>
+                    <div id="admin-change-pin-staff-name" style="font-size:1.1rem; font-weight:700; color:var(--text); margin-top:3px;">-</div>
+                </div>
+                <div class="form-group" style="margin-bottom:15px;">
+                    <label style="display:block; margin-bottom:5px; font-weight:600;">New 4-Digit PIN</label>
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="admin-change-pin-input" placeholder="e.g. 1234" maxlength="6" inputmode="numeric" required style="flex:1; letter-spacing:4px; font-size:1.1rem; padding:10px; border-radius:6px; border:1px solid var(--border);">
+                        <button type="button" class="secondary-btn" onclick="generateStaffPinAuto()"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto</button>
+                    </div>
+                    <small style="color:var(--text-muted); font-size:0.75rem; margin-top:4px; display:block;">Enter a 4-6 digit numeric PIN for POS and login access.</small>
+                </div>
+                <div id="admin-change-pin-error" style="color:var(--danger); font-size:0.85rem; margin-bottom:10px; display:none;"></div>
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+                    <button type="button" class="secondary-btn" onclick="closeAdminChangePinModal()">Cancel</button>
+                    <button type="submit" id="btn-submit-admin-pin" class="primary-btn"><i class="fa-solid fa-check"></i> Save PIN</button>
                 </div>
             </form>
         </div>
@@ -1657,6 +1687,6 @@
         </div>
     </div>
     <script src="offline-db.js?v=2"></script>
-    <script src="app.js?v=45"></script>
+    <script src="app.js?v=46"></script>
 </body>
 </html>
