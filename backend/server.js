@@ -275,13 +275,26 @@ app.use((req, res, next) => {
 // JWT Authentication Middleware
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
+  let token = authHeader && authHeader.split(" ")[1];
+  if (!token && req.cookies && req.cookies.jomish_auth) {
+    token = req.cookies.jomish_auth;
+  }
 
   if (token == null) return res.status(401).json({ error: "Unauthorized" });
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: "Token expired/invalid" });
     req.user = user;
+
+    // Strict multi-tenant schema isolation: lock AsyncLocalStorage to the user's tenant schema
+    if (user && user.prefix) {
+      const p = String(user.prefix).toLowerCase().trim();
+      const schemaName = (p === "public" || p === "demo") ? p : "t_" + p;
+      return db.asyncLocalStorage.run(schemaName, () => {
+        next();
+      });
+    }
+
     next();
   });
 };
@@ -2442,7 +2455,10 @@ del "%~f0"
 
 // 5. POS (Point of Sale)
 app.get("/api/products", authenticateToken, (req, res) => {
-  const schema = getSchema();
+  let schema = getSchema();
+  if (schema === "public" && req.user && req.user.role !== "TECH" && req.user.prefix && req.user.prefix.toLowerCase() !== "public") {
+    schema = "t_" + req.user.prefix.toLowerCase();
+  }
   const cached = getCache(schema, "products");
   if (cached) return res.json(cached);
   // Exclude photo_base64 from list for performance — use /api/products/:id/photo for individual photos
@@ -3434,7 +3450,13 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
 });
 
 // ── CASHIER SHIFTS MANAGEMENT ──────────────────────────────────────────
+const _ensuredCashierShiftSchemas = new Set();
 function ensureCashierShiftsSchema(callback) {
+  const schema = getSchema();
+  if (_ensuredCashierShiftSchemas.has(schema)) {
+    if (typeof callback === "function") callback();
+    return;
+  }
   db.run(`CREATE TABLE IF NOT EXISTS cashier_shifts (
       id SERIAL PRIMARY KEY, cashier_id INTEGER, start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       end_time TIMESTAMP, start_cash REAL DEFAULT 0, end_cash REAL DEFAULT 0, counted_cash REAL DEFAULT 0,
@@ -3453,6 +3475,7 @@ function ensureCashierShiftsSchema(callback) {
     db.run("ALTER TABLE cashier_shifts ALTER COLUMN end_time DROP DEFAULT", () => {});
     db.run("ALTER TABLE cashier_shifts ALTER COLUMN start_time SET DEFAULT CURRENT_TIMESTAMP", () => {});
     db.run("UPDATE cashier_shifts SET status = 'CLOSED' WHERE end_time IS NOT NULL AND status = 'OPEN'", () => {});
+    _ensuredCashierShiftSchemas.add(schema);
     if (typeof callback === "function") callback();
   });
 }

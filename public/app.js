@@ -4381,13 +4381,20 @@ function closePaymentPanel() {
 
   // Reset confirm button back to default checkout if it was tied to a pending order
   const btnConfirm = document.getElementById("btn-confirm-pay");
-  if (btnConfirm && btnConfirm.hasAttribute("data-pending-id")) {
+  if (btnConfirm) {
     btnConfirm.removeAttribute("data-pending-id");
+    btnConfirm.disabled = false;
     btnConfirm.onclick = () => confirmPayment();
     btnConfirm.innerHTML = '<i class="fa-solid fa-check"></i> CONFIRM PAYMENT';
   }
   window._pendingOrderId = null;
   window._pendingOrderTotal = null;
+
+  // CRITICAL: Force-reset payment lock flags so cancel always unblocks immediately.
+  // Without this, tapping Cancel while a payment is in-flight leaves the flags
+  // stuck at true, making the panel appear broken until the async call finishes.
+  _isConfirmingPayment = false;
+  _isCollectingPending = false;
 
   // Always reset payment method back to Cash when payment panel closes
   const payMethodSelect = document.getElementById("payment-method-select");

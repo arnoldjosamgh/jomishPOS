@@ -670,7 +670,11 @@ window.onunhandledrejection = function(e) {
                 localStorage.setItem('jomish_name', data.name);
                 localStorage.setItem('jomish_permissions', JSON.stringify(data.permissions));
                 localStorage.setItem('jomish_user_id', data.user_id);
-                if (data.prefix) localStorage.setItem('jomish_prefix', data.prefix);
+                if (data.prefix) {
+                    localStorage.setItem('jomish_prefix', data.prefix.toLowerCase().trim());
+                } else {
+                    localStorage.removeItem('jomish_prefix');
+                }
                 window.location.href = 'index.html';
             } else {
                 const isTerminated = res.status === 403 && data.error && data.error.includes('terminated');
@@ -693,7 +697,11 @@ window.onunhandledrejection = function(e) {
                         localStorage.setItem('jomish_name', d.name);
                         localStorage.setItem('jomish_permissions', JSON.stringify(d.permissions));
                         localStorage.setItem('jomish_user_id', d.user_id);
-                        if (d.prefix) localStorage.setItem('jomish_prefix', d.prefix);
+                        if (d.prefix) {
+                            localStorage.setItem('jomish_prefix', d.prefix.toLowerCase().trim());
+                        } else {
+                            localStorage.removeItem('jomish_prefix');
+                        }
                         window.location.href = 'index.html?offline=true';
                         return;
                     }

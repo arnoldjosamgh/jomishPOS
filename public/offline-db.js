@@ -47,7 +47,7 @@ function getDB() {
 
 async function cacheApiResponse(url, data) {
     try {
-        const prefix = localStorage.getItem('jomish_prefix') || 'public';
+        const prefix = (localStorage.getItem('jomish_prefix') || 'public').toLowerCase().trim();
         const key = prefix + '::' + url;
         const db = await getDB();
         return new Promise((resolve, reject) => {
@@ -64,7 +64,7 @@ async function cacheApiResponse(url, data) {
 
 async function getCachedApiResponse(url) {
     try {
-        const prefix = localStorage.getItem('jomish_prefix') || 'public';
+        const prefix = (localStorage.getItem('jomish_prefix') || 'public').toLowerCase().trim();
         const key = prefix + '::' + url;
         const db = await getDB();
         return new Promise((resolve, reject) => {
@@ -292,7 +292,6 @@ async function clearOfflineCredentials(username) {
  */
 async function bustCache(urlPattern) {
     try {
-        const prefix = localStorage.getItem('jomish_prefix') || 'public';
         const db = await getDB();
         return new Promise((resolve, reject) => {
             const tx    = db.transaction(STORE_CACHE, 'readwrite');
@@ -301,7 +300,7 @@ async function bustCache(urlPattern) {
             req.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (!cursor) return; // done iterating
-                if (cursor.value && cursor.value.url && cursor.value.url.startsWith(prefix + '::') && cursor.value.url.includes(urlPattern)) {
+                if (cursor.value && cursor.value.url && cursor.value.url.includes(urlPattern)) {
                     cursor.delete();
                 }
                 cursor.continue();
