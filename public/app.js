@@ -5401,6 +5401,7 @@ function printReceipt(
  * End Shift and Print Report
  */
 // ── CASHIER SHIFTS (START & END RECONCILIATION) ────────────────────────
+let _updateShiftUIInFlight = false;
 window.updateCashierShiftUI = async function () {
   const shiftControls = document.getElementById("pos-shift-controls");
   const btnStartShift = document.getElementById("btn-start-shift");
@@ -5417,7 +5418,11 @@ window.updateCashierShiftUI = async function () {
     return;
   }
 
-  // Only Cashier sees the shift controls
+  // Prevent concurrent calls from racing each other
+  if (_updateShiftUIInFlight) return;
+  _updateShiftUIInFlight = true;
+
+  // Only Cashier sees the shift controls — show immediately so the UI doesn't flicker
   if (shiftControls) shiftControls.style.setProperty("display", "flex", "important");
 
   try {
@@ -5486,10 +5491,16 @@ window.updateCashierShiftUI = async function () {
     }
   } catch (e) {
     console.error("Failed to check cashier shift status:", e);
+  } finally {
+    _updateShiftUIInFlight = false;
   }
 };
 
 window.openStartShiftModal = function () {
+  if (window._hasActiveCashierShift) {
+    showToast("Your shift is already in progress. Tap 'End Shift' when finished.", "info");
+    return;
+  }
   const btnStartShift = document.getElementById("btn-start-shift");
   if (btnStartShift && btnStartShift.disabled) {
     showToast("Your shift is already in progress. Tap 'End Shift' when finished.", "info");
@@ -5715,10 +5726,11 @@ window.finaliseEndShift = async function () {
       setTimeout(() => {
         printEndShiftReport(report);
         setTimeout(() => {
-          localStorage.removeItem("jomish_token");
-          localStorage.removeItem("jomish_role");
-          localStorage.removeItem("jomish_name");
-          localStorage.removeItem("jomish_permissions");
+          const keysToRemove = [
+            "jomish_token", "jomish_role", "jomish_name", "jomish_permissions",
+            "jomish_user_id", "jomish_prefix", "jomish_active_shift"
+          ];
+          keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
           location.replace("login.html");
         }, 1500);
       }, 600);
@@ -9378,10 +9390,14 @@ async function handleLogout() {
       await window.OfflineDB.clearAllCache();
     }
   } catch (e) {}
-  localStorage.removeItem("jomish_token");
-  localStorage.removeItem("jomish_role");
-  localStorage.removeItem("jomish_name");
-  localStorage.removeItem("jomish_permissions");
+  // Clear ALL per-user localStorage keys — nothing must bleed into the next login
+  const keysToRemove = [
+    "jomish_token", "jomish_role", "jomish_name", "jomish_permissions",
+    "jomish_user_id", "jomish_prefix", "jomish_active_shift"
+  ];
+  keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
+  window._hasActiveCashierShift = false;
+  window._activeCashierShiftData = null;
   location.replace("login.html");
 }
 
