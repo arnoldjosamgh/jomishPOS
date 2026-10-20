@@ -365,12 +365,20 @@ if (config.dbType === 'postgres') {
                         activeDb.serialize(async () => {
                             activeDb.run('BEGIN');
                             try {
-                                // q() wraps db.run into a promise returning { lastID, rowCount }
+                                // q() executes query inside activeDb transaction. For SELECT it uses all() so rows are populated.
                                 const q = (sql, params = []) => new Promise((res2, rej2) => {
-                                    activeDb.run(sql, params, function(err) {
-                                        if (err) rej2(err);
-                                        else res2({ lastID: this.lastID, rowCount: this.changes, rows: [] });
-                                    });
+                                    const isSelect = typeof sql === 'string' && sql.trim().toUpperCase().startsWith('SELECT');
+                                    if (isSelect) {
+                                        activeDb.all(sql, params, (err, rows) => {
+                                            if (err) rej2(err);
+                                            else res2({ lastID: null, rowCount: rows ? rows.length : 0, rows: rows || [] });
+                                        });
+                                    } else {
+                                        activeDb.run(sql, params, function(err) {
+                                            if (err) rej2(err);
+                                            else res2({ lastID: this.lastID, rowCount: this.changes, rows: [] });
+                                        });
+                                    }
                                 });
                                 const result = await fn(q);
                                 activeDb.run('COMMIT', (err) => {

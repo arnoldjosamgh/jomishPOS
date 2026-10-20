@@ -4964,7 +4964,7 @@ async function submitWaiterOrder() {
       if (buyerPhoneEl) buyerPhoneEl.value = "";
 
       switchPOSView("pending");
-      if (typeof loadPendingCOD === "function") loadPendingCOD();
+      if (typeof loadPendingCOD === "function") loadPendingCOD(true); // force=true: bypass cache after edit
     } catch (e) {
       alert("Error updating order: " + e.message);
     } finally {
@@ -5061,7 +5061,37 @@ async function submitWaiterOrder() {
       }
     }
   } catch (e) {
-    alert("Failed to submit order: " + e.message);
+    // If we're offline or the network failed, queue the order so it isn't lost
+    const isNetworkError = !navigator.onLine || e.message.toLowerCase().includes("failed to fetch") || e.message.toLowerCase().includes("network");
+    if (isNetworkError && window.OfflineDB) {
+      try {
+        const offlinePayload = {
+          client_uuid: generateClientUUID("waiter"),
+          total_amount: posCart.reduce((sum, item) => sum + (item.price * (item.qty || 1)), 0),
+          items: posCart,
+          payment_method: "COD",
+          amount_paid: 0,
+          buyer_name: document.getElementById("buyer-name-input")?.value?.trim() || "Walk-in",
+          buyer_phone: document.getElementById("buyer-phone-input")?.value?.trim() || "",
+          is_delivery: false,
+          delivery_address: "",
+          served_by: (USER_NAME || localStorage.getItem("jomish_name") || "Waiter").trim().split(/\s+/)[0] || "Waiter",
+        };
+        await window.OfflineDB.queueMutation(`${API_URL}/checkout`, "POST", {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(offlinePayload),
+        });
+        showToast("Offline: Order saved locally and will sync when online.", "warning");
+        posCart = [];
+        renderCart();
+        loadPOSProducts();
+      } catch (queueErr) {
+        console.error("[submitWaiterOrder] Failed to queue offline order:", queueErr);
+        alert("Failed to submit order (offline) and could not queue it: " + queueErr.message);
+      }
+    } else {
+      alert("Failed to submit order: " + e.message);
+    }
     if (btnWaiter) {
       btnWaiter.disabled = false;
       btnWaiter.innerHTML = origHtml;
@@ -5170,7 +5200,7 @@ async function getInvoice() {
       if (invSection && invSection.classList.contains("active") && typeof loadInventory === "function") {
         loadInventory();
       }
-      if (typeof loadPendingCOD === "function") loadPendingCOD();
+      if (typeof loadPendingCOD === "function") loadPendingCOD(true); // force=true: bypass cache after invoice
     } else {
       const data = await res.json();
       alert("Error: " + data.error);
@@ -13242,7 +13272,7 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
 
       closePaymentPanel();
       showToast("Payment collected!", "success");
-      loadPendingCOD();
+      loadPendingCOD(true); // force=true: bypass cache after payment collection
       if (paymentMethod === "CREDIT" && typeof loadCredits === "function") {
         loadCredits();
       }
@@ -13296,7 +13326,7 @@ window.markCODReceived = async function (posOrderId) {
 
     if (res.ok) {
       showToast("Payment Marked as Received", "success");
-      loadPendingCOD();
+      loadPendingCOD(true); // force=true: bypass cache after COD received
 
       // Generate a receipt for the received COD
       if (data.transaction_id && data.total_amount) {

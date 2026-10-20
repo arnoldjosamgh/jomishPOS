@@ -3371,13 +3371,14 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       const servedByLabel = effectiveServedBy || cashierName;
       for (const item of items) {
         if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
-        // Fetch current stock BEFORE deduction using db.get() (works on both SQLite and Postgres)
-        // Must be done before the UPDATE inside withTransaction
-        const stockBeforeVal = await new Promise((resolve) => {
-          db.get("SELECT stock FROM products WHERE id = ?", [item.id], (err, row) => {
-            resolve(row ? row.stock : null);
-          });
-        });
+        // Fetch current stock BEFORE deduction using q() — must stay on the SAME
+        // transactional connection/client. Using db.get() here would grab a second
+        // pool connection and could deadlock Postgres or produce stale reads.
+        const stockBeforeRes = await q(
+          "SELECT stock FROM products WHERE id = ?",
+          [item.id]
+        ).catch(() => ({ rows: [] }));
+        const stockBeforeVal = (stockBeforeRes.rows && stockBeforeRes.rows[0]) ? stockBeforeRes.rows[0].stock : null;
         await q(
           "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
           [item.qty, item.id, item.qty]
