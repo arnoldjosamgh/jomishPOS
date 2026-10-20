@@ -475,7 +475,7 @@ const schema = [
     )`,
     `CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY, transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        amount REAL, type TEXT, description TEXT, recorded_by INTEGER
+        amount REAL, type TEXT, description TEXT, recorded_by INTEGER, receipt_no INTEGER
     )`,
     `CREATE TABLE IF NOT EXISTS recycled_transaction_ids (
         id INTEGER PRIMARY KEY
@@ -1570,6 +1570,80 @@ function runMigrations(fromVersion) {
             });
         });
     }
+
+    if (fromVersion < 151) {
+        // v151: receipt_no column on transactions for guaranteed unique sequential receipts
+        const alterReceiptNo = config.dbType === 'postgres'
+            ? "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_no INTEGER"
+            : "ALTER TABLE transactions ADD COLUMN receipt_no INTEGER";
+        db.run(alterReceiptNo, () => {
+            db.all("SELECT id FROM transactions ORDER BY id ASC", [], (err, rows) => {
+                if (!err && rows && rows.length > 0) {
+                    rows.forEach((r, idx) => {
+                        db.run("UPDATE transactions SET receipt_no = ? WHERE id = ? AND receipt_no IS NULL", [idx + 1, r.id]);
+                    });
+                }
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '151'], () => {
+                    console.log('Migration to v151 complete: Added receipt_no column to transactions.');
+                });
+            });
+        });
+    }
+
+    if (fromVersion < 152 && config.dbType === 'postgres') {
+        // v152: Replace racy MAX(receipt_no)+1 trigger with a true PostgreSQL SEQUENCE.
+        // A SEQUENCE is atomic — concurrent inserts always get distinct values.
+        (async () => {
+            const { Pool } = require('pg');
+            const seqPool = new Pool(config.postgres);
+            try {
+                const client = await seqPool.connect();
+                try {
+                    // Backfill any NULL receipt_no rows first
+                    await client.query(`
+                        WITH numbered AS (
+                            SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn FROM transactions WHERE receipt_no IS NULL
+                        ) UPDATE transactions SET receipt_no = numbered.rn FROM numbered WHERE transactions.id = numbered.id
+                    `);
+                    const maxRow = await client.query(`SELECT COALESCE(MAX(receipt_no), 0) AS mx FROM transactions`);
+                    const startVal = (parseInt(maxRow.rows[0].mx, 10) || 0) + 1;
+                    await client.query(`DROP SEQUENCE IF EXISTS receipt_no_seq`);
+                    await client.query(`CREATE SEQUENCE receipt_no_seq START WITH ${startVal}`);
+                    await client.query(`
+                        CREATE OR REPLACE FUNCTION assign_receipt_no()
+                        RETURNS TRIGGER AS $$
+                        BEGIN
+                            IF NEW.receipt_no IS NULL THEN
+                                NEW.receipt_no := nextval('receipt_no_seq');
+                            END IF;
+                            RETURN NEW;
+                        END;
+                        $$ LANGUAGE plpgsql;
+                    `);
+                    await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`);
+                    await client.query(`
+                        CREATE TRIGGER trg_assign_receipt_no
+                        BEFORE INSERT ON transactions
+                        FOR EACH ROW EXECUTE FUNCTION assign_receipt_no()
+                    `);
+                    db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '152'], () => {
+                        console.log('Migration to v152 complete: receipt_no now uses atomic PostgreSQL SEQUENCE (public schema).');
+                    });
+                } finally {
+                    client.release();
+                }
+            } catch (e) {
+                console.error('[Migration v152] Error:', e.message);
+            } finally {
+                await seqPool.end();
+            }
+        })();
+    } else if (fromVersion < 152) {
+        // SQLite: version bump only (SQLite is single-writer, MAX+1 is safe there)
+        db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '152'], () => {
+            console.log('Migration to v152 complete (SQLite: sequence not needed).');
+        });
+    }
 }
 
 initDb();
@@ -1691,7 +1765,53 @@ if (config.dbType === 'postgres') {
                                     can_see_system_users=1, can_see_schedules=1
                                 WHERE LOWER(role_name) = 'supervisor'
                             `).catch(() => {});
-                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements, invoice_number, discount_amount, client_uuid & shifts schema OK.`);
+                            // Ensure receipt_no column exists on transactions & backfill & attach trigger
+                            await sc_client.query(
+                                `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_no INTEGER`
+                            ).catch(() => {});
+                            await sc_client.query(`
+                                WITH numbered AS (
+                                    SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) as rn
+                                    FROM transactions
+                                )
+                                UPDATE transactions
+                                SET receipt_no = numbered.rn
+                                FROM numbered
+                                WHERE transactions.id = numbered.id AND transactions.receipt_no IS NULL
+                            `).catch(() => {});
+                            // Create a per-schema sequence for receipt_no — atomic & concurrent-safe
+                            await (async () => {
+                                try {
+                                    const maxR = await sc_client.query(`SELECT COALESCE(MAX(receipt_no), 0) AS mx FROM transactions`);
+                                    const seqStart = (parseInt(maxR.rows[0].mx, 10) || 0) + 1;
+                                    await sc_client.query(`DROP SEQUENCE IF EXISTS receipt_no_seq`).catch(() => {});
+                                    await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH ${seqStart}`);
+                                } catch (_) {
+                                    await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
+                                }
+                            })();
+                            await sc_client.query(`
+                                CREATE OR REPLACE FUNCTION assign_receipt_no()
+                                RETURNS TRIGGER AS $$
+                                BEGIN
+                                    IF NEW.receipt_no IS NULL THEN
+                                        NEW.receipt_no := nextval('receipt_no_seq');
+                                    END IF;
+                                    RETURN NEW;
+                                END;
+                                $$ LANGUAGE plpgsql;
+                            `).catch(() => {});
+                            await sc_client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+                            await sc_client.query(`
+                                CREATE TRIGGER trg_assign_receipt_no
+                                BEFORE INSERT ON transactions
+                                FOR EACH ROW
+                                EXECUTE FUNCTION assign_receipt_no()
+                            `).catch(() => {});
+                            await sc_client.query(
+                                `CREATE INDEX IF NOT EXISTS idx_transactions_receipt_no ON transactions(receipt_no)`
+                            ).catch(() => {});
+                            console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements, invoice_number, discount_amount, client_uuid, receipt_no & shifts schema OK.`);
                         } catch (patchErr) {
                             if (!patchErr.message.includes('already exists') && !patchErr.message.includes('duplicate column')) {
                                 console.error(`[SAFETY PATCH] ${sc}:`, patchErr.message);

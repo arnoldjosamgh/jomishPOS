@@ -23,6 +23,7 @@ const {
   getWhatsAppQR,
   sendWhatsAppMessage,
 } = require("./whatsapp");
+const archiver = require("./archiver");
 
 // Expose asyncLocalStorage from the db module proxy so all existing references work
 const asyncLocalStorage = db.asyncLocalStorage;
@@ -147,6 +148,7 @@ app.get("/api/system/status", (req, res) => {
     env: process.env.NODE_ENV || "development",
   });
 });
+
 
 // GLOBAL CRASH PROTECTION
 process.on("uncaughtException", (err) => {
@@ -298,6 +300,76 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+// ── Archive API Routes ─────────────────────────────────────────────────────
+// GET /api/archive/list — list all available PDF archives for this schema
+app.get("/api/archive/list", authenticateToken, (req, res) => {
+  try {
+    const schema = getSchema();
+    const archives = archiver.listArchives(schema);
+    res.json({ success: true, archives });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/archive/run — manually trigger archive (admin only)
+// Body: { dryRun: true/false, ageDays: 21 }
+app.post("/api/archive/run", authenticateToken, async (req, res) => {
+  try {
+    const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+    if (!["ADMIN", "SUPERADMIN", "SUPERVISOR", "OWNER"].includes(role)) {
+      return res.status(403).json({ error: "Insufficient permissions to run archive." });
+    }
+    const dryRun = req.body.dryRun === true || req.body.dryRun === "true";
+    const ageDays = parseInt(req.body.ageDays) || 21;
+    const schema = getSchema();
+    const result = await new Promise((resolve, reject) => {
+      asyncLocalStorage.run(schema, async () => {
+        try {
+          const r = await archiver.archiveOldTransactions({
+            ageDays,
+            dryRun,
+            archivedBy: req.user ? (req.user.name || req.user.username || "Admin") : "Admin"
+          });
+          resolve(r);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    if (!dryRun && result.success && result.count > 0) {
+      emitAndBust("transactions", "finance_summary", "transactions_list");
+    }
+    res.json(result);
+  } catch (e) {
+    console.error("[Archive API] Error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/archive/download/:filename — serve a PDF archive file
+app.get("/api/archive/download/:filename", authenticateToken, (req, res) => {
+  try {
+    const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+    if (!["ADMIN", "SUPERADMIN", "SUPERVISOR", "OWNER"].includes(role)) {
+      return res.status(403).json({ error: "Insufficient permissions." });
+    }
+    const filename = path.basename(req.params.filename); // prevent path traversal
+    if (!filename.endsWith(".pdf") || !filename.startsWith("archive_")) {
+      return res.status(400).json({ error: "Invalid archive filename." });
+    }
+    const filePath = path.join(archiver.ARCHIVE_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Archive file not found." });
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    fs.createReadStream(filePath).pipe(res);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ==== UNIFIED API ROUTES ====
 
@@ -1543,9 +1615,7 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
 
   const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
   const limitSql = limit ? `LIMIT ${parseInt(limit)}` : "";
-  const receiptNoCol = type
-    ? "t.id AS receipt_no"
-    : "ROW_NUMBER() OVER (ORDER BY t.id ASC) AS receipt_no";
+  const receiptNoCol = "COALESCE(t.receipt_no, t.id) AS receipt_no";
 
   db.all(
     `
@@ -3205,9 +3275,9 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       let receipt_no = existing.transaction_id;
       try {
         const rnResult = await new Promise((resolve, reject) => {
-          db.get("SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?", [existing.transaction_id], (err, row) => err ? reject(err) : resolve(row));
+          db.get("SELECT receipt_no FROM transactions WHERE id = ?", [existing.transaction_id], (err, row) => err ? reject(err) : resolve(row));
         });
-        receipt_no = rnResult ? Number(rnResult.cnt) : existing.transaction_id;
+        receipt_no = rnResult?.receipt_no || existing.transaction_id;
       } catch (_) {}
       const dupRes = {
         message: "Checkout successful!",
@@ -3300,7 +3370,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     });
 
     // ── 2. Run all DB writes inside a single atomic transaction ─────────────
-    const { transaction_id, pos_order_id, invoice_number, already_done } = await db.withTransaction(async (q) => {
+    const { transaction_id, pos_order_id, invoice_number, receipt_no: txReceiptNo, already_done } = await db.withTransaction(async (q) => {
       // Race condition check inside transaction lock
       if (trimmedUuid) {
         const raceCheck = await q("SELECT id AS pos_order_id, transaction_id, invoice_number FROM pos_orders WHERE client_uuid = ?", [trimmedUuid]);
@@ -3326,22 +3396,38 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       const txAmount = payment_method === "COD" || payment_method === "INVOICE"
         ? total_amount : paid;
 
-      // INSERT transaction — use explicit id if recycling, else auto-assign
+      // INSERT transaction — receipt_no is assigned atomically by the DB trigger/sequence.
+      // We do NOT pre-compute MAX+1 here (that was racy under concurrent inserts).
       let txResult;
       if (recycledId) {
+        // When reusing a recycled ID we must still omit receipt_no so the trigger fires.
         txResult = await q(
-          "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, receipt_no",
           [recycledId, txAmount, "INCOME", description, cashier_id, now, payment_status]
+        ).catch(() =>
+          // Fallback for SQLite (no RETURNING)
+          q("INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [recycledId, txAmount, "INCOME", description, cashier_id, now, payment_status])
         );
-        // Postgres RETURNING id won't return when we supply id explicitly — use recycledId
-        txResult.lastID = txResult.lastID || recycledId;
+        txResult.lastID = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID || recycledId;
       } else {
         txResult = await q(
-          "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, receipt_no",
           [txAmount, "INCOME", description, cashier_id, now, payment_status]
+        ).catch(() =>
+          // Fallback for SQLite (no RETURNING)
+          q("INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
+            [txAmount, "INCOME", description, cashier_id, now, payment_status])
         );
       }
-      const transaction_id = recycledId || txResult.lastID;
+      const transaction_id = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID;
+      // Read the DB-assigned receipt_no (from RETURNING row, or fall back to a SELECT)
+      let assignedReceiptNo = (txResult.rows && txResult.rows[0]) ? txResult.rows[0].receipt_no : null;
+      if (!assignedReceiptNo) {
+        const rcptBack = await q("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id]).catch(() => ({ rows: [] }));
+        assignedReceiptNo = (rcptBack.rows && rcptBack.rows[0]) ? rcptBack.rows[0].receipt_no : transaction_id;
+      }
+      const nextReceiptNo = assignedReceiptNo || transaction_id;
 
       // INSERT pos_order — include buyer_name/buyer_phone, waiter tracking and sequential invoice_number
       // For DISCOUNT, the effective total for the order is whatever was inserted/paid
@@ -3426,16 +3512,16 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         );
       }
 
-      return { transaction_id, pos_order_id, invoice_number, already_done: false };
+      return { transaction_id, pos_order_id, invoice_number, receipt_no: nextReceiptNo, already_done: false };
     });
 
     if (already_done) {
       let receipt_no = transaction_id;
       try {
         const rnResult = await new Promise((resolve, reject) => {
-          db.get("SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?", [transaction_id], (err, row) => err ? reject(err) : resolve(row));
+          db.get("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id], (err, row) => err ? reject(err) : resolve(row));
         });
-        receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
+        receipt_no = rnResult?.receipt_no || transaction_id;
       } catch (_) {}
       const dupRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
       if (trimmedUuid) rememberCheckout(trimmedUuid, dupRes);
@@ -3454,18 +3540,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       io.emit("db_updated", { module: "deliveries" });
     }
 
-    // Compute sequential receipt_no for this new transaction
-    let receipt_no = transaction_id;
-    try {
-      const rnResult = await new Promise((resolve, reject) => {
-        db.get(
-          "SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?",
-          [transaction_id],
-          (err, row) => err ? reject(err) : resolve(row)
-        );
-      });
-      receipt_no = rnResult ? Number(rnResult.cnt) : transaction_id;
-    } catch (_) { /* fallback to raw id */ }
+    const receipt_no = txReceiptNo || transaction_id;
     const successRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
     if (trimmedUuid) rememberCheckout(trimmedUuid, successRes);
     res.json(successRes);
@@ -4008,12 +4083,13 @@ app.get("/api/pos_orders/tx/:transaction_id", authenticateToken, (req, res) => {
   db.get(
     `
         SELECT p.*, CASE WHEN p.cashier_id = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
-               (SELECT COUNT(*) FROM transactions WHERE id <= ?) AS receipt_no
+               COALESCE(t.receipt_no, p.transaction_id) AS receipt_no
         FROM pos_orders p
+        LEFT JOIN transactions t ON p.transaction_id = t.id
         LEFT JOIN employees e ON p.cashier_id = e.id
         WHERE p.transaction_id = ?
     `,
-    [txId, txId],
+    [txId],
     (err, order) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!order)
@@ -4076,7 +4152,7 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
         SELECT 
             t.id, t.transaction_date, t.amount, t.type, t.description, t.payment_status,
             CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
-            ROW_NUMBER() OVER (ORDER BY t.id ASC) AS receipt_no
+            COALESCE(t.receipt_no, t.id) AS receipt_no
         FROM transactions t
         LEFT JOIN employees e ON t.recorded_by = e.id
         WHERE t.transaction_date >= ? AND t.transaction_date <= ?
@@ -6678,13 +6754,13 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       io.emit("db_updated", { module: "credits" });
     }
 
-    // Compute sequential receipt_no
+    // Fetch unique sequential receipt_no
     let receipt_no = transactionData.transaction_id;
     try {
-      const rnRow = await new Promise((resolve, reject) => {
-        db.get("SELECT COUNT(*) AS cnt FROM transactions WHERE id <= ?", [transactionData.transaction_id], (e, r) => e ? reject(e) : resolve(r));
+      const rnRow = await new Promise((resolve) => {
+        db.get("SELECT receipt_no FROM transactions WHERE id = ?", [transactionData.transaction_id], (e, r) => resolve(r));
       });
-      receipt_no = rnRow ? Number(rnRow.cnt) : transactionData.transaction_id;
+      receipt_no = rnRow?.receipt_no || transactionData.transaction_id;
     } catch (_) {}
 
     res.json({
@@ -6975,6 +7051,59 @@ app.post("/api/tech/kiosk", authenticateToken, (req, res) => {
   res.json({ message: "Kiosk mode launched on server machine." });
 });
 
+// ── AUTOMATED DATABASE ARCHIVES & NUMBER RECYCLING ──────────────────────
+app.get("/api/archives", authenticateToken, (req, res) => {
+  const schema = (db.asyncLocalStorage && db.asyncLocalStorage.getStore()) || req.user.company_schema || "public";
+  const archives = archiver.listArchives(schema);
+  res.json({ archives });
+});
+
+app.get("/api/archives/download/:filename", authenticateToken, (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(archiver.ARCHIVE_DIR, filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "Archive file not found" });
+  }
+  res.download(filePath, filename);
+});
+
+app.get("/api/archives/status", authenticateToken, (req, res) => {
+  db.get("SELECT setting_value FROM app_settings WHERE setting_key = 'last_auto_archive_date'", [], (err, row) => {
+    const lastArchive = row ? row.setting_value : null;
+    let nextArchive = null;
+    if (lastArchive) {
+      const nextDate = new Date(new Date(lastArchive).getTime() + 60 * 24 * 60 * 60 * 1000);
+      nextArchive = nextDate.toISOString();
+    }
+    res.json({
+      last_archive: lastArchive,
+      next_archive: nextArchive,
+      interval_days: 60,
+      retention_cutoff_days: 21
+    });
+  });
+});
+
+app.post("/api/archives/run", authenticateToken, async (req, res) => {
+  const role = (req.user.role || "").toUpperCase();
+  const isAuthorized = ["CEO", "ADMIN", "HR", "MANAGER", "SUPERVISOR", "TECH"].includes(role) || req.user.name === "System Technician";
+  if (!isAuthorized) {
+    return res.status(403).json({ error: "Forbidden: You do not have permission to run database archives." });
+  }
+  try {
+    const { dryRun = false, ageDays = 21 } = req.body;
+    const result = await archiver.archiveOldTransactions({
+      dryRun: !!dryRun,
+      ageDays: parseInt(ageDays, 10) || 21,
+      archivedBy: `${req.user.name || 'User'} (${role})`
+    });
+    res.json(result);
+  } catch (err) {
+    console.error("[ARCHIVER API] Error:", err.message);
+    res.status(500).json({ error: "Archive failed: " + err.message });
+  }
+});
+
 // Start Server
 io.on("connection", (socket) => {
 });
@@ -7077,6 +7206,8 @@ server
       });
     });
     ensureCashierShiftsSchema();
+    archiver.ensureArchiveSchema();
+    archiver.startArchiveScheduler();
 
     // Auto-open shift on startup if closed
     db.get("SELECT status FROM shifts ORDER BY id DESC LIMIT 1", (err, row) => {

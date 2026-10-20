@@ -217,6 +217,7 @@
                         <button id="btn-sme-pending" class="secondary-btn" onclick="switchPOSView('pending')"><i class="fa-solid fa-clock-rotate-left"></i> Pending Orders</button>
                         <button id="btn-sme-reports" class="secondary-btn" onclick="toggleSmeView('reports')"><i class="fa-solid fa-user-tie"></i> Cashier Reports</button>
                         <button id="btn-sme-product-sales" class="secondary-btn" onclick="toggleSmeView('products')"><i class="fa-solid fa-chart-pie"></i> Products Sold Counter</button>
+                        <button id="btn-sme-archives" class="secondary-btn" onclick="toggleSmeView('archives')"><i class="fa-solid fa-box-archive"></i> PDF Archives</button>
                         <button id="btn-add-tx" class="primary-btn">+ New Transaction</button>
                     </div>
                 </header>
@@ -303,6 +304,51 @@
                         </thead>
                         <tbody id="sme-products-tbody">
                             <tr><td colspan="7" style="text-align:center; padding:20px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Historical Archives & Number Recycling Sub-View -->
+                <div id="sme-view-archives" class="table-container" style="display:none;">
+                    <div style="background:var(--surface, #1e293b); border:1px solid var(--border, #334155); border-radius:10px; padding:18px; margin-bottom:20px;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:15px;">
+                            <div>
+                                <h3 style="margin:0 0 6px 0; font-size:1.15rem; color:var(--text); display:flex; align-items:center; gap:8px;">
+                                    <i class="fa-solid fa-box-archive" style="color:var(--primary);"></i> Automated 2-Month Transaction Archiving
+                                </h3>
+                                <p style="margin:0; font-size:0.85rem; color:var(--text-muted); max-width:700px; line-height:1.4;">
+                                    Every 2 months, transactions older than 3 weeks are automatically archived into high-fidelity PDF ledgers and cleared from the live database. Receipt numbers are cleanly recycled for active sales, keeping system performance optimal while permanently preserving all financial records.
+                                </p>
+                            </div>
+                            <div style="display:flex; gap:10px; align-items:center;">
+                                <button id="btn-manual-archive" class="primary-btn" onclick="triggerManualArchive()" style="padding:9px 16px; font-size:0.85rem;">
+                                    <i class="fa-solid fa-file-pdf"></i> Run Archive Now
+                                </button>
+                                <button class="secondary-btn" onclick="loadArchiveManager()" style="padding:9px 14px; font-size:0.85rem;">
+                                    <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                                </button>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:24px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border); font-size:0.85rem; flex-wrap:wrap;">
+                            <div><span style="color:var(--text-muted);">Cycle Frequency:</span> <strong>Every 60 Days (2 Months)</strong></div>
+                            <div><span style="color:var(--text-muted);"><i class="fa-solid fa-calendar-check"></i> Retention Cutoff:</span> <strong>Older than 21 Days (3 Weeks)</strong></div>
+                            <div><span style="color:var(--text-muted);">Last Auto-Archive:</span> <strong id="archive-status-last">—</strong></div>
+                            <div><span style="color:var(--text-muted);">Next Scheduled:</span> <strong id="archive-status-next">—</strong></div>
+                        </div>
+                    </div>
+
+                    <h4 style="margin:0 0 12px 0; font-size:0.95rem; color:var(--text);"><i class="fa-solid fa-folder-open"></i> Historical PDF Archives</h4>
+                    <table id="archives-table" style="width:100%;">
+                        <thead>
+                            <tr>
+                                <th>Archive PDF Name</th>
+                                <th>Date Generated</th>
+                                <th>File Size</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="archives-tbody">
+                            <tr><td colspan="4" style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading archives...</td></tr>
                         </tbody>
                     </table>
                 </div>

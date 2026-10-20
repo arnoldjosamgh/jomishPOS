@@ -6978,12 +6978,15 @@ async function loadTransactions(searchTerm = "") {
       const term = searchTerm.trim().toLowerCase().replace(/^(rcpt|inv|ref|tx|exp)0*/i, "");
       const rawTerm = searchTerm.trim().toLowerCase();
       filtered = filtered.filter((tx) => {
-        const docNo = String(tx.order_invoice_number || tx.receipt_no || tx.id);
+        const rcptNo = String(tx.receipt_no || tx.id);
+        const invNo = tx.order_invoice_number ? String(tx.order_invoice_number) : "";
         const paddedNo = String(tx.id).padStart(4, "0");
-        const strippedDoc = docNo.replace(/^(rcpt|inv|ref|tx|exp)0*/i, "");
+        const strippedRcpt = rcptNo.replace(/^(rcpt|ref|tx|exp)0*/i, "");
+        const strippedInv = invNo.replace(/^inv0*/i, "");
         return (
           paddedNo.includes(term) ||
-          strippedDoc.includes(term) ||
+          strippedRcpt.includes(term) ||
+          strippedInv.includes(term) ||
           String(tx.id).includes(term) ||
           (tx.description || "").toLowerCase().includes(rawTerm)
         );
@@ -6999,7 +7002,10 @@ async function loadTransactions(searchTerm = "") {
     filtered.forEach((tx) => {
       const isIncome = tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN";
       const color = isIncome ? "var(--success)" : "var(--danger)";
-      const receiptNo = formatDocNo("RCPT", tx.order_invoice_number || tx.receipt_no || tx.id);
+      const receiptNo = formatDocNo("RCPT", tx.receipt_no || tx.id);
+      const invBadge = tx.order_invoice_number
+        ? `<span style="font-size:0.75rem; color:var(--text-muted); margin-left:4px; font-weight:normal;" title="Linked Invoice">(Inv: ${formatDocNo("INV", tx.order_invoice_number)})</span>`
+        : "";
       const tr = document.createElement("tr");
 
       // ── Action badge: real-time payment status + method ──
@@ -7067,7 +7073,7 @@ async function loadTransactions(searchTerm = "") {
 
       const cashierName = tx.recorded_by_name || "—";
 
-      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">${receiptNo}</a></td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
+      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">${receiptNo}</a>${invBadge}</td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
       tr.dataset.txId = tx.id;
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function(e) {
@@ -7113,11 +7119,13 @@ function toggleSmeView(view) {
   const repView = document.getElementById("sme-view-reports");
   const prodView = document.getElementById("sme-view-products");
   const invView = document.getElementById("sme-view-invoices");
+  const archView = document.getElementById("sme-view-archives");
 
   if (txView) txView.style.display = "none";
   if (repView) repView.style.display = "none";
   if (prodView) prodView.style.display = "none";
   if (invView) invView.style.display = "none";
+  if (archView) archView.style.display = "none";
 
   if (view === "transactions") {
     if (txView) txView.style.display = "block";
@@ -7130,8 +7138,96 @@ function toggleSmeView(view) {
   } else if (view === "invoices") {
     if (invView) invView.style.display = "block";
     loadCustomerInvoices();
+  } else if (view === "archives") {
+    if (archView) archView.style.display = "block";
+    loadArchiveManager();
   }
 }
+
+async function loadArchiveManager() {
+  const tbody = document.getElementById("archives-tbody");
+  const lastEl = document.getElementById("archive-status-last");
+  const nextEl = document.getElementById("archive-status-next");
+
+  try {
+    const [statusRes, listRes] = await Promise.all([
+      fetchAuth(`${API_URL}/archives/status`).then(r => r.json()).catch(() => ({})),
+      fetchAuth(`${API_URL}/archives`).then(r => r.json()).catch(() => ({ archives: [] }))
+    ]);
+
+    if (lastEl) {
+      lastEl.textContent = statusRes.last_archive
+        ? formatDisplayDate(statusRes.last_archive, true)
+        : "Pending first cycle";
+    }
+    if (nextEl) {
+      nextEl.textContent = statusRes.next_archive
+        ? formatDisplayDate(statusRes.next_archive, true)
+        : "Scheduled in next cycle";
+    }
+
+    if (!tbody) return;
+    const archives = listRes.archives || [];
+    if (archives.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fa-solid fa-folder-open"></i> No PDF archives generated yet. Archives will appear here every 2 months.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = archives.map(a => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="font-weight:600; padding:10px 8px; color:var(--primary); font-family:monospace;">
+          <i class="fa-solid fa-file-pdf" style="color:#ef4444; margin-right:6px;"></i>${a.filename}
+        </td>
+        <td style="padding:10px 8px; font-size:0.85rem;">${formatDisplayDate(a.createdAt, true)}</td>
+        <td style="padding:10px 8px; font-size:0.85rem; color:var(--text-muted);">${a.sizeFormatted}</td>
+        <td style="padding:10px 8px; text-align:right;">
+          <a href="${API_URL}/archives/download/${encodeURIComponent(a.filename)}" download class="sm-btn primary" style="padding:5px 12px; font-size:0.8rem; text-decoration:none; display:inline-block;" target="_blank">
+            <i class="fa-solid fa-download"></i> Download PDF
+          </a>
+        </td>
+      </tr>
+    `).join("");
+
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; padding:20px; color:var(--danger);">Error loading archives: ${err.message}</td></tr>`;
+  }
+}
+
+async function triggerManualArchive() {
+  const btn = document.getElementById("btn-manual-archive");
+  if (!confirm("Are you sure you want to run the archival now?\n\nThis will:\n1. Generate a permanent PDF audit ledger of all completed transactions older than 3 weeks.\n2. Clear them from the database to optimize speed.\n3. Cleanly recycle receipt numbers for future sales.\n\nProceed?")) {
+    return;
+  }
+
+  const origHtml = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Archiving to PDF...';
+  }
+
+  try {
+    const res = await fetchAuth(`${API_URL}/archives/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ageDays: 21 })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Archiving failed");
+
+    showToast(data.message || `Archived ${data.count} transactions successfully!`, "success");
+    loadArchiveManager();
+    loadTransactions();
+  } catch (err) {
+    alert("Archival failed: " + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
+  }
+}
+window.loadArchiveManager = loadArchiveManager;
+window.triggerManualArchive = triggerManualArchive;
 
 async function loadSmeProductSales() {
   const tbody = document.getElementById("sme-products-tbody");
@@ -7363,8 +7459,9 @@ async function viewReceiptDetails(txId) {
     }
     const order = await res.json();
 
-    document.getElementById("rd-tx-id").textContent =
-      formatDocNo("RCPT", order.invoice_number || order.receipt_no || txId);
+    const rcptFormatted = formatDocNo("RCPT", order.receipt_no || txId);
+    const invFormatted = order.invoice_number ? ` (Inv: ${formatDocNo("INV", order.invoice_number)})` : "";
+    document.getElementById("rd-tx-id").textContent = rcptFormatted + invFormatted;
     document.getElementById("rd-cashier").textContent =
       order.cashier_name || "System";
     document.getElementById("rd-date").textContent = formatDisplayDate(
@@ -7517,7 +7614,7 @@ async function loadCashierReport() {
       const color = isIncome ? "#10b981" : "#ef4444";
       const sign = isIncome ? "+" : "-";
       const typeLabel = tx.type === "FLOAT_IN" ? "Opening Float" : tx.type === "CASH_IN" ? "Cash In" : tx.type;
-      const rn = formatDocNo("RCPT", tx.order_invoice_number || tx.receipt_no || tx.id);
+      const rn = formatDocNo("RCPT", tx.receipt_no || tx.id);
       txRows += `
         <tr>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">${rn}</td>
@@ -13285,8 +13382,8 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
       renderCart();
 
       if (data.transaction_id && data.total_amount) {
-        // Use invoice_number for RCPT so number matches the original INV number
-        const rcptNo = data.invoice_number || data.receipt_no || data.transaction_id;
+        // Use unique transaction receipt_no for payment receipt
+        const rcptNo = data.receipt_no || data.transaction_id;
         printReceipt(
           receiptItems,
           data.total_amount,
