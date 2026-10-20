@@ -7022,7 +7022,7 @@ async function loadTransactions(searchTerm = "") {
 
       if (tx.type === "GOODS_ON_CREDIT") {
         _badge = "🔖 Credit Sale"; _bColor = "#f59e0b";
-      } else if (_desc.includes("credit") && (_desc.includes("paid") || _desc.includes("payment"))) {
+      } else if ((_desc.includes("credit") || _desc.includes("creditor")) && (_desc.includes("paid") || _desc.includes("payment"))) {
         _badge = "✅ Credit Paid"; _bColor = "#10b981";
       } else if (tx.type === "CASH_IN" || tx.type === "FLOAT_IN") {
         _badge = "📥 Cash In (Float)"; _bColor = "#10b981";
@@ -7073,7 +7073,12 @@ async function loadTransactions(searchTerm = "") {
 
       const cashierName = tx.recorded_by_name || "—";
 
-      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">${receiptNo}</a>${invBadge}</td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${tx.description}</td><td>${cashierName}</td>${actionHtml}`;
+      let descText = tx.description || "";
+      if (/^Credit payment from (.+)$/i.test(descText)) {
+        descText = descText.replace(/^Credit payment from (.+)$/i, "Credit payment: $1 paid");
+      }
+
+      tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">${receiptNo}</a>${invBadge}</td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${descText}</td><td>${cashierName}</td>${actionHtml}`;
       tr.dataset.txId = tx.id;
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function(e) {
@@ -11703,6 +11708,8 @@ async function submitCreditPayment(e) {
       document.getElementById("credit-payment-modal").classList.add("hidden");
       showToast(`${data.message}`, "success");
       loadCredits(); // Refresh the list
+      if (typeof loadTransactions === "function") loadTransactions();
+      if (typeof loadDashboard === "function") loadDashboard();
     } else {
       showToast(`${data.error}`, "danger");
     }

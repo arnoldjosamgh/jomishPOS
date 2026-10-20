@@ -3386,13 +3386,22 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       }
 
       const now = new Date().toISOString();
-      const description = payment_method === "INVOICE"
-        ? "POS Sale (COD - Pending Invoice)"
-        : payment_method === "DISCOUNT"
-        ? `POS Sale (DISCOUNT: UGX ${paid.toLocaleString()})`
-        : payment_method === "SPLIT"
-        ? `POS Sale (SPLIT: Cash UGX ${split_cash_amount.toLocaleString()} + ${split_second_method} UGX ${split_second_amount.toLocaleString()})`
-        : `POS Sale (${payment_method})`;
+      let description;
+      if (payment_method === "INVOICE") {
+        description = "POS Sale (COD - Pending Invoice)";
+      } else if (payment_method === "DISCOUNT") {
+        description = `POS Sale (DISCOUNT: UGX ${paid.toLocaleString()})`;
+      } else if (payment_method === "SPLIT") {
+        const isSplitCredit = split_second_method === "CREDIT";
+        description = `POS Sale (SPLIT: Cash UGX ${split_cash_amount.toLocaleString()} + ${split_second_method} UGX ${split_second_amount.toLocaleString()}${isSplitCredit && buyer_name ? ` - ${buyer_name}` : ""})`;
+      } else if (isCredit) {
+        const creditBuyer = (buyer_name || "Customer").trim();
+        description = paid > 0
+          ? `POS Sale (CREDIT: ${creditBuyer} paid UGX ${paid.toLocaleString()} deposit)`
+          : `POS Sale (CREDIT: ${creditBuyer})`;
+      } else {
+        description = `POS Sale (${payment_method})`;
+      }
       const txAmount = payment_method === "COD" || payment_method === "INVOICE"
         ? total_amount : paid;
 
@@ -4249,7 +4258,16 @@ app.post("/api/credits/pay", authenticateToken, (req, res) => {
           if (err) return res.status(500).json({ error: err.message });
 
           // Also log as INCOME in the transactions ledger
-          const description = note || `Credit payment from ${buyer_name}`;
+          const creditorName = String(buyer_name || "Creditor").trim();
+          const cleanNote = note && String(note).trim() ? String(note).trim() : "";
+          let description = `Credit payment: ${creditorName} paid`;
+          if (cleanNote) {
+            if (cleanNote.toLowerCase().includes(creditorName.toLowerCase()) && cleanNote.toLowerCase().includes("paid")) {
+              description = `Credit payment: ${cleanNote}`;
+            } else {
+              description = `Credit payment: ${creditorName} paid - ${cleanNote}`;
+            }
+          }
           db.run(
             `INSERT INTO transactions (amount, type, description, recorded_by, transaction_date)
                          VALUES (?, 'INCOME', ?, ?, datetime('now'))`,
@@ -4260,6 +4278,7 @@ app.post("/api/credits/pay", authenticateToken, (req, res) => {
                   "[PAYMENT] Failed to log income transaction:",
                   err2.message,
                 );
+              emitAndBust("transactions", "finance_summary");
               io.emit("db_updated", { module: "credits" });
               res.json({
                 success: true,
@@ -6704,6 +6723,11 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
         effectivePaid = 0; // full credit
       }
 
+      const isSplitCredit = paymentMethod === "SPLIT" && splitSecondMethod === "CREDIT";
+      const orderDesc = paymentMethod === "SPLIT"
+        ? `POS Sale (SPLIT: Cash UGX ${splitCashAmount.toLocaleString()} + ${splitSecondMethod} UGX ${splitSecondAmount.toLocaleString()}${isSplitCredit && effBuyerName ? ` - ${effBuyerName}` : ""})`
+        : (isCredit ? (effectivePaid > 0 ? `POS Sale (CREDIT: ${effBuyerName} paid UGX ${effectivePaid.toLocaleString()})` : `POS Sale (CREDIT: ${effBuyerName})`) : `POS Sale (${paymentMethod})`);
+
       await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
 
       const now = new Date().toISOString();
@@ -6711,7 +6735,7 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ?, amount = ?, transaction_date = ? WHERE id = ?", [
         req.user.id,
         paymentStatus,
-        desc,
+        orderDesc,
         isCredit ? effectivePaid : totalAmt,
         now,
         row.transaction_id
