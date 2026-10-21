@@ -6957,7 +6957,7 @@ async function downloadAttendancePDF() {
 
 async function loadTransactions(searchTerm = "") {
   try {
-    const res = await fetchAuth(`${API_URL}/transactions`);
+    const res = await fetchAuth(`${API_URL}/transactions?t=${Date.now()}&force_refresh=true`);
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`;
       try {
@@ -7085,22 +7085,12 @@ async function loadTransactions(searchTerm = "") {
 
       tr.innerHTML = `<td><a href="#" onclick="viewReceiptDetails(${tx.id}); return false;" style="color:var(--primary); font-weight:bold; text-decoration:none;">${receiptNo}</a>${invBadge}</td><td>${formatDisplayDate(tx.transaction_date, true)}</td><td style="color: ${color}; font-weight: bold;">${isIncome ? "+" : "-"}UGX ${Number(tx.amount || 0).toLocaleString()}</td><td>${displayType}</td><td>${descText}</td><td>${cashierName}</td>${actionHtml}`;
       tr.dataset.txId = tx.id;
+      tr.setAttribute("data-tx-id", tx.id);
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function(e) {
-        if (e.target.closest("button") || e.target.closest("a")) return;
+        if (e.target.closest("button")) return;
         if (typeof window.selectTxRow === "function") {
           window.selectTxRow(tr);
-        } else {
-          document.querySelectorAll("#transactions-table tr.tx-selected").forEach(r => {
-            r.classList.remove("tx-selected");
-            r.style.outline = "";
-            r.style.outlineOffset = "";
-            r.style.backgroundColor = "";
-          });
-          tr.classList.add("tx-selected");
-          tr.style.outline = "2px solid var(--primary)";
-          tr.style.outlineOffset = "-2px";
-          tr.style.backgroundColor = "rgba(99, 102, 241, 0.12)";
         }
       });
       tbody.appendChild(tr);
@@ -7471,6 +7461,7 @@ function filterModalProductSales(optionalVal) {
 
 
 async function viewReceiptDetails(txId) {
+  window._activeReceiptModalTxId = txId;
   try {
     const res = await fetchAuth(`${API_URL}/pos_orders/tx/${txId}`);
     if (!res.ok) {
@@ -7880,7 +7871,20 @@ window.selectTxRow = function(tr) {
   tr.style.outline = "2px solid var(--primary)";
   tr.style.outlineOffset = "-2px";
   tr.style.backgroundColor = "rgba(99, 102, 241, 0.12)";
+  const txId = tr.getAttribute("data-tx-id") || tr.dataset.txId;
+  if (txId) {
+    window._selectedTxId = txId;
+  }
 };
+
+// Global delegated click listener so ANY transaction row clicked in any table gets selected
+document.addEventListener("click", function(e) {
+  const row = e.target.closest("tr[data-tx-id]");
+  if (row) {
+    if (e.target.closest("button")) return;
+    window.selectTxRow(row);
+  }
+});
 
 async function deleteTransaction(id, silent = false) {
   const receiptNo = String(id).padStart(4, "0"); // Note: uses raw id for delete confirm; receipt_no shown in list
@@ -7900,7 +7904,7 @@ async function deleteTransaction(id, silent = false) {
     });
     if (res.ok) {
       const resData = await res.json().catch(() => ({}));
-      const deletedPosOrderId = resData.pos_order_id;
+      const deletedPosOrderIds = resData.pos_order_ids || (resData.pos_order_id ? [resData.pos_order_id] : []);
       if (!silent) {
         showToast(
           `Transaction RCPT-${receiptNo} deleted successfully.`,
@@ -7909,23 +7913,33 @@ async function deleteTransaction(id, silent = false) {
       }
       // Instantly remove from Pending tab and Customer Invoices
       if (typeof removePendingOrderFromUI === "function") {
-        removePendingOrderFromUI(deletedPosOrderId, id);
+        for (const pId of deletedPosOrderIds) {
+          removePendingOrderFromUI(pId, id);
+        }
       }
       if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
-        window.OfflineDB.bustCache("/deliveries").catch(() => {});
-        window.OfflineDB.bustCache("/customer-invoices").catch(() => {});
-        window.OfflineDB.bustCache("/transactions").catch(() => {});
-        window.OfflineDB.bustCache("/pos_orders").catch(() => {});
+        await Promise.allSettled([
+          window.OfflineDB.bustCache("/deliveries"),
+          window.OfflineDB.bustCache("/customer-invoices"),
+          window.OfflineDB.bustCache("/transactions"),
+          window.OfflineDB.bustCache("/pos_orders")
+        ]);
       }
       // Instantly remove row from DOM
-      const row = document.querySelector(`tr[data-tx-id="${id}"]`);
-      if (row) row.remove();
+      const rows = document.querySelectorAll(`tr[data-tx-id="${id}"]`);
+      rows.forEach(r => r.remove());
 
       // Reload UI
-      loadTransactions();
-      loadDashboard();
+      if (typeof loadTransactions === "function") loadTransactions();
+      if (typeof loadDashboard === "function") loadDashboard();
       if (typeof loadPendingCOD === "function") loadPendingCOD(true);
       if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
+      if (typeof loadCashierReport === "function") {
+        const reportView = document.getElementById("sme-view-reports");
+        if (reportView && reportView.style.display !== "none") {
+          loadCashierReport();
+        }
+      }
     } else {
       if (!silent) {
         const data = await res.json().catch(() => ({}));
@@ -7944,23 +7958,57 @@ async function deleteTransaction(id, silent = false) {
 }
 
 // ── F8: Cashier can delete a selected transaction row silently ─────────────
-document.addEventListener("keydown", async function(e) {
-  if (e.key !== "F8") return;
+window.addEventListener("keydown", async function(e) {
+  const isF8 = e.key === "F8" || 
+               e.key === "f8" || 
+               e.code === "F8" || 
+               e.keyCode === 119 || 
+               e.which === 119;
+  if (!isF8) return;
 
-  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  if (_role !== "CASHIER") return; // F8 is strictly for Cashier
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").trim().toUpperCase();
+  const isCashier = _role === "CASHIER" || _role === "KIOSK";
+  if (!isCashier) return; // F8 is strictly for Cashier
 
-  const selectedRow = document.querySelector("#transactions-table tr.tx-selected") ||
-                      document.querySelector("#cashier-report-detail tr.tx-selected") ||
-                      document.querySelector("tr.tx-selected");
-  if (!selectedRow) return; // Silent: does nothing when tapped without selecting
+  // Find selected transaction ID
+  let txId = null;
+  let targetRow = null;
 
-  const txId = selectedRow.dataset.txId;
+  // 1. Check if receipt details modal is open
+  const receiptModal = document.getElementById("receipt-details-modal");
+  if (receiptModal && !receiptModal.classList.contains("hidden") && window._activeReceiptModalTxId) {
+    txId = window._activeReceiptModalTxId;
+    targetRow = document.querySelector(`tr[data-tx-id="${txId}"]`);
+    receiptModal.classList.add("hidden");
+  }
+
+  // 2. Check if a row is selected
+  if (!txId) {
+    targetRow = document.querySelector("#transactions-table tr.tx-selected") ||
+                document.querySelector("#cashier-report-detail tr.tx-selected") ||
+                document.querySelector("tr.tx-selected") ||
+                (window._selectedTxId ? document.querySelector(`tr[data-tx-id="${window._selectedTxId}"]`) : null);
+    if (targetRow) {
+      txId = targetRow.getAttribute("data-tx-id") || targetRow.dataset.txId;
+    } else if (window._selectedTxId) {
+      txId = window._selectedTxId;
+    }
+  }
+
+  // Silent: does nothing when tapped without selecting
   if (!txId) return;
 
   e.preventDefault();
-  await deleteTransaction(parseInt(txId), true); // true = silent deletion (no toast, no confirm, no alert)
-});
+  e.stopPropagation();
+
+  // Instantly remove row from DOM
+  if (targetRow) targetRow.remove();
+  const allTargetRows = document.querySelectorAll(`tr[data-tx-id="${txId}"]`);
+  allTargetRows.forEach(r => r.remove());
+  window._selectedTxId = null;
+
+  await deleteTransaction(parseInt(txId, 10), true); // true = silent deletion (no toast, no confirm, no alert)
+}, true);
 
 async function resetDatabase() {
   // Custom prompt for Electron compatibility to avoid native confirm() focus loss

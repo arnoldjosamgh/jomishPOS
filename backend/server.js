@@ -1672,10 +1672,11 @@ app.post("/api/transactions", authenticateToken, (req, res) => {
 
 app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   // Allowed roles for deletion: Tech, 000 Admins, Cashiers, Supervisors, Managers, HR, CEO
-  const isTech = req.user.role === "TECH" || req.user.name === "System Technician";
+  const userRole = (req.user.role || "").toUpperCase();
+  const isTech = userRole === "TECH" || req.user.name === "System Technician";
   const is000Admin = req.user.prefix && String(req.user.prefix).endsWith("000");
-  const isCashier = req.user.role === "Cashier" || req.user.role === "CASHIER";
-  const isManagerOrSupervisor = ["MANAGER", "SUPERVISOR", "HR", "CEO"].includes((req.user.role || "").toUpperCase());
+  const isCashier = userRole === "CASHIER" || userRole === "KIOSK";
+  const isManagerOrSupervisor = ["MANAGER", "SUPERVISOR", "HR", "CEO", "ADMIN"].includes(userRole);
 
   if (!isTech && !is000Admin && !isCashier && !isManagerOrSupervisor) {
     return res.status(403).json({
@@ -1691,9 +1692,8 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       // If deleting a pending order / transaction, only CEO, Manager, Tech, and 000 Admin can cancel it
       const txCheck = await q("SELECT payment_status FROM transactions WHERE id = ?", [id]);
       if (txCheck.rows && txCheck.rows.length > 0 && txCheck.rows[0].payment_status === "PENDING") {
-        const uRole = (req.user.role || "").toUpperCase();
-        const canCancelPending = ["CEO", "MANAGER", "ADMIN", "TECH"].includes(uRole) || is000Admin || isTech;
-        if (!canCancelPending || uRole === "SUPERVISOR") {
+        const canCancelPending = ["CEO", "MANAGER", "ADMIN", "TECH"].includes(userRole) || is000Admin || isTech;
+        if (!canCancelPending || userRole === "SUPERVISOR") {
           throw new Error("Access denied. Only CEO and Manager can cancel pending orders.");
         }
       }
@@ -1721,13 +1721,17 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
           await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
           await q("DELETE FROM pos_orders WHERE id = ?", [posOrderId]);
           // Note: also clear pending deliveries just in case
-          await q("DELETE FROM deliveries WHERE order_id = ?", [posOrderId]);
+          await q("DELETE FROM deliveries WHERE order_id = ? OR pos_order_id = ?", [posOrderId, posOrderId]);
         }
       }
       
+      // Clean up linked tables
+      await q("DELETE FROM sold_barcodes WHERE transaction_id = ?", [id]).catch(() => {});
+      await q("DELETE FROM deliveries WHERE order_id = ? OR pos_order_id = ?", [id, id]).catch(() => {});
+
       // 4. Delete the transaction itself
       await q("DELETE FROM transactions WHERE id = ?", [id]);
-      await q("INSERT INTO recycled_transaction_ids (id) VALUES (?) ON CONFLICT DO NOTHING", [id]);
+      await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [id]).catch(() => {});
     });
 
     emitAndBust("transactions", "finance_summary");
@@ -1757,6 +1761,7 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       pos_order_ids: deletedPosOrderIds,
     });
   } catch (err) {
+    console.error("Error deleting transaction " + id + ":", err);
     const statusCode = err.message.includes("Access denied") ? 403 : 500;
     res.status(statusCode).json({ error: err.message });
   }
