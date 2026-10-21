@@ -12715,11 +12715,7 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
             ${waiterBadge}
             <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
           </div>
-            <button onclick="cancelPendingOrder(${d.pos_order_id}, ${d.transaction_id || 0})"
-              style="background:transparent; color:var(--danger, #ef4444); border:1px solid var(--danger, #ef4444); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;"
-              title="Cancel / Void this pending order">
-              <i class="fa-solid fa-trash"></i> Cancel
-            </button>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <button onclick="openEditPendingOrder(${d.pos_order_id})"
               style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
               <i class="fa-solid fa-pen-to-square"></i> Edit Order
@@ -14048,7 +14044,7 @@ function toggleSmeFinanceMode() {
     pos.classList.remove("active");
     sme.classList.add("active");
     const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-    const canSeeInvoices = ["CEO", "SUPERVISOR", "ADMIN", "TECH"].includes(_role) || USER_NAME === "System Technician";
+    const canSeeInvoices = ["CEO", "MANAGER", "SUPERVISOR", "ADMIN", "TECH"].includes(_role) || USER_NAME === "System Technician";
     const btnInv = document.getElementById("btn-sme-invoices");
     if (btnInv) btnInv.style.display = canSeeInvoices ? "inline-flex" : "none";
     loadTransactions();
@@ -14330,6 +14326,9 @@ window.renderCustomerInvoicesTable = function(searchTerm = "") {
     return;
   }
 
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  const canCancel = (["CEO", "ADMIN", "MANAGER", "TECH"].includes(_role) || USER_NAME === "System Technician") && _role !== "SUPERVISOR";
+
   tbody.innerHTML = list.map(inv => {
     const invNum = inv.invoice_number || inv.pos_order_id;
     const safeClient = (inv.client_name || "").replace(/'/g, "\\'");
@@ -14351,6 +14350,7 @@ window.renderCustomerInvoicesTable = function(searchTerm = "") {
           <button onclick="openPendingOrderCheckout(${inv.pos_order_id}, ${inv.total_amount}, '${safeClient}', '${safeServer}')" class="sm-btn primary" style="padding:4px 12px; font-size:0.78rem;">
             <i class="fa-solid fa-cash-register"></i> Collect Payment
           </button>
+          ${canCancel ? `<button onclick="cancelPendingOrder(${inv.pos_order_id}, ${inv.transaction_id || 0})" class="sm-btn danger" style="padding:4px 10px; font-size:0.78rem; margin-left:4px;" title="Cancel / Void this invoice"><i class="fa-solid fa-trash"></i> Cancel</button>` : ''}
         </td>
       </tr>
     `;

@@ -1688,6 +1688,16 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   try {
     const deletedPosOrderIds = [];
     await db.withTransaction(async (q) => {
+      // If deleting a pending order / transaction, only CEO, Manager, Tech, and 000 Admin can cancel it
+      const txCheck = await q("SELECT payment_status FROM transactions WHERE id = ?", [id]);
+      if (txCheck.rows && txCheck.rows.length > 0 && txCheck.rows[0].payment_status === "PENDING") {
+        const uRole = (req.user.role || "").toUpperCase();
+        const canCancelPending = ["CEO", "MANAGER", "ADMIN", "TECH"].includes(uRole) || is000Admin || isTech;
+        if (!canCancelPending || uRole === "SUPERVISOR") {
+          throw new Error("Access denied. Only CEO and Manager can cancel pending orders.");
+        }
+      }
+
       // 1. Find the pos_order(s) linked to this transaction
       const posOrderRes = await q("SELECT id FROM pos_orders WHERE transaction_id = ?", [id]);
       if (posOrderRes.rows && posOrderRes.rows.length > 0) {
@@ -1747,7 +1757,8 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       pos_order_ids: deletedPosOrderIds,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const statusCode = err.message.includes("Access denied") ? 403 : 500;
+    res.status(statusCode).json({ error: err.message });
   }
 });
 
@@ -6671,7 +6682,7 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
         JOIN transactions t ON p.transaction_id = t.id
         LEFT JOIN employees ew ON p.waiter_id = ew.id
         LEFT JOIN employees ec ON p.cashier_id = ec.id
-        WHERE p.payment_method = 'INVOICE' AND t.payment_status = 'PENDING'
+        WHERE p.payment_method IN ('INVOICE', 'COD') AND t.payment_status = 'PENDING'
           AND t.transaction_date >= ?
           AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
         ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC
