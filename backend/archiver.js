@@ -125,7 +125,7 @@ function generateArchivePDF({ schema, cutoffDate, transactions, summary, busines
       doc.setFontSize(7.5);
     }
 
-    const isIncome = tx.type === 'INCOME' || tx.type === 'CASH_IN' || tx.type === 'FLOAT_IN';
+    const isIncome = (tx.type === 'INCOME' || tx.type === 'CASH_IN' || tx.type === 'FLOAT_IN') && tx.type !== 'GOODS_ON_CREDIT';
     const amountColor = isIncome ? [16, 185, 129] : [239, 68, 68];
     const sign = isIncome ? "+" : "-";
 
@@ -228,7 +228,7 @@ async function archiveOldTransactions(options = {}) {
   let totalIncome = 0;
   let totalExpense = 0;
   candidateRows.forEach(tx => {
-    const isInc = tx.type === 'INCOME' || tx.type === 'CASH_IN' || tx.type === 'FLOAT_IN';
+    const isInc = (tx.type === 'INCOME' || tx.type === 'CASH_IN' || tx.type === 'FLOAT_IN') && tx.type !== 'GOODS_ON_CREDIT' && tx.payment_status !== 'UNPAID';
     if (isInc) totalIncome += (Number(tx.amount) || 0);
     else totalExpense += (Number(tx.amount) || 0);
   });

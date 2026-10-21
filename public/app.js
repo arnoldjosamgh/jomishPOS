@@ -7088,10 +7088,20 @@ async function loadTransactions(searchTerm = "") {
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function(e) {
         if (e.target.closest("button") || e.target.closest("a")) return;
-        document.querySelectorAll("#transactions-table tr.tx-selected").forEach(r => r.classList.remove("tx-selected"));
-        tr.classList.add("tx-selected");
-        tr.style.outline = "2px solid var(--primary)";
-        tr.style.outlineOffset = "-2px";
+        if (typeof window.selectTxRow === "function") {
+          window.selectTxRow(tr);
+        } else {
+          document.querySelectorAll("#transactions-table tr.tx-selected").forEach(r => {
+            r.classList.remove("tx-selected");
+            r.style.outline = "";
+            r.style.outlineOffset = "";
+            r.style.backgroundColor = "";
+          });
+          tr.classList.add("tx-selected");
+          tr.style.outline = "2px solid var(--primary)";
+          tr.style.outlineOffset = "-2px";
+          tr.style.backgroundColor = "rgba(99, 102, 241, 0.12)";
+        }
       });
       tbody.appendChild(tr);
     });
@@ -7626,7 +7636,7 @@ async function loadCashierReport() {
       const typeLabel = tx.type === "FLOAT_IN" ? "Opening Float" : tx.type === "CASH_IN" ? "Cash In" : tx.type;
       const rn = formatDocNo("RCPT", tx.receipt_no || tx.id);
       txRows += `
-        <tr>
+        <tr data-tx-id="${tx.id}" style="cursor:pointer;" onclick="if(typeof selectTxRow==='function')selectTxRow(this)">
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-family:monospace; color:var(--primary);">${rn}</td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${formatDisplayDate(tx.transaction_date, true)}</td>
           <td style="padding:6px 8px; border-bottom:1px solid var(--border); font-size:0.8rem;">${tx.cashier_name || "—"}</td>
@@ -7858,12 +7868,26 @@ function toggleBackdateField() {
   }
 }
 
+window.selectTxRow = function(tr) {
+  if (!tr) return;
+  document.querySelectorAll("tr.tx-selected").forEach(r => {
+    r.classList.remove("tx-selected");
+    r.style.outline = "";
+    r.style.outlineOffset = "";
+    r.style.backgroundColor = "";
+  });
+  tr.classList.add("tx-selected");
+  tr.style.outline = "2px solid var(--primary)";
+  tr.style.outlineOffset = "-2px";
+  tr.style.backgroundColor = "rgba(99, 102, 241, 0.12)";
+};
+
 async function deleteTransaction(id, silent = false) {
   const receiptNo = String(id).padStart(4, "0"); // Note: uses raw id for delete confirm; receipt_no shown in list
   if (!silent) {
     if (
       !confirm(
-        `<i class="fa-solid fa-triangle-exclamation"></i> WARNING: Are you absolutely sure you want to permanently delete transaction RCPT-${receiptNo}? This action is irreversible and will affect the financial portal history.`,
+        `WARNING: Are you absolutely sure you want to permanently delete transaction RCPT-${receiptNo}? This action is irreversible and will affect the financial portal history.`,
       )
     ) {
       return;
@@ -7893,6 +7917,10 @@ async function deleteTransaction(id, silent = false) {
         window.OfflineDB.bustCache("/transactions").catch(() => {});
         window.OfflineDB.bustCache("/pos_orders").catch(() => {});
       }
+      // Instantly remove row from DOM
+      const row = document.querySelector(`tr[data-tx-id="${id}"]`);
+      if (row) row.remove();
+
       // Reload UI
       loadTransactions();
       loadDashboard();
@@ -7900,28 +7928,38 @@ async function deleteTransaction(id, silent = false) {
       if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
     } else {
       if (!silent) {
-        const data = await res.json();
-        alert("Error deleting transaction: " + (data.error || "Access Denied"));
+        const data = await res.json().catch(() => ({}));
+        const errMsg = data.error || "Access Denied";
+        showToast("Error deleting transaction: " + errMsg, "danger");
+        alert("Error deleting transaction: " + errMsg);
       }
     }
   } catch (e) {
     console.error("Delete Transaction Error:", e);
-    if (!silent) alert("Network error. Check server connection.");
+    if (!silent) {
+      showToast("Network error. Check server connection.", "danger");
+      alert("Network error. Check server connection.");
+    }
   }
 }
 
-// ── F8: Cashier can delete a selected transaction row ──────────────────────
+// ── F8: Cashier can delete a selected transaction row silently ─────────────
 document.addEventListener("keydown", async function(e) {
   if (e.key !== "F8") return;
-  const _role = (USER_ROLE || "").toUpperCase();
-  if (_role !== "CASHIER") return; // Admins use the direct button
 
-  const selectedRow = document.querySelector("#transactions-table tr.tx-selected");
-  if (!selectedRow) return; // Do nothing if no row is selected
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_role !== "CASHIER") return; // F8 is strictly for Cashier
+
+  const selectedRow = document.querySelector("#transactions-table tr.tx-selected") ||
+                      document.querySelector("#cashier-report-detail tr.tx-selected") ||
+                      document.querySelector("tr.tx-selected");
+  if (!selectedRow) return; // Silent: does nothing when tapped without selecting
+
   const txId = selectedRow.dataset.txId;
   if (!txId) return;
+
   e.preventDefault();
-  await deleteTransaction(parseInt(txId), true); // true = silent deletion
+  await deleteTransaction(parseInt(txId), true); // true = silent deletion (no toast, no confirm, no alert)
 });
 
 async function resetDatabase() {

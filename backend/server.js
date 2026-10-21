@@ -3413,8 +3413,9 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       } else {
         description = `POS Sale (${payment_method})`;
       }
-      const txAmount = payment_method === "COD" || payment_method === "INVOICE"
+      const txAmount = (payment_method === "COD" || payment_method === "INVOICE" || isCredit)
         ? total_amount : paid;
+      const txType = isCredit ? "GOODS_ON_CREDIT" : "INCOME";
 
       // INSERT transaction — receipt_no is assigned atomically by the DB trigger/sequence.
       // We do NOT pre-compute MAX+1 here (that was racy under concurrent inserts).
@@ -3423,21 +3424,21 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         // When reusing a recycled ID we must still omit receipt_no so the trigger fires.
         txResult = await q(
           "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, receipt_no",
-          [recycledId, txAmount, "INCOME", description, cashier_id, now, payment_status]
+          [recycledId, txAmount, txType, description, cashier_id, now, payment_status]
         ).catch(() =>
           // Fallback for SQLite (no RETURNING)
           q("INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [recycledId, txAmount, "INCOME", description, cashier_id, now, payment_status])
+            [recycledId, txAmount, txType, description, cashier_id, now, payment_status])
         );
         txResult.lastID = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID || recycledId;
       } else {
         txResult = await q(
           "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, receipt_no",
-          [txAmount, "INCOME", description, cashier_id, now, payment_status]
+          [txAmount, txType, description, cashier_id, now, payment_status]
         ).catch(() =>
           // Fallback for SQLite (no RETURNING)
           q("INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
-            [txAmount, "INCOME", description, cashier_id, now, payment_status])
+            [txAmount, txType, description, cashier_id, now, payment_status])
         );
       }
       const transaction_id = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID;
@@ -3714,7 +3715,7 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
           // Shift covers ALL orders checked out at the till during the shift window,
           // regardless of which employee (waiter/cashier) originally created the order.
           // Cash sales = physical cash that landed in the drawer (CASH + DISCOUNT orders from all staff)
-          cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) WHEN payment_method = 'CREDIT' THEN COALESCE(amount_paid, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           momoSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN payment_method = 'MOBILE MONEY' THEN total_amount WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           // totalSales = ALL sales from every waiter & cashier during the shift (informational total)
           totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
@@ -3812,7 +3813,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
       const queries = {
         // Shift covers ALL orders checked out at the till — no cashier_id filter
         // Cash sales = physical cash in drawer (CASH + DISCOUNT from every waiter & cashier)
-        cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) WHEN payment_method = 'CREDIT' THEN COALESCE(amount_paid, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         momoSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN payment_method = 'MOBILE MONEY' THEN total_amount WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // totalSales = ALL sales from every waiter & cashier during the shift (informational)
         totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
@@ -4150,15 +4151,21 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
             CASE WHEN po.cashier_id = 9999 THEN 'System Technician'
                  ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name)
             END AS cashier_name,
-            COUNT(po.id) AS income_count,
+            COUNT(CASE WHEN po.payment_method NOT IN ('CREDIT', 'COD', 'INVOICE') OR COALESCE(po.amount_paid, 0) > 0 THEN po.id END) AS income_count,
             (SELECT COUNT(*) FROM transactions tx
              WHERE tx.type = 'EXPENSE' AND tx.recorded_by = po.cashier_id
                AND tx.transaction_date >= ? AND tx.transaction_date <= ?) AS expense_count,
-            SUM(po.total_amount) AS total_income,
+            SUM(CASE 
+                  WHEN po.payment_method = 'CREDIT' THEN COALESCE(po.amount_paid, 0)
+                  WHEN po.payment_method IN ('COD', 'INVOICE') THEN 0
+                  WHEN po.payment_method = 'DISCOUNT' THEN po.total_amount
+                  WHEN po.payment_method = 'SPLIT' THEN (COALESCE(po.split_cash_amount, 0) + CASE WHEN po.split_second_method NOT IN ('CREDIT', 'COD', 'INVOICE') THEN COALESCE(po.split_second_amount, 0) ELSE 0 END)
+                  ELSE po.total_amount
+                END) AS total_income,
             (SELECT COALESCE(SUM(tx.amount), 0) FROM transactions tx
              WHERE tx.type = 'EXPENSE' AND tx.recorded_by = po.cashier_id
                AND tx.transaction_date >= ? AND tx.transaction_date <= ?) AS total_expense,
-            SUM(CASE WHEN po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT' THEN po.total_amount WHEN po.payment_method = 'SPLIT' THEN COALESCE(po.split_cash_amount, 0) ELSE 0 END) AS cash_sales,
+            SUM(CASE WHEN po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT' THEN po.total_amount WHEN po.payment_method = 'SPLIT' THEN COALESCE(po.split_cash_amount, 0) WHEN po.payment_method = 'CREDIT' THEN COALESCE(po.amount_paid, 0) ELSE 0 END) AS cash_sales,
             SUM(CASE WHEN po.payment_method = 'MOBILE MONEY' THEN po.total_amount WHEN po.payment_method = 'SPLIT' AND (po.split_second_method = 'MOBILE MONEY' OR po.split_second_method = 'MOMO') THEN COALESCE(po.split_second_amount, 0) ELSE 0 END) AS momo_sales,
             SUM(po.total_amount) AS total_sales
         FROM pos_orders po
@@ -4812,8 +4819,13 @@ app.get("/api/finance/summary", authenticateToken, (req, res) => {
         const txDate = toEAT(tx.transaction_date);
         const amt = parseFloat(tx.amount) || 0;
 
-        // Only count INCOME if it is actually PAID (ignore PENDING COD/Invoices). Cash In / Float is also income/addition.
-        const isIncomePaid = (tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN") && tx.payment_status !== "PENDING";
+        // Only count INCOME if it is actually PAID (ignore PENDING COD/Invoices, UNPAID credit sales, and GOODS_ON_CREDIT). Cash In / Float is also income/addition.
+        const isCreditSale = tx.type === "GOODS_ON_CREDIT" ||
+          tx.payment_status === "UNPAID" ||
+          (tx.description && tx.description.toUpperCase().includes("POS SALE (CREDIT") && !tx.description.toLowerCase().includes("deposit"));
+        const isIncomePaid = (tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN") &&
+          tx.payment_status !== "PENDING" &&
+          !isCreditSale;
         
         if (isIncomePaid) totalIncome += amt;
         else if (tx.type === "EXPENSE") totalExpense += amt;
@@ -7016,13 +7028,15 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
 
     const cashier_id = req.user.id;
     const paid = amount_paid !== undefined ? amount_paid : total_amount;
+    const isCredit = (payment_method || "").toUpperCase() === "CREDIT";
     const effectivePaymentMethod =
       payment_method === "INVOICE" ? "COD" : payment_method;
     const payment_status =
       payment_method === "COD" || payment_method === "INVOICE"
         ? "PENDING"
-        : "PAID";
-    const txAmount = payment_status === "PENDING" ? total_amount : paid;
+        : (isCredit ? (paid === 0 ? "UNPAID" : "PARTIAL") : "PAID");
+    const txType = isCredit ? "GOODS_ON_CREDIT" : "INCOME";
+    const txAmount = (payment_status === "PENDING" || isCredit) ? total_amount : paid;
     const description = `POS Sale - Offline Sync (${payment_method})`;
     const now = new Date().toISOString();
 
@@ -7032,7 +7046,7 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
       await db.withTransaction(async (q) => {
         const txRes = await q(
           "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
-          [txAmount, "INCOME", description, cashier_id, now, payment_status]
+          [txAmount, txType, description, cashier_id, now, payment_status]
         );
         const transaction_id = txRes.lastID;
 
