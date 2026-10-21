@@ -1369,6 +1369,9 @@ async function loadPOSExpenses() {
 
       const tr = document.createElement("tr");
       tr.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
+      tr.dataset.txId = t.id;
+      tr.setAttribute("data-tx-id", t.id);
+      tr.style.cursor = "pointer";
       tr.innerHTML = `
         <td style="padding:12px; font-size:0.82rem; color:#94A3B8; white-space:nowrap;">${formatDisplayDate(t.transaction_date, true)}</td>
         <td style="padding:12px;">
@@ -7859,30 +7862,30 @@ function toggleBackdateField() {
   }
 }
 
-window.selectTxRow = function(tr) {
-  if (!tr) return;
-  document.querySelectorAll("tr.tx-selected").forEach(r => {
+window.selectTxRow = function(el) {
+  if (!el) return;
+  document.querySelectorAll(".tx-selected").forEach(r => {
     r.classList.remove("tx-selected");
     r.style.outline = "";
     r.style.outlineOffset = "";
     r.style.backgroundColor = "";
   });
-  tr.classList.add("tx-selected");
-  tr.style.outline = "2px solid var(--primary)";
-  tr.style.outlineOffset = "-2px";
-  tr.style.backgroundColor = "rgba(99, 102, 241, 0.12)";
-  const txId = tr.getAttribute("data-tx-id") || tr.dataset.txId;
+  el.classList.add("tx-selected");
+  el.style.outline = "2px solid var(--primary)";
+  el.style.outlineOffset = "-2px";
+  el.style.backgroundColor = "rgba(99, 102, 241, 0.12)";
+  const txId = el.getAttribute("data-tx-id") || el.dataset.txId;
   if (txId) {
     window._selectedTxId = txId;
   }
 };
 
-// Global delegated click listener so ANY transaction row clicked in any table gets selected
+// Global delegated click listener so ANY transaction row/card clicked in any table/list gets selected
 document.addEventListener("click", function(e) {
-  const row = e.target.closest("tr[data-tx-id]");
-  if (row) {
-    if (e.target.closest("button")) return;
-    window.selectTxRow(row);
+  const item = e.target.closest("[data-tx-id]");
+  if (item) {
+    if (e.target.closest("button") || e.target.closest("input") || e.target.closest("select")) return;
+    window.selectTxRow(item);
   }
 });
 
@@ -7925,9 +7928,11 @@ async function deleteTransaction(id, silent = false) {
           window.OfflineDB.bustCache("/pos_orders")
         ]);
       }
-      // Instantly remove row from DOM
-      const rows = document.querySelectorAll(`tr[data-tx-id="${id}"]`);
-      rows.forEach(r => r.remove());
+      // Instantly remove elements from DOM
+      const elements = document.querySelectorAll(`[data-tx-id="${id}"]`);
+      elements.forEach(r => r.remove());
+      const card = document.getElementById(`pending-order-card-${id}`);
+      if (card) card.remove();
 
       // Reload UI
       if (typeof loadTransactions === "function") loadTransactions();
@@ -7941,9 +7946,10 @@ async function deleteTransaction(id, silent = false) {
         }
       }
     } else {
+      const data = await res.json().catch(() => ({}));
+      const errMsg = data.error || "Access Denied";
+      console.error("[deleteTransaction] Server rejected deletion of ID " + id + ":", errMsg);
       if (!silent) {
-        const data = await res.json().catch(() => ({}));
-        const errMsg = data.error || "Access Denied";
         showToast("Error deleting transaction: " + errMsg, "danger");
         alert("Error deleting transaction: " + errMsg);
       }
@@ -7967,8 +7973,11 @@ window.addEventListener("keydown", async function(e) {
   if (!isF8) return;
 
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").trim().toUpperCase();
-  const isCashier = _role === "CASHIER" || _role === "KIOSK";
-  if (!isCashier) return; // F8 is strictly for Cashier
+  const isCashier = _role.includes("CASHIER") || _role === "KIOSK";
+  if (!isCashier) {
+    console.warn("[F8] Ignored: current user role is not cashier:", _role);
+    return; // F8 is strictly for Cashier
+  }
 
   // Find selected transaction ID
   let txId = null;
@@ -7978,16 +7987,18 @@ window.addEventListener("keydown", async function(e) {
   const receiptModal = document.getElementById("receipt-details-modal");
   if (receiptModal && !receiptModal.classList.contains("hidden") && window._activeReceiptModalTxId) {
     txId = window._activeReceiptModalTxId;
-    targetRow = document.querySelector(`tr[data-tx-id="${txId}"]`);
+    targetRow = document.querySelector(`[data-tx-id="${txId}"]`);
     receiptModal.classList.add("hidden");
   }
 
-  // 2. Check if a row is selected
+  // 2. Check if a row or card is selected
   if (!txId) {
-    targetRow = document.querySelector("#transactions-table tr.tx-selected") ||
-                document.querySelector("#cashier-report-detail tr.tx-selected") ||
-                document.querySelector("tr.tx-selected") ||
-                (window._selectedTxId ? document.querySelector(`tr[data-tx-id="${window._selectedTxId}"]`) : null);
+    targetRow = document.querySelector("#transactions-table .tx-selected") ||
+                document.querySelector("#cashier-report-detail .tx-selected") ||
+                document.querySelector("#pos-expenses-tbody .tx-selected") ||
+                document.querySelector("#cod-list-container .tx-selected") ||
+                document.querySelector(".tx-selected") ||
+                (window._selectedTxId ? document.querySelector(`[data-tx-id="${window._selectedTxId}"]`) : null);
     if (targetRow) {
       txId = targetRow.getAttribute("data-tx-id") || targetRow.dataset.txId;
     } else if (window._selectedTxId) {
@@ -7996,17 +8007,21 @@ window.addEventListener("keydown", async function(e) {
   }
 
   // Silent: does nothing when tapped without selecting
-  if (!txId) return;
+  if (!txId) {
+    console.log("[F8] Tapped without selecting any transaction row - silent no-op");
+    return;
+  }
 
   e.preventDefault();
   e.stopPropagation();
 
-  // Instantly remove row from DOM
+  // Instantly remove row/card from DOM
   if (targetRow) targetRow.remove();
-  const allTargetRows = document.querySelectorAll(`tr[data-tx-id="${txId}"]`);
+  const allTargetRows = document.querySelectorAll(`[data-tx-id="${txId}"]`);
   allTargetRows.forEach(r => r.remove());
   window._selectedTxId = null;
 
+  console.log("[F8] Cashier silently deleting transaction ID:", txId);
   await deleteTransaction(parseInt(txId, 10), true); // true = silent deletion (no toast, no confirm, no alert)
 }, true);
 
@@ -12792,7 +12807,7 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
          </div>`
       : "";
     html += `
-      <div id="pending-order-card-${d.pos_order_id}" data-pos-order-id="${d.pos_order_id}" data-tx-id="${d.transaction_id || ''}" style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <div id="pending-order-card-${d.pos_order_id}" class="pending-order-card" data-pos-order-id="${d.pos_order_id}" data-tx-id="${d.transaction_id || d.pos_order_id}" style="cursor:pointer; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
           <div style="flex:1;">
             <h4 style="margin:0 0 3px 0; color:var(--text); font-size:1rem;">${invoiceLabel}</h4>

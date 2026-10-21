@@ -1675,7 +1675,7 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   const userRole = (req.user.role || "").toUpperCase();
   const isTech = userRole === "TECH" || req.user.name === "System Technician";
   const is000Admin = req.user.prefix && String(req.user.prefix).endsWith("000");
-  const isCashier = userRole === "CASHIER" || userRole === "KIOSK";
+  const isCashier = userRole.includes("CASHIER") || userRole === "KIOSK";
   const isManagerOrSupervisor = ["MANAGER", "SUPERVISOR", "HR", "CEO", "ADMIN"].includes(userRole);
 
   if (!isTech && !is000Admin && !isCashier && !isManagerOrSupervisor) {
@@ -1685,21 +1685,24 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   }
   
   const { id } = req.params;
+  const numericId = parseInt(id, 10);
+  if (isNaN(numericId)) {
+    return res.status(400).json({ error: "Invalid transaction ID" });
+  }
   
   try {
     const deletedPosOrderIds = [];
     await db.withTransaction(async (q) => {
-      // If deleting a pending order / transaction, only CEO, Manager, Tech, and 000 Admin can cancel it
-      const txCheck = await q("SELECT payment_status FROM transactions WHERE id = ?", [id]);
+      // If deleting a pending order / transaction, only Supervisors are blocked (CEO, Manager, Cashier, Tech can cancel)
+      const txCheck = await q("SELECT payment_status FROM transactions WHERE id = ?", [numericId]);
       if (txCheck.rows && txCheck.rows.length > 0 && txCheck.rows[0].payment_status === "PENDING") {
-        const canCancelPending = ["CEO", "MANAGER", "ADMIN", "TECH"].includes(userRole) || is000Admin || isTech;
-        if (!canCancelPending || userRole === "SUPERVISOR") {
-          throw new Error("Access denied. Only CEO and Manager can cancel pending orders.");
+        if (userRole === "SUPERVISOR") {
+          throw new Error("Access denied. Supervisors cannot cancel pending orders.");
         }
       }
 
       // 1. Find the pos_order(s) linked to this transaction
-      const posOrderRes = await q("SELECT id FROM pos_orders WHERE transaction_id = ?", [id]);
+      const posOrderRes = await q("SELECT id FROM pos_orders WHERE transaction_id = ?", [numericId]);
       if (posOrderRes.rows && posOrderRes.rows.length > 0) {
         for (const poRow of posOrderRes.rows) {
           const posOrderId = poRow.id;
@@ -1712,26 +1715,26 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
           );
           if (itemsRes.rows && itemsRes.rows.length > 0) {
             for (let item of itemsRes.rows) {
-              if (item.track_stock === 0) continue; // Made-to-order: no stock to restore
+              if (!item.product_id || item.track_stock === 0) continue; // Made-to-order or custom: no stock to restore
               await q("UPDATE products SET stock = stock + ? WHERE id = ?", [item.qty, item.product_id]);
             }
           }
           
-          // 3. Delete from pos_orders and order_items (if not cascaded)
+          // 3. Delete from pos_orders, order_items, credit_records, and deliveries
           await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+          await q("DELETE FROM credit_records WHERE pos_order_id = ?", [posOrderId]).catch(() => {});
           await q("DELETE FROM pos_orders WHERE id = ?", [posOrderId]);
-          // Note: also clear pending deliveries just in case
-          await q("DELETE FROM deliveries WHERE order_id = ? OR pos_order_id = ?", [posOrderId, posOrderId]);
+          await q("DELETE FROM deliveries WHERE order_id = ? OR pos_order_id = ?", [posOrderId, posOrderId]).catch(() => {});
         }
       }
       
       // Clean up linked tables
-      await q("DELETE FROM sold_barcodes WHERE transaction_id = ?", [id]).catch(() => {});
-      await q("DELETE FROM deliveries WHERE order_id = ? OR pos_order_id = ?", [id, id]).catch(() => {});
+      await q("DELETE FROM sold_barcodes WHERE transaction_id = ?", [numericId]).catch(() => {});
+      await q("DELETE FROM deliveries WHERE order_id = ? OR pos_order_id = ?", [numericId, numericId]).catch(() => {});
 
       // 4. Delete the transaction itself
-      await q("DELETE FROM transactions WHERE id = ?", [id]);
-      await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [id]).catch(() => {});
+      await q("DELETE FROM transactions WHERE id = ?", [numericId]);
+      await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [numericId]).catch(() => {});
     });
 
     emitAndBust("transactions", "finance_summary");
