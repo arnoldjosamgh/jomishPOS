@@ -996,7 +996,7 @@ function switchPOSView(viewName) {
     const b = document.getElementById("pos-nav-pending");
     if (b) b.classList.add("active");
     if (typeof loadPendingCOD === "function") {
-      loadPendingCOD();
+      loadPendingCOD(true);
     }
   } else if (viewName === "stock") {
     const el = document.getElementById("pos-stock-view");
@@ -12715,7 +12715,11 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
             ${waiterBadge}
             <p style="margin:6px 0 0 0; font-weight:700; color:var(--primary); font-size:1rem;">Total: UGX ${Number(d.total_amount).toLocaleString()}</p>
           </div>
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button onclick="cancelPendingOrder(${d.pos_order_id}, ${d.transaction_id || 0})"
+              style="background:transparent; color:var(--danger, #ef4444); border:1px solid var(--danger, #ef4444); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;"
+              title="Cancel / Void this pending order">
+              <i class="fa-solid fa-trash"></i> Cancel
+            </button>
             <button onclick="openEditPendingOrder(${d.pos_order_id})"
               style="background:var(--surface); color:var(--text); border:1px solid var(--border); padding:10px 14px; border-radius:6px; cursor:pointer; font-weight:600; white-space:nowrap;">
               <i class="fa-solid fa-pen-to-square"></i> Edit Order
@@ -12777,14 +12781,15 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
   });
 }
 
-window.loadPendingCOD = async function (force = false) {
+window.loadPendingCOD = async function (force = true) {
   const listContainer = document.getElementById("cod-list-container");
   if (listContainer && (!listContainer.children.length || listContainer.innerText.includes("Loading"))) {
     listContainer.innerHTML =
       '<p style="text-align:center;color:var(--text-muted);padding:30px;"><i class="fa-solid fa-spinner fa-spin"></i> Loading pending orders...</p>';
   }
   try {
-    const fetchUrl = `${API_URL}/deliveries/pending-cod${force ? "?force_refresh=1&_t=" + Date.now() : ""}`;
+    // Always force fresh fetch from server with cache-busting timestamp to avoid any stale/phantom orders
+    const fetchUrl = `${API_URL}/deliveries/pending-cod?force_refresh=1&_t=${Date.now()}`;
     const res = await fetchAuth(fetchUrl);
     if (res.ok) {
       const deliveries = await res.json();
@@ -12814,6 +12819,27 @@ window.loadPendingCOD = async function (force = false) {
     if (listContainer) {
       listContainer.innerHTML = '<p style="text-align:center;color:var(--danger);padding:20px;"><i class="fa-solid fa-triangle-exclamation"></i> Could not connect to server to load pending orders.</p>';
     }
+  }
+};
+
+// Cancel / Void a pending order directly from the Pending tab
+window.cancelPendingOrder = async function (posOrderId, txId) {
+  if (!confirm("Are you sure you want to cancel and void this pending order? This action cannot be undone.")) return;
+  try {
+    showToast("Cancelling order...", "info");
+    const targetId = txId || posOrderId;
+    const res = await fetchAuth(`${API_URL}/transactions/${targetId}`, { method: "DELETE" });
+    if (res.ok) {
+      showToast("Order cancelled successfully.", "success");
+      const card = document.getElementById(`pending-order-card-${posOrderId}`);
+      if (card) card.remove();
+      loadPendingCOD(true);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast("Failed to cancel order: " + (err.error || "Server error"), "danger");
+    }
+  } catch (e) {
+    showToast("Error cancelling order: " + e.message, "danger");
   }
 };
 

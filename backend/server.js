@@ -6570,6 +6570,9 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
   const rawName = req.user && req.user.name ? req.user.name : "";
   const userFirstName = rawName.trim().split(/\s+/)[0] || "";
 
+  // Only show pending orders from the last 30 days — anything older is a stale/orphaned record
+  const cutoff30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
   // The POS Pending tab only shows Waiter / COD table orders (Customer Invoices are moved to Financial Hub)
   let sql = `
         SELECT 
@@ -6593,8 +6596,10 @@ app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
         LEFT JOIN employees ew ON p.waiter_id = ew.id
         LEFT JOIN employees ec ON p.cashier_id = ec.id
         WHERE p.payment_method = 'COD' AND t.payment_status = 'PENDING'
+          AND t.transaction_date >= ?
+          AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
   `;
-  const params = [];
+  const params = [cutoff30Days];
 
   // Waiters only get the orders they personally created/worked on
   if (userRole === "WAITER") {
@@ -6646,6 +6651,9 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
     return res.status(403).json({ error: "Access denied. Only Supervisor and CEO can access Customer Invoices." });
   }
 
+  // Only show pending invoices from the last 30 days — anything older is a stale/orphaned record
+  const cutoff30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
   const sql = `
         SELECT 
             p.id as pos_order_id,
@@ -6664,9 +6672,11 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
         LEFT JOIN employees ew ON p.waiter_id = ew.id
         LEFT JOIN employees ec ON p.cashier_id = ec.id
         WHERE p.payment_method = 'INVOICE' AND t.payment_status = 'PENDING'
+          AND t.transaction_date >= ?
+          AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
         ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC
   `;
-  db.all(sql, [], (err, rows) => {
+  db.all(sql, [cutoff30Days], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows || []);
   });

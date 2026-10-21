@@ -45,7 +45,23 @@ function getDB() {
 
 // ─── API CACHE METHODS ──────────────────────────────────────────
 
+// Endpoints that MUST NEVER be cached locally because they are real-time transactional queues
+const NO_CACHE_PATTERNS = [
+    'pending-cod',
+    'customer-invoices',
+    '/deliveries',
+    '/transactions',
+    '/pos_orders'
+];
+
+function shouldNeverCache(url) {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    return NO_CACHE_PATTERNS.some(p => lower.includes(p));
+}
+
 async function cacheApiResponse(url, data) {
+    if (shouldNeverCache(url)) return;
     try {
         const prefix = (localStorage.getItem('jomish_prefix') || 'public').toLowerCase().trim();
         const key = prefix + '::' + url;
@@ -63,6 +79,7 @@ async function cacheApiResponse(url, data) {
 }
 
 async function getCachedApiResponse(url) {
+    if (shouldNeverCache(url)) return null;
     try {
         const prefix = (localStorage.getItem('jomish_prefix') || 'public').toLowerCase().trim();
         const key = prefix + '::' + url;
@@ -336,6 +353,27 @@ async function clearAllCache() {
     }
 }
 
+// Immediately purge any stale pending or transaction caches lingering in IndexedDB
+async function purgeStalePendingCaches() {
+    try {
+        const db = await getDB();
+        const tx = db.transaction(STORE_CACHE, 'readwrite');
+        const store = tx.objectStore(STORE_CACHE);
+        const req = store.openCursor();
+        req.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (!cursor) return;
+            const url = cursor.value && cursor.value.url ? cursor.value.url.toLowerCase() : '';
+            if (NO_CACHE_PATTERNS.some(p => url.includes(p))) {
+                cursor.delete();
+            }
+            cursor.continue();
+        };
+    } catch (_) {}
+}
+// Run purge in background
+setTimeout(purgeStalePendingCaches, 500);
+
 // Expose globally for app.js and login.html
 window.OfflineDB = {
     cacheApiResponse,
@@ -352,5 +390,6 @@ window.OfflineDB = {
     removeSyncedSales,
     getPendingCount,
     bustCache,
-    clearAllCache
+    clearAllCache,
+    purgeStalePendingCaches
 };
