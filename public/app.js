@@ -8,11 +8,6 @@ const API_URL = window.API_URL;
 let USER_ROLE = "";
 let USER_NAME = "";
 window._hasActiveCashierShift = false;
-try {
-  if (localStorage.getItem("jomish_active_shift") === "true") {
-    window._hasActiveCashierShift = true;
-  }
-} catch (_) {}
 window.USER_PERMISSIONS = {
   can_see_dashboard: 0,
   can_see_hr: 0,
@@ -5547,6 +5542,7 @@ window.updateCashierShiftUI = async function () {
         if (btnStartShift) {
           btnStartShift.style.setProperty("display", "inline-flex", "important");
           btnStartShift.disabled = true;
+          btnStartShift.setAttribute("data-shift-active", "true");
           btnStartShift.style.opacity = "0.4";
           btnStartShift.style.cursor = "default";
           btnStartShift.style.pointerEvents = "none";
@@ -5567,7 +5563,7 @@ window.updateCashierShiftUI = async function () {
         if (shiftBanner && shiftInfo) {
           shiftBanner.style.setProperty("display", "inline-flex", "important");
           const startTimeStr = new Date(data.shift.start_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          shiftInfo.textContent = `Started ${startTimeStr} • Starting Capital: UGX ${Number(data.shift.start_cash || 0).toLocaleString()}`;
+          shiftInfo.textContent = `Started ${startTimeStr} • Opening Income: UGX ${Number(data.shift.start_cash || 0).toLocaleString()}`;
         }
       } else {
         try { localStorage.removeItem("jomish_active_shift"); } catch (_) {}
@@ -5575,6 +5571,7 @@ window.updateCashierShiftUI = async function () {
         if (btnStartShift) {
           btnStartShift.style.setProperty("display", "inline-flex", "important");
           btnStartShift.disabled = false;
+          btnStartShift.removeAttribute("data-shift-active");
           btnStartShift.style.opacity = "1";
           btnStartShift.style.cursor = "pointer";
           btnStartShift.style.pointerEvents = "auto";
@@ -5606,13 +5603,10 @@ window.updateCashierShiftUI = async function () {
   }
 };
 
-window.openStartShiftModal = function () {
-  if (window._hasActiveCashierShift) {
-    showToast("Your shift is already in progress. Tap 'End Shift' when finished.", "info");
-    return;
-  }
+window.openStartShiftModal = function (e) {
+  if (e && e.preventDefault) e.preventDefault();
   const btnStartShift = document.getElementById("btn-start-shift");
-  if (btnStartShift && btnStartShift.disabled) {
+  if (btnStartShift && (btnStartShift.disabled || btnStartShift.getAttribute("data-shift-active") === "true")) {
     showToast("Your shift is already in progress. Tap 'End Shift' when finished.", "info");
     return;
   }
@@ -5620,7 +5614,7 @@ window.openStartShiftModal = function () {
   const input = document.getElementById("start-shift-cash-input");
   if (input) input.value = "";
   if (modal) modal.classList.remove("hidden");
-  setTimeout(() => input && input.focus(), 100);
+  setTimeout(() => input && input.focus(), 150);
 };
 
 window.closeStartShiftModal = function () {
@@ -5628,15 +5622,24 @@ window.closeStartShiftModal = function () {
   if (modal) modal.classList.add("hidden");
 };
 
-window.confirmStartShift = async function () {
+let _confirmStartShiftLock = false;
+window.confirmStartShift = async function (e) {
+  if (e && e.preventDefault) e.preventDefault();
+  if (e && e.stopPropagation) e.stopPropagation();
+  if (_confirmStartShiftLock) return;
+  _confirmStartShiftLock = true;
+  setTimeout(() => { _confirmStartShiftLock = false; }, 1000);
+
   const input = document.getElementById("start-shift-cash-input");
   const val = input ? input.value.trim() : "";
-  if (val === "") {
-    showToast("Please enter your starting cash (enter 0 if starting with an empty drawer).", "warning");
+  const startCash = parseFloat(val);
+  if (val === "" || isNaN(startCash) || startCash <= 0) {
+    showToast("Please enter your starting cash / opening capital amount to begin your shift.", "warning");
     if (input) input.focus();
+    _confirmStartShiftLock = false;
     return;
   }
-  const startCash = parseFloat(val) || 0;
+
   const btn = document.getElementById("btn-submit-start-shift");
   const origHtml = btn ? btn.innerHTML : "";
   if (btn) {
@@ -5663,6 +5666,7 @@ window.confirmStartShift = async function () {
       if (btnStart) {
         btnStart.style.setProperty("display", "inline-flex", "important");
         btnStart.disabled = true;
+        btnStart.setAttribute("data-shift-active", "true");
         btnStart.style.opacity = "0.4";
         btnStart.style.pointerEvents = "none";
         btnStart.style.cursor = "default";
@@ -5683,12 +5687,12 @@ window.confirmStartShift = async function () {
       if (banner && info) {
         banner.style.setProperty("display", "inline-flex", "important");
         const timeStr = new Date(data.start_time || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        info.textContent = `Started ${timeStr} • Starting Capital: UGX ${startCash.toLocaleString()}`;
+        info.textContent = `Started ${timeStr} • Opening Income: UGX ${startCash.toLocaleString()}`;
       }
 
       window._hasActiveCashierShift = true;
       try { localStorage.setItem("jomish_active_shift", "true"); } catch (_) {}
-      showToast(`Shift started! Starting Capital: UGX ${startCash.toLocaleString()}`, "success");
+      showToast(`Shift started! Opening Income: UGX ${startCash.toLocaleString()}`, "success");
       await updateCashierShiftUI();
     } else {
       alert("Error starting shift: " + (data.error || "Unknown error"));
@@ -5701,6 +5705,7 @@ window.confirmStartShift = async function () {
       btn.disabled = false;
       btn.innerHTML = origHtml || '<i class="fa-solid fa-check"></i> Start Shift';
     }
+    _confirmStartShiftLock = false;
   }
 };
 
@@ -5780,7 +5785,7 @@ function _buildShiftPreview(r) {
     '<div style="text-align:center;margin-bottom:12px;font-size:0.82rem;color:var(--text-muted);">Cashier: <strong>' + (r.cashier_name || "Cashier") + '</strong></div>' +
     divider +
     row("Shift Started:", new Date(r.start_time).toLocaleString("en-UG")) +
-    row("(+) Starting Capital:", fmt(r.start_cash)) +
+    row("(+) Opening Income / Capital:", fmt(r.start_cash)) +
     divider +
     row("(+) Cash Sales:", fmt(r.cash_sales)) +
     row("(+) Mobile Money Sales:", fmt(momoSales), "#7c3aed") +

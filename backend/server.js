@@ -3615,6 +3615,9 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
   ensureCashierShiftsSchema(() => {
     const cashierId = req.user.id;
     const startCash = parseFloat(req.body.start_cash) || 0;
+    if (startCash <= 0) {
+      return res.status(400).json({ error: "Opening cash amount is required and must be greater than zero." });
+    }
 
     // Check if an open shift already exists
     db.get(
@@ -3650,8 +3653,8 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
 
             if (startCash > 0) {
               db.run(
-                "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, 'FLOAT_IN', ?, ?, ?, 'PAID')",
-                [startCash, `Opening Cash Drawer Float (Shift #${shiftId})`, cashierId, now],
+                "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, 'INCOME', ?, ?, ?, 'PAID')",
+                [startCash, `Opening Cash Float (Shift #${shiftId})`, cashierId, now],
                 () => {
                   emitAndBust("transactions", "finance_summary");
                 }
@@ -3706,12 +3709,12 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
           totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           // cashIn = extra float added mid-shift (not the opening float already in startCash)
-          cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+          cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
           // manualIncome = only non-POS income manually recorded (e.g. credit repayments).
-          // POS sales already counted via cashSales/momoSales from pos_orders — exclude 'POS Sale%' to avoid double-counting.
-          incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+          // POS sales already counted via cashSales/momoSales from pos_orders — exclude 'POS Sale%' and Opening Cash (already in startCash).
+          incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
         };
 
         Promise.all(Object.values(queries)).then(results => {
@@ -3805,14 +3808,14 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         // Expenses = all cash handed out of drawer during this shift
         expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Cash In = all float added during this shift (excluding the opening float already in startCash)
-        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash Drawer Float%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
+        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // COD/Invoice collections during this shift
         invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // Total discount amount given during this shift
         discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
         // manualIncome = only non-POS income manually recorded (credit repayments, etc.).
-        // POS sales are already counted via cashSales/momoSales from pos_orders — exclude 'POS Sale%' to avoid double-counting.
-        incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
+        // POS sales are already counted via cashSales/momoSales from pos_orders — exclude 'POS Sale%' and Opening Cash (already in startCash).
+        incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
       };
 
       Promise.all(Object.values(queries)).then(results => {
