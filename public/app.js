@@ -7070,8 +7070,8 @@ async function loadTransactions(searchTerm = "") {
 
       // Delete + Print Invoice buttons: only visible for Admin/HR/CEO/Manager
       // Cashiers can delete ONLY by selecting the row and pressing F8
-      const _role = (USER_ROLE || "").toUpperCase();
-      const canDeleteDirectly = ["CEO", "ADMIN", "HR", "MANAGER", "SUPERVISOR"].includes(_role) || USER_NAME === "System Technician" || _role === "TECH";
+      const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").trim().toUpperCase();
+      const canDeleteDirectly = ["CEO", "ADMIN", "HR", "MANAGER", "SUPERVISOR"].includes(_role) || _role.includes("SUPERVISOR") || _role.includes("MANAGER") || USER_NAME === "System Technician" || _role === "TECH";
       const _printInvBtn = (canDeleteDirectly && tx.type === "INCOME" && tx.pos_order_id)
         ? `<button class='sm-btn secondary' onclick="printTransactionInvoice(${tx.pos_order_id})" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" title="Print Invoice"><i class="fa-solid fa-print"></i></button>`
         : "";
@@ -14476,8 +14476,8 @@ window.renderCustomerInvoicesTable = function(searchTerm = "") {
     return;
   }
 
-  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const canCancel = (["CEO", "ADMIN", "MANAGER", "TECH"].includes(_role) || USER_NAME === "System Technician") && _role !== "SUPERVISOR";
+  const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").trim().toUpperCase();
+  const canCancel = ["CEO", "ADMIN", "MANAGER", "TECH", "SUPERVISOR"].includes(_role) || _role.includes("SUPERVISOR") || _role.includes("MANAGER") || USER_NAME === "System Technician";
 
   tbody.innerHTML = list.map(inv => {
     const invNum = inv.invoice_number || inv.pos_order_id;

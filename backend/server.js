@@ -1672,13 +1672,17 @@ app.post("/api/transactions", authenticateToken, (req, res) => {
 
 app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   // Allowed roles for deletion: Tech, 000 Admins, Cashiers, Supervisors, Managers, HR, CEO
-  const userRole = (req.user.role || "").toUpperCase();
-  const isTech = userRole === "TECH" || req.user.name === "System Technician";
-  const is000Admin = req.user.prefix && String(req.user.prefix).endsWith("000");
+  const userRole = (req.user && req.user.role ? String(req.user.role) : "").trim().toUpperCase();
+  const userName = req.user ? (req.user.name || "") : "";
+  const isTech = userRole === "TECH" || userName === "System Technician";
+  const is000Admin = req.user && req.user.prefix && String(req.user.prefix).endsWith("000");
   const isCashier = userRole.includes("CASHIER") || userRole === "KIOSK";
-  const isManagerOrSupervisor = ["MANAGER", "SUPERVISOR", "HR", "CEO", "ADMIN"].includes(userRole);
+  const isSupervisor = userRole.includes("SUPERVISOR");
+  const isManager = userRole.includes("MANAGER");
+  const isManagerOrSupervisor = ["MANAGER", "SUPERVISOR", "HR", "CEO", "ADMIN"].includes(userRole) || isSupervisor || isManager;
+  const hasFinancePermission = Boolean(req.user && req.user.permissions && req.user.permissions.can_see_sme);
 
-  if (!isTech && !is000Admin && !isCashier && !isManagerOrSupervisor) {
+  if (!isTech && !is000Admin && !isCashier && !isManagerOrSupervisor && !hasFinancePermission) {
     return res.status(403).json({
       error: "Forbidden: You do not have permission to delete transactions.",
     });
@@ -1693,13 +1697,6 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   try {
     const deletedPosOrderIds = [];
     await db.withTransaction(async (q) => {
-      // If deleting a pending order / transaction, only Supervisors are blocked (CEO, Manager, Cashier, Tech can cancel)
-      const txCheck = await q("SELECT payment_status FROM transactions WHERE id = ?", [numericId]);
-      if (txCheck.rows && txCheck.rows.length > 0 && txCheck.rows[0].payment_status === "PENDING") {
-        if (userRole === "SUPERVISOR") {
-          throw new Error("Access denied. Supervisors cannot cancel pending orders.");
-        }
-      }
 
       // 1. Find the pos_order(s) linked to this transaction
       const posOrderRes = await q("SELECT id FROM pos_orders WHERE transaction_id = ?", [numericId]);
