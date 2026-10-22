@@ -398,6 +398,8 @@ document.addEventListener("DOMContentLoaded", () => {
         switchPOSView("tech");       // Tech → Tech Hub
       } else if (_role === "CASHIER") {
         switchPOSView("register");   // Cashier → Register
+        // Ensure shift banner/buttons are correct immediately on login (no re-login needed)
+        setTimeout(function() { if (typeof updateCashierShiftUI === "function") { _updateShiftUIInFlight = false; updateCashierShiftUI(); } }, 400);
       } else if (_role === "WAITER") {
         // Waiter sees Register and Pending (orders they worked on)
         [
@@ -2634,8 +2636,8 @@ function enforceRBAC() {
     "pos-nav-lowstock": isAdminLike || isTech,
     // Expenses & Cash-In — CASHIER ONLY
     "pos-nav-expenses": isCashier,
-    // Credits — Admin-like + Tech
-    "pos-nav-credits":  isAdminLike || isTech,
+    // Credits — Admin-like + Tech + Cashier
+    "pos-nav-credits":  isAdminLike || isTech || isCashier,
     // Finance Hub — Admin-like + HR + Supervisor + Cashier + Tech
     "pos-nav-finance":  isAdminLike || isHRRole || isSupervisor || isCashier || isTech,
     // Staff / HR — Admin-like (excluding Supervisor) + Tech
@@ -5696,6 +5698,8 @@ window.confirmStartShift = async function (e) {
       window._hasActiveCashierShift = true;
       try { localStorage.setItem("jomish_active_shift", "true"); } catch (_) {}
       showToast(`Shift started! Opening Income: UGX ${startCash.toLocaleString()}`, "success");
+      // Reset in-flight guard so the post-confirm refresh always runs cleanly
+      _updateShiftUIInFlight = false;
       await updateCashierShiftUI();
     } else {
       alert("Error starting shift: " + (data.error || "Unknown error"));
@@ -7242,17 +7246,62 @@ async function triggerManualArchive() {
 window.loadArchiveManager = loadArchiveManager;
 window.triggerManualArchive = triggerManualArchive;
 
+// Handler for date-mode dropdown change
+window.onSmeDateModeChange = function() {
+  const mode = document.getElementById("sme-date-mode")?.value || "today";
+  const picker = document.getElementById("sme-date-picker");
+  const periodLabel = document.getElementById("sme-period-label");
+  const colHeader = document.getElementById("sme-period-col-header");
+  if (mode === "date") {
+    if (picker) { picker.style.display = "inline-block"; if (!picker.value) picker.valueAsDate = new Date(); }
+  } else {
+    if (picker) picker.style.display = "none";
+  }
+  loadSmeProductSales();
+};
+
 async function loadSmeProductSales() {
   const tbody = document.getElementById("sme-products-tbody");
   if (!tbody) return;
   tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:25px; color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading product sales counters...</td></tr>';
+
+  // Determine filter mode
+  const mode = document.getElementById("sme-date-mode")?.value || "today";
+  const picker = document.getElementById("sme-date-picker");
+  const periodLabel = document.getElementById("sme-period-label");
+  const colHeader = document.getElementById("sme-period-col-header");
+
+  let urlParams = `force_refresh=true&_t=${Date.now()}`;
+  let periodText = "Today";
+
+  if (mode === "shift") {
+    // Per-shift: use the active shift's start_time / end_time
+    const shiftData = window._activeCashierShiftData;
+    if (shiftData && shiftData.start_time) {
+      const shiftStart = shiftData.start_time.replace("T", " ").replace(/\..*$/, "");
+      const shiftEnd   = shiftData.end_time ? shiftData.end_time.replace("T", " ").replace(/\..*$/, "") : "";
+      urlParams += `&shift_start=${encodeURIComponent(shiftStart)}`;
+      if (shiftEnd) urlParams += `&shift_end=${encodeURIComponent(shiftEnd)}`;
+      const timeStr = new Date(shiftData.start_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      periodText = `Shift (from ${timeStr})`;
+    } else {
+      periodText = "This Shift";
+    }
+  } else if (mode === "date" && picker && picker.value) {
+    urlParams += `&start_date=${picker.value}&end_date=${picker.value}`;
+    periodText = new Date(picker.value + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  }
+  // else "today" — API calculates today by default (no extra params needed)
+
+  if (periodLabel) periodLabel.textContent = periodText;
+  if (colHeader) colHeader.textContent = periodText;
 
   try {
     if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
       await window.OfflineDB.bustCache("/reports/products-sold").catch(() => {});
       await window.OfflineDB.bustCache("/api/reports/products-sold").catch(() => {});
     }
-    const res = await fetchAuth(`${API_URL}/reports/products-sold?force_refresh=true&_t=${Date.now()}`);
+    const res = await fetchAuth(`${API_URL}/reports/products-sold?${urlParams}`);
     const data = await res.json();
     _allSmeProducts = data.products || [];
 

@@ -2660,7 +2660,7 @@ app.get("/api/products", authenticateToken, (req, res) => {
 
 // Dedicated product sales analytics / counter report for CEO and Management
 app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
-  const { start_date, end_date } = req.query;
+  const { start_date, end_date, shift_start, shift_end } = req.query;
   let todayDateStr = "";
   try {
     todayDateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Kampala" });
@@ -2670,12 +2670,22 @@ app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
   const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
   const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
 
+  // Build main date filter (applies to total_sold scope as well when date range selected)
   let dateFilter = "";
   let params = [];
-  if (start_date && end_date) {
+  if (shift_start) {
+    // Per-shift mode: restrict the entire query to the shift window
+    dateFilter = shift_end
+      ? "AND po.order_date >= ? AND po.order_date <= ?"
+      : "AND po.order_date >= ?";
+    params = shift_end ? [shift_start, shift_end] : [shift_start];
+  } else if (start_date && end_date) {
     dateFilter = "AND po.order_date >= ? AND po.order_date <= ?";
     params = [start_date, end_date + " 23:59:59"];
   }
+
+  // The "sold_today" column uses the period start (shift start or today start)
+  const periodStart = shift_start || todayStartSql;
 
   // 1. Fetch current catalog products
   db.all(
@@ -2697,7 +2707,7 @@ app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
         GROUP BY oi.product_id, oi.product_name
       `;
 
-      db.all(salesSql, [todayStartSql, ...params], (salesErr, salesRows) => {
+      db.all(salesSql, [periodStart, ...params], (salesErr, salesRows) => {
         if (salesErr) return res.status(500).json({ error: salesErr.message });
 
         const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();

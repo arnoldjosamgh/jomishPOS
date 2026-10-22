@@ -279,14 +279,23 @@
                             <select id="sme-product-category-filter" onchange="filterSmeProducts()" style="padding:8px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text);">
                                 <option value="">All Categories</option>
                             </select>
-                            <button class="secondary-btn" onclick="loadSmeProductSales()"><i class="fa-solid fa-arrows-rotate"></i> Refresh Counter</button>
+                            <button class="secondary-btn" onclick="loadSmeProductSales()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                            <div style="display:flex; gap:6px; align-items:center; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:4px 10px;">
+                                <i class="fa-solid fa-calendar-days" style="color:var(--primary); font-size:0.85rem;"></i>
+                                <select id="sme-date-mode" onchange="onSmeDateModeChange()" style="border:none; background:transparent; color:var(--text); font-size:0.85rem; padding:2px 0; outline:none; cursor:pointer;">
+                                    <option value="today">Today</option>
+                                    <option value="shift">Current Shift</option>
+                                    <option value="date">Pick a Date</option>
+                                </select>
+                                <input type="date" id="sme-date-picker" style="display:none; border:none; background:transparent; color:var(--text); font-size:0.85rem; outline:none; cursor:pointer;" onchange="loadSmeProductSales()">
+                            </div>
                         </div>
                         <div style="display:flex; gap:10px;">
                             <div style="background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); border-radius:8px; padding:6px 14px; font-size:0.85rem; color:#10B981; font-weight:700;">
                                 Total Units Sold: <span id="sme-total-sold-counter">0</span>
                             </div>
                             <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25); border-radius:8px; padding:6px 14px; font-size:0.85rem; color:#F59E0B; font-weight:700;">
-                                Sold Today: <span id="sme-today-sold-counter">0</span>
+                                <span id="sme-period-label">Today</span>: <span id="sme-today-sold-counter">0</span>
                             </div>
                         </div>
                     </div>
@@ -297,7 +306,7 @@
                                 <th>Category</th>
                                 <th>Unit Price</th>
                                 <th>Total Sold (All-Time)</th>
-                                <th>Sold Today</th>
+                                <th id="sme-period-col-header">Sold Today</th>
                                 <th>Total Revenue</th>
                                 <th>Stock / Status</th>
                             </tr>
