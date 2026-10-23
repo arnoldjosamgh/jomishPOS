@@ -5321,6 +5321,7 @@ async function updateSyncBadge() {
       const countEl = document.getElementById("offline-sync-count");
       if (countEl) countEl.textContent = count;
     }
+  } else {
     if (badge) badge.remove();
   }
   if (typeof window.updateAppOnlineStatus === "function") window.updateAppOnlineStatus();
@@ -5733,6 +5734,15 @@ window.openEndShiftModal = async function () {
   }
 
   try {
+    // If cashier was operating offline, sync any pending local sales to server first
+    if (window.OfflineDB) {
+      const pendingCount = await window.OfflineDB.getPendingCount();
+      if (pendingCount > 0) {
+        showToast(`Syncing ${pendingCount} offline sale(s) to server before reconciling shift...`, "info");
+        await syncOfflineSales();
+      }
+    }
+
     const res = await fetchAuth(`${API_URL}/pos/shift-preview`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -5834,7 +5844,10 @@ window.finaliseEndShift = async function () {
     const res = await fetchAuth(`${API_URL}/pos/end-shift`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ counted_cash: _pendingShiftCountedCash }),
+      body: JSON.stringify({
+        counted_cash: _pendingShiftCountedCash,
+        preview: _pendingShiftReport
+      }),
     });
     const report = await res.json();
     if (res.ok) {

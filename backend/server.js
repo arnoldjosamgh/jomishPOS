@@ -3703,6 +3703,111 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
   });
 });
 
+// Helper: Compute full shift financial summary across POS orders and finance transactions
+async function computeShiftSummary(startTime, endTime = null, startCash = 0, countedCash = null) {
+  const startIso = startTime instanceof Date ? startTime.toISOString() : String(startTime || "");
+  const endIso = endTime ? (endTime instanceof Date ? endTime.toISOString() : String(endTime)) : null;
+
+  const orderDateClause = endIso ? "order_date >= ? AND order_date <= ?" : "order_date >= ?";
+  const txDateClause = endIso ? "transaction_date >= ? AND transaction_date <= ?" : "transaction_date >= ?";
+  const orderParams = endIso ? [startIso, endIso] : [startIso];
+  const txParams = endIso ? [startIso, endIso] : [startIso];
+
+  const runQuery = (sql, params, desc) =>
+    new Promise((resolve) => {
+      db.get(sql, params, (err, row) => {
+        if (err) {
+          console.error(`[Shift Reconciliation] Error in ${desc}:`, err.message);
+          resolve(0);
+        } else {
+          resolve(row && row.s !== null && row.s !== undefined ? Number(row.s) : 0);
+        }
+      });
+    });
+
+  const [
+    cashSales,
+    momoSales,
+    totalSales,
+    expenses,
+    cashIn,
+    invoiceCollected,
+    discountAmount,
+    incomeTransactions
+  ] = await Promise.all([
+    runQuery(
+      `SELECT SUM(CASE 
+        WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount 
+        WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) 
+        WHEN payment_method = 'CREDIT' THEN COALESCE(amount_paid, 0) 
+        ELSE 0 END) as s FROM pos_orders WHERE ${orderDateClause}`,
+      orderParams,
+      "cashSales"
+    ),
+    runQuery(
+      `SELECT SUM(CASE 
+        WHEN payment_method = 'MOBILE MONEY' THEN total_amount 
+        WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) 
+        ELSE 0 END) as s FROM pos_orders WHERE ${orderDateClause}`,
+      orderParams,
+      "momoSales"
+    ),
+    runQuery(
+      `SELECT SUM(total_amount) as s FROM pos_orders WHERE ${orderDateClause}`,
+      orderParams,
+      "totalSales"
+    ),
+    runQuery(
+      `SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND ${txDateClause}`,
+      txParams,
+      "expenses"
+    ),
+    runQuery(
+      `SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' AND ${txDateClause}`,
+      txParams,
+      "cashIn"
+    ),
+    runQuery(
+      `SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND ${orderDateClause}`,
+      orderParams,
+      "invoiceCollected"
+    ),
+    runQuery(
+      `SELECT SUM(discount_amount) as s FROM pos_orders WHERE ${orderDateClause}`,
+      orderParams,
+      "discountAmount"
+    ),
+    runQuery(
+      `SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' AND ${txDateClause}`,
+      txParams,
+      "incomeTransactions"
+    )
+  ]);
+
+  const sCash = Number(startCash || 0);
+  const cashInDrawer = sCash + cashSales + cashIn + incomeTransactions - expenses;
+  const expectedCash = cashInDrawer + momoSales;
+  const actualCounted = countedCash !== null && !isNaN(countedCash) ? countedCash : expectedCash;
+  const difference = actualCounted - expectedCash;
+
+  return {
+    start_cash: sCash,
+    cash_sales: cashSales,
+    momo_sales: momoSales,
+    total_sales: totalSales,
+    expenses: expenses,
+    cash_in: cashIn,
+    invoice_collected: invoiceCollected,
+    discount_amount: discountAmount,
+    income_transactions: incomeTransactions,
+    cash_in_drawer: cashInDrawer,
+    expected_cash: expectedCash,
+    end_cash: expectedCash,
+    counted_cash: actualCounted,
+    difference: difference
+  };
+}
+
 // 2b. Shift Preview API — read-only reconciliation for cashier to review before confirming end (Only Cashier)
 app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
   const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
@@ -3711,81 +3816,34 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
   }
 
   ensureCashierShiftsSchema(() => {
-    const cashierId = req.user.id;
     const countedCash = req.body.counted_cash !== undefined ? parseFloat(req.body.counted_cash) || 0 : null;
 
     db.get(
       "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
       [],
-      (err, openShift) => {
+      async (err, openShift) => {
         if (err) return res.status(500).json({ error: err.message });
         if (!openShift) {
           return res.status(400).json({ error: "No active shift found. Please start a shift first." });
         }
 
-        const startTime = openShift.start_time;
-        const startCash = Number(openShift.start_cash || 0);
-
-        const queries = {
-          // Shift covers ALL orders checked out at the till during the shift window,
-          // regardless of which employee (waiter/cashier) originally created the order.
-          // Cash sales = physical cash that landed in the drawer (CASH + DISCOUNT orders from all staff)
-          cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) WHEN payment_method = 'CREDIT' THEN COALESCE(amount_paid, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          momoSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN payment_method = 'MOBILE MONEY' THEN total_amount WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          // totalSales = ALL sales from every waiter & cashier during the shift (informational total)
-          totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          // cashIn = extra float added mid-shift (not the opening float already in startCash)
-          cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-          // manualIncome = only non-POS income manually recorded (e.g. credit repayments).
-          // POS sales already counted via cashSales/momoSales from pos_orders — exclude 'POS Sale%' and Opening Cash (already in startCash).
-          incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
-        };
-
-        Promise.all(Object.values(queries)).then(results => {
-          const cashSales = results[0];
-          const momoSales = results[1];
-          const totalSales = results[2];
-          const expenses = results[3];
-          const cashIn = results[4];
-          const invoiceCollected = results[5];
-          const discountAmount = results[6];
-          const incomeTransactions = results[7];
-
-          // Cash in Drawer = Opening Float + Cash Sales (all staff) + Extra Float Added + Manual Income - Expenses
-          // (MOMO sales do NOT enter the physical drawer, so momoSales is excluded from expectedCash)
-          const cashInDrawer = startCash + cashSales + cashIn + incomeTransactions - expenses;
-          // Grand Total = all money collected this shift (cash + momo + manual income)
-          const expectedCash = cashInDrawer + momoSales;
-          const actualCounted = countedCash !== null ? countedCash : expectedCash;
-          const difference = actualCounted - expectedCash;
-
-          // Read-only: do NOT write to the database
+        try {
+          const summary = await computeShiftSummary(openShift.start_time, null, openShift.start_cash, countedCash);
           res.json({
             preview: true,
-            start_time: startTime,
-            start_cash: startCash,
-            end_cash: expectedCash,
-            cash_in_drawer: cashInDrawer,
-            counted_cash: actualCounted,
-            difference: difference,
-            cash_sales: cashSales,
-            momo_sales: momoSales,
-            total_sales: totalSales,
-            expenses: expenses,
-            cash_in: cashIn,
-            income_transactions: incomeTransactions,
-            discount_amount: discountAmount,
-            invoice_collected: invoiceCollected,
-            cashier_name: req.user.name || "Cashier"
+            start_time: openShift.start_time,
+            cashier_name: req.user.name || "Cashier",
+            ...summary
           });
-        });
+        } catch (e) {
+          console.error("[Shift Preview] Calculation error:", e);
+          res.status(500).json({ error: "Failed to calculate shift preview: " + e.message });
+        }
       }
     );
   });
 });
+
 // 3. End Shift API — Cashier inserts counted cash in drawer; system calculates expected cash and reconciles (Only Cashier)
 app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
   const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
@@ -3796,11 +3854,12 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
   ensureCashierShiftsSchema(() => {
     const cashierId = req.user.id;
     const countedCash = req.body.counted_cash !== undefined ? parseFloat(req.body.counted_cash) || 0 : null;
+    const previewData = req.body.preview || null;
 
     db.get(
       "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
       [],
-      (err, openShift) => {
+      async (err, openShift) => {
         if (err) return res.status(500).json({ error: err.message });
         if (!openShift) {
           return res.status(400).json({
@@ -3811,106 +3870,104 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         const startTime = openShift.start_time;
         const startCash = Number(openShift.start_cash || 0);
         const shiftId = openShift.id;
-        proceedWithReconciliation(startTime, startCash, shiftId);
-      }
-    );
+        const endTimeNow = new Date().toISOString();
+        const startIso = startTime instanceof Date ? startTime.toISOString() : String(startTime || "");
 
-    function proceedWithReconciliation(startTime, startCash, shiftId) {
-      // Re-attribute ALL orders and income transactions in this shift window to the shift cashier.
-      // Waiters create orders but the cashier on the till is accountable for all cash collected.
-      const endTimeNow = new Date().toISOString();
-      db.run("UPDATE pos_orders SET cashier_id = ? WHERE order_date >= ? AND payment_method NOT IN ('COD', 'INVOICE') AND cashier_id != ?", [cashierId, startTime, cashierId]);
-      db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'INCOME' AND transaction_date >= ? AND recorded_by != ?", [cashierId, startTime, cashierId]);
-      // Associate expenses and float during this shift to the cashier
-      db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date >= ?", [cashierId, startTime]);
-      db.run("UPDATE transactions SET recorded_by = ? WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date >= ?", [cashierId, startTime]);
+        try {
+          // Re-attribute orders and transactions in this window sequentially before reading
+          await new Promise((r) => db.run("UPDATE pos_orders SET cashier_id = ? WHERE order_date >= ? AND payment_method NOT IN ('COD', 'INVOICE') AND cashier_id != ?", [cashierId, startIso, cashierId], r));
+          await new Promise((r) => db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'INCOME' AND transaction_date >= ? AND recorded_by != ?", [cashierId, startIso, cashierId], r));
+          await new Promise((r) => db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date >= ?", [cashierId, startIso], r));
+          await new Promise((r) => db.run("UPDATE transactions SET recorded_by = ? WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date >= ?", [cashierId, startIso], r));
 
-      const queries = {
-        // Shift covers ALL orders checked out at the till — no cashier_id filter
-        // Cash sales = physical cash in drawer (CASH + DISCOUNT from every waiter & cashier)
-        cashSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) WHEN payment_method = 'CREDIT' THEN COALESCE(amount_paid, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        momoSales: new Promise((resolve) => db.get("SELECT SUM(CASE WHEN payment_method = 'MOBILE MONEY' THEN total_amount WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) ELSE 0 END) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // totalSales = ALL sales from every waiter & cashier during the shift (informational)
-        totalSales: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // Expenses = all cash handed out of drawer during this shift
-        expenses: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // Cash In = all float added during this shift (excluding the opening float already in startCash)
-        cashIn: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // COD/Invoice collections during this shift
-        invoiceCollected: new Promise((resolve) => db.get("SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // Total discount amount given during this shift
-        discountAmount: new Promise((resolve) => db.get("SELECT SUM(discount_amount) as s FROM pos_orders WHERE order_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0))),
-        // manualIncome = only non-POS income manually recorded (credit repayments, etc.).
-        // POS sales are already counted via cashSales/momoSales from pos_orders — exclude 'POS Sale%' and Opening Cash (already in startCash).
-        incomeTransactions: new Promise((resolve) => db.get("SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' AND transaction_date >= ?", [startTime], (err, row) => resolve(row ? Number(row.s || 0) : 0)))
-      };
+          // Compute final shift reconciliation
+          let summary = await computeShiftSummary(startTime, endTimeNow, startCash, countedCash);
 
-      Promise.all(Object.values(queries)).then(results => {
-        const cashSales = results[0];
-        const momoSales = results[1];
-        const totalSales = results[2];
-        const expenses = results[3];
-        const cashIn = results[4];
-        const invoiceCollected = results[5];
-        const discountAmount = results[6];
-        const incomeTransactions = results[7];
+          // Safety guard: if DB subquery suffered a transient lock/connection error returning 0 cash sales but preview had verified sales, protect cashier totals
+          if (summary.cash_sales === 0 && previewData && Number(previewData.cash_sales || 0) > 0) {
+            console.warn("[End Shift] Preserving verified preview totals due to transient calculation discrepancy:", previewData.cash_sales);
+            summary = {
+              ...summary,
+              cash_sales: Number(previewData.cash_sales || 0),
+              momo_sales: Number(previewData.momo_sales || 0),
+              total_sales: Number(previewData.total_sales || 0),
+              expenses: Number(previewData.expenses || summary.expenses),
+              end_cash: Number(previewData.end_cash || summary.end_cash),
+              cash_in_drawer: Number(previewData.cash_in_drawer || summary.cash_in_drawer),
+              difference: Number(previewData.difference || 0)
+            };
+          }
 
-        // Cash in Drawer = Opening Float + Cash Sales (all staff) + Extra Float Added + Manual Income - Expenses
-        // MOMO sales are excluded because they go to mobile wallet, not the physical drawer
-        const cashInDrawer = startCash + cashSales + cashIn + incomeTransactions - expenses;
-        // Grand Total = all money collected this shift (cash + momo)
-        const expectedCash = cashInDrawer + momoSales;
-        const actualCounted = countedCash !== null ? countedCash : expectedCash;
-        const difference = actualCounted - expectedCash; // > 0 = overage, < 0 = shortage
-
-        const endTime = new Date().toISOString();
-
-        if (shiftId) {
-          db.run(
-            "UPDATE cashier_shifts SET end_time = ?, start_cash = ?, end_cash = ?, counted_cash = ?, difference = ?, cash_sales = ?, momo_sales = ?, total_sales = ?, expenses = ?, cash_in = ?, income_transactions = ?, discount_amount = ?, invoice_collected = ?, status = 'CLOSED' WHERE id = ?",
-            [endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, incomeTransactions, discountAmount, invoiceCollected, shiftId],
-            () => {
-              // Ensure any stale/lingering open shifts are also closed
+          // Save closed shift to database
+          if (shiftId) {
+            await new Promise((resolve, reject) => {
               db.run(
-                "UPDATE cashier_shifts SET status = 'CLOSED', end_time = COALESCE(end_time, ?) WHERE status = 'OPEN'",
-                [endTime],
-                () => respond()
+                "UPDATE cashier_shifts SET end_time = ?, start_cash = ?, end_cash = ?, counted_cash = ?, difference = ?, cash_sales = ?, momo_sales = ?, total_sales = ?, expenses = ?, cash_in = ?, income_transactions = ?, discount_amount = ?, invoice_collected = ?, status = 'CLOSED' WHERE id = ?",
+                [
+                  endTimeNow,
+                  summary.start_cash,
+                  summary.end_cash,
+                  summary.counted_cash,
+                  summary.difference,
+                  summary.cash_sales,
+                  summary.momo_sales,
+                  summary.total_sales,
+                  summary.expenses,
+                  summary.cash_in,
+                  summary.income_transactions,
+                  summary.discount_amount,
+                  summary.invoice_collected,
+                  shiftId
+                ],
+                (upErr) => (upErr ? reject(upErr) : resolve())
               );
-            }
-          );
-        } else {
-          db.run(
-            "INSERT INTO cashier_shifts (cashier_id, start_time, end_time, start_cash, end_cash, counted_cash, difference, cash_sales, momo_sales, total_sales, expenses, cash_in, income_transactions, discount_amount, invoice_collected, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')",
-            [cashierId, startTime, endTime, startCash, expectedCash, actualCounted, difference, cashSales, momoSales, totalSales, expenses, cashIn, incomeTransactions, discountAmount, invoiceCollected],
-            () => respond()
-          );
-        }
+            });
+          } else {
+            await new Promise((resolve, reject) => {
+              db.run(
+                "INSERT INTO cashier_shifts (cashier_id, start_time, end_time, start_cash, end_cash, counted_cash, difference, cash_sales, momo_sales, total_sales, expenses, cash_in, income_transactions, discount_amount, invoice_collected, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED')",
+                [
+                  cashierId,
+                  startTime,
+                  endTimeNow,
+                  summary.start_cash,
+                  summary.end_cash,
+                  summary.counted_cash,
+                  summary.difference,
+                  summary.cash_sales,
+                  summary.momo_sales,
+                  summary.total_sales,
+                  summary.expenses,
+                  summary.cash_in,
+                  summary.income_transactions,
+                  summary.discount_amount,
+                  summary.invoice_collected
+                ],
+                (insErr) => (insErr ? reject(insErr) : resolve())
+              );
+            });
+          }
 
-        function respond() {
+          // Close any lingering open shifts
+          await new Promise((r) => db.run("UPDATE cashier_shifts SET status = 'CLOSED', end_time = COALESCE(end_time, ?) WHERE status = 'OPEN'", [endTimeNow], r));
+
           io.emit("db_updated", { module: "shifts" });
+
           res.json({
             start_time: startTime,
-            end_time: endTime,
-            start_cash: startCash,
-            end_cash: expectedCash,
-            cash_in_drawer: cashInDrawer,
-            counted_cash: actualCounted,
-            difference: difference,
-            cash_sales: cashSales,
-            momo_sales: momoSales,
-            total_sales: totalSales,
-            expenses: expenses,
-            cash_in: cashIn,
-            income_transactions: incomeTransactions,
-            discount_amount: discountAmount,
-            invoice_collected: invoiceCollected,
+            end_time: endTimeNow,
             cashier_name: req.user.name || "Cashier",
+            ...summary
           });
+        } catch (procErr) {
+          console.error("[End Shift Error]:", procErr);
+          res.status(500).json({ error: "Failed to end shift: " + procErr.message });
         }
-      });
-    }
+      }
+    );
   });
 });
+
 
 // Record Cash Addition / Float to Drawer (Cashier receives money for change or float)
 app.post("/api/pos/cash-in", authenticateToken, (req, res) => {
