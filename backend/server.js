@@ -200,15 +200,7 @@ app.use("/api/", (req, res, next) => {
   next();
 });
 
-// STATIC FILE SECURE GUARD - JS handles auth redirects client-side via localStorage
-// Server only blocks direct access to app.js without cookie (prevents source snooping)
-app.use((req, res, next) => {
-  // Allow API endpoints, public files, and anything in /lib/
-  if (req.path.startsWith("/api/") || req.path.startsWith("/lib/")) {
-    return next();
-  }
-  next();
-});
+// Static files are served below; client-side JS handles auth redirects via localStorage token.
 
 // Google Site Verification - explicit routes (always served regardless of static deployment)
 app.get("/google4725248131705fcf.html", (req, res) => {
@@ -407,34 +399,6 @@ app.post("/api/verify-password", authenticateToken, (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ error: "Password required" });
 
-  app.post("/api/print-receipt", authenticateToken, (req, res) => {
-    const { text } = req.body;
-
-    // We instantiate the ThermalPrinter and provide a writeFn callback.
-    // NOTE: This writeFn must be adapted to your specific physical connection (Serial, USB, LPT).
-    // As a placeholder, we log the bytes being generated.
-    const printer = new ThermalPrinter((buffer) => {
-      // e.g., if you had a serial port: serialPort.write(buffer);
-    });
-
-    try {
-      printer.initializePrinter();
-      printer.alignCenter();
-      printer.boldOn();
-      printer.println("--- RECEIPT ---");
-      printer.boldOff();
-      printer.alignLeft();
-      printer.println(text || "Demo receipt print.");
-      printer.lineFeed(2);
-      printer.doCut();
-
-      res.json({ success: true, message: "Receipt sent to printer." });
-    } catch (e) {
-      console.error("Printer error:", e);
-      res.status(500).json({ error: "Failed to print receipt" });
-    }
-  });
-
   db.get(
     "SELECT password FROM employees WHERE id = ?",
     [req.user.id],
@@ -449,6 +413,28 @@ app.post("/api/verify-password", authenticateToken, (req, res) => {
       res.json({ success: true });
     },
   );
+});
+
+// Network thermal printer helper (text-based)
+// The actual print path is handled by the ThermalPrinter module on the LAN.
+// This endpoint is a pass-through: the frontend sends ESC/POS text lines here
+// and the server forwards them to the configured printer IP.
+app.post("/api/print-receipt", authenticateToken, (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: "No receipt text provided" });
+  try {
+    // Build an ESC/POS buffer from the provided text lines and send to printer.
+    const lines = receiptTextToLines(text);
+    printViaNetwork(lines)
+      .then(() => res.json({ success: true, message: "Receipt sent to printer." }))
+      .catch((e) => {
+        console.error("[print-receipt] Network print error:", e.message);
+        res.status(500).json({ error: "Printer unreachable: " + e.message });
+      });
+  } catch (e) {
+    console.error("[print-receipt] Error:", e);
+    res.status(500).json({ error: "Failed to print receipt" });
+  }
 });
 
 // --- PUSH NOTIFICATIONS ---
@@ -731,8 +717,6 @@ app.delete("/api/system/companies/:prefix", authenticateToken, async (req, res) 
           });
         });
       });
-      const fs = require('fs');
-      const path = require('path');
       const dbPath = path.join(process.cwd(), 'data', `jomish_t${prefix.toLowerCase()}.db`);
       try {
         if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
@@ -5225,9 +5209,6 @@ setInterval(() => {
         return;
       }
       if (this.changes > 0) {
-        console.log(
-          `[RADAR] Marked ${this.changes} inactive devices as OFFLINE`,
-        );
         io.emit("db_updated", { module: "devices" });
       }
     },

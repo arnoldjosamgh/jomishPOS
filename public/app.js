@@ -456,8 +456,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const _calModal = document.getElementById("cal-event-modal");
   const _calCloseBtn = document.getElementById("btn-close-cal-event");
 
-  // Log what we found so we can see in DevTools (F12)
-
   if (_calBtn && _calModal) {
     _calBtn.addEventListener("click", () => {
       _calModal.style.setProperty("display", "flex", "important");
@@ -476,10 +474,6 @@ document.addEventListener("DOMContentLoaded", () => {
       _calModal.style.setProperty("align-items", "center", "important");
       _calModal.classList.remove("hidden");
     });
-  } else {
-    console.error(
-      "[CAL ERROR] Could not find: btn=" + !!_calBtn + " modal=" + !!_calModal,
-    );
   }
 
   if (_calCloseBtn && _calModal) {
@@ -528,7 +522,6 @@ document.addEventListener("DOMContentLoaded", () => {
     .getElementById("form-add-note")
     ?.addEventListener("submit", handleAddNote);
 
-  // handleAddNotice was removed — notice board is no longer a feature
   document
     .getElementById("btn-auto-schedule")
     ?.addEventListener("click", handleAutoSchedule);
