@@ -629,30 +629,17 @@ app.get("/api/verify", authenticateToken, (req, res) => {
 app.get("/api/system/companies", (req, res) => {
   // Return all companies from the master registry
   asyncLocalStorage.run("public", () => {
-    db.run(
-      `CREATE TABLE IF NOT EXISTS companies (
-            id SERIAL PRIMARY KEY,
-            prefix TEXT UNIQUE,
-            name TEXT,
-            status TEXT DEFAULT 'ACTIVE',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`,
+    db.all(
+      "SELECT * FROM companies ORDER BY created_at DESC",
       [],
-      (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        db.run(
-          "ALTER TABLE companies ADD COLUMN status TEXT DEFAULT 'ACTIVE'",
-          () => {
-            db.all(
-              "SELECT * FROM companies ORDER BY created_at DESC",
-              [],
-              (err, rows) => {
-                if (err) return res.status(500).json({ error: err.message });
-                res.json({ companies: rows || [] });
-              },
-            );
-          },
-        );
+      (err, rows) => {
+        if (err) {
+          if (err.message && err.message.includes("no such table")) {
+            return res.json({ companies: [] });
+          }
+          return res.status(500).json({ error: err.message });
+        }
+        res.json({ companies: rows || [] });
       },
     );
   });
@@ -800,41 +787,48 @@ app.post("/api/system/initialize", async (req, res) => {
     // 3. Provision the first tech/admin user in the new tenant schema
     const schemaName = "t_" + prefix.toLowerCase();
     asyncLocalStorage.run(schemaName, async () => {
-      const techUserId = `${prefix}00001`;
-      const defaultPassword = "Admin";
-      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+      try {
+        const techUserId = `${prefix}00001`;
+        const defaultPassword = "Admin";
+        const hashedPassword = await bcrypt.hash(defaultPassword, 10);
 
-      // Create the Tech Support user
-      db.run(
-        `INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, is_active)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-        [
-          "HR",
-          "Admin",
-          `${techUserId.toLowerCase()}@${prefix.toLowerCase()}.local`,
-          techUserId,
-          "HR",
-          "Administration",
-          0,
-          hashedPassword,
-          techUserId,
-        ],
-        function (insertErr) {
-          if (insertErr)
-            return res.status(500).json({ error: insertErr.message });
+        // Create the Tech Support user
+        await new Promise((resolve, reject) => {
+          db.run(
+            `INSERT INTO employees (first_name, last_name, email, username, role, department, salary, password, employee_code, is_active)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            [
+              "HR",
+              "Admin",
+              `${techUserId.toLowerCase()}@${prefix.toLowerCase()}.local`,
+              techUserId,
+              "HR",
+              "Administration",
+              0,
+              hashedPassword,
+              techUserId,
+            ],
+            function (insertErr) {
+              if (insertErr) return reject(insertErr);
+              resolve();
+            }
+          );
+        });
 
-          // Seed ALL standard roles with full permissions for the new company schema
-          const allRoles = [
-            ["CEO", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ["Admin", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ["HR", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ["System Technician", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ["Supervisor", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ["Cashier", 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            ["Security", 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-            ["Receptionist", 1, 0, 1, 0, 0, 1, 0, 0, 0, 0],
-          ];
-          allRoles.forEach((r) => {
+        // Seed ALL standard roles with full permissions for the new company schema
+        const allRoles = [
+          ["CEO", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+          ["Admin", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+          ["HR", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+          ["System Technician", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+          ["Supervisor", 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+          ["Cashier", 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+          ["Security", 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+          ["Receptionist", 1, 0, 1, 0, 0, 1, 0, 0, 0, 0],
+        ];
+
+        for (const r of allRoles) {
+          await new Promise((resolve, reject) => {
             db.run(
               `INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos, can_see_secretary, can_see_transport, can_see_hardware, can_see_system_users, can_see_schedules)
                              VALUES (?,?,?,?,?,?,?,?,?,?,?)
@@ -845,32 +839,40 @@ app.post("/api/system/initialize", async (req, res) => {
                              can_see_transport=excluded.can_see_transport, can_see_hardware=excluded.can_see_hardware,
                              can_see_system_users=excluded.can_see_system_users, can_see_schedules=excluded.can_see_schedules`,
               r,
+              (err) => (err ? reject(err) : resolve())
             );
           });
+        }
 
-          // Save business name and prefix to settings
-          const upsertSetting = (key, value) => {
+        // Save business name and prefix to settings
+        const settingsToUpsert = [
+          ["business_name", company_name],
+          ["company_prefix", prefix],
+          ["next_employee_number", "2"],
+        ];
+        for (const [key, val] of settingsToUpsert) {
+          await new Promise((resolve, reject) => {
             db.run(
               `INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value`,
-              [key, value],
+              [key, val],
+              (err) => (err ? reject(err) : resolve())
             );
-          };
-
-          upsertSetting("business_name", company_name);
-          upsertSetting("company_prefix", prefix);
-          upsertSetting("next_employee_number", "2");
-
-          console.log(
-            `[INIT] Company "${company_name}" initialized. First user: ${techUserId}`,
-          );
-          res.json({
-            message: `System initialized successfully for ${company_name}.`,
-            tech_username: techUserId,
-            default_password: defaultPassword,
-            note: "IMPORTANT: The Tech Support user must change their password after first login.",
           });
-        },
-      );
+        }
+
+        console.log(
+          `[INIT] Company "${company_name}" initialized. First user: ${techUserId}`,
+        );
+        res.json({
+          message: `System initialized successfully for ${company_name}.`,
+          tech_username: techUserId,
+          default_password: defaultPassword,
+          note: "IMPORTANT: The Tech Support user must change their password after first login.",
+        });
+      } catch (innerErr) {
+        console.error("[INIT SCHEMAS ERROR]", innerErr);
+        res.status(500).json({ error: "Initialization failed: " + innerErr.message });
+      }
     });
   } catch (e) {
     console.error("[INIT ERROR]", e);

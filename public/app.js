@@ -8041,14 +8041,12 @@ async function deleteTransaction(id, silent = false) {
       console.error("[deleteTransaction] Server rejected deletion of ID " + id + ":", errMsg);
       if (!silent) {
         showToast("Error deleting transaction: " + errMsg, "danger");
-        alert("Error deleting transaction: " + errMsg);
       }
     }
   } catch (e) {
     console.error("Delete Transaction Error:", e);
     if (!silent) {
       showToast("Network error. Check server connection.", "danger");
-      alert("Network error. Check server connection.");
     }
   }
 }
