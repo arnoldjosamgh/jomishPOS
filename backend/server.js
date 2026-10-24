@@ -2605,6 +2605,8 @@ app.get("/api/products", authenticateToken, (req, res) => {
             COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today
           FROM order_items oi
           JOIN pos_orders po ON oi.pos_order_id = po.id
+          LEFT JOIN transactions t ON po.transaction_id = t.id
+          WHERE (t.payment_status IS NULL OR t.payment_status != 'PENDING')
           GROUP BY oi.product_id, oi.product_name
         `;
 
@@ -2701,6 +2703,8 @@ app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
           COALESCE(SUM(oi.total), 0) AS total_revenue
         FROM order_items oi
         JOIN pos_orders po ON oi.pos_order_id = po.id ${dateFilter}
+        LEFT JOIN transactions t ON po.transaction_id = t.id
+        WHERE (t.payment_status IS NULL OR t.payment_status != 'PENDING')
         GROUP BY oi.product_id, oi.product_name
       `;
 
@@ -4080,6 +4084,21 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
         if (pid) {
           newQtyByPid[pid] = (newQtyByPid[pid] || 0) + qty;
           newNamesByPid[pid] = item.product_name || item.name;
+        }
+      }
+
+      // SERVER-SIDE GUARD: Once an order is saved, original items cannot be
+      // removed or have their quantity reduced. Only additions are permitted.
+      for (const [pidStr, origQty] of Object.entries(existingQtyByPid)) {
+        const pid = parseInt(pidStr);
+        if (!pid) continue;
+        const newQty = newQtyByPid[pid] || 0;
+        if (newQty < origQty) {
+          const itemName = existingNamesByPid[pidStr] || `Product #${pid}`;
+          throw new Error(
+            `Cannot reduce "${itemName}" from ${origQty} to ${newQty}. ` +
+            `Saved order items can only be increased, not removed or reduced.`
+          );
         }
       }
 

@@ -4270,6 +4270,15 @@ function addToCart(p, scannedBarcode = null) {
 function updateCartQty(id, delta) {
   const item = posCart.find((i) => i.id === id);
   if (!item) return;
+  // In edit mode: never reduce below the original saved quantity
+  if (_currentEditOrder && delta < 0) {
+    const itemId = item.product_id || item.id;
+    const origQty = (_editOrderOriginalQtys && _editOrderOriginalQtys[itemId]) ? Number(_editOrderOriginalQtys[itemId]) : 0;
+    if (origQty > 0 && item.qty - 1 < origQty) {
+      showToast(`Cannot reduce "${item.name}" below its original quantity of ${origQty}. Cancel the edit to discard the order.`, "warning");
+      return;
+    }
+  }
   item.qty += delta;
   if (item.qty <= 0) {
     removeFromCart(id);
@@ -4279,6 +4288,16 @@ function updateCartQty(id, delta) {
 }
 
 window.removeFromCart = function (id) {
+  // In edit mode: block removal of any item that existed in the original saved order
+  if (_currentEditOrder) {
+    const item = posCart.find((i) => i.id === id);
+    const itemId = item ? (item.product_id || item.id) : null;
+    const origQty = itemId && _editOrderOriginalQtys ? Number(_editOrderOriginalQtys[itemId] || 0) : 0;
+    if (origQty > 0) {
+      showToast(`"${item ? item.name : 'Item'}" was part of the original order and cannot be removed. You can only add new items or increase quantities.`, "warning");
+      return;
+    }
+  }
   if (posCart.length <= 1) {
     showToast("An order must have at least one item. If you wish to cancel this order, tap Cancel.", "warning");
     return;
@@ -4292,10 +4311,26 @@ window.removeFromCart = function (id) {
 
 function setCartQty(id, val) {
   const qty = parseInt(val);
+  const item = posCart.find((i) => i.id === id);
+  // In edit mode: clamp to original qty minimum for original items
+  if (_currentEditOrder && item) {
+    const itemId = item.product_id || item.id;
+    const origQty = (_editOrderOriginalQtys && _editOrderOriginalQtys[itemId]) ? Number(_editOrderOriginalQtys[itemId]) : 0;
+    if (origQty > 0) {
+      if (isNaN(qty) || qty < origQty) {
+        item.qty = origQty;
+        showToast(`Cannot set "${item.name}" below its original quantity of ${origQty}.`, "warning");
+        renderCart();
+        return;
+      }
+      item.qty = qty;
+      renderCart();
+      return;
+    }
+  }
   if (isNaN(qty) || qty <= 0) {
     removeFromCart(id);
   } else {
-    const item = posCart.find((i) => i.id === id);
     if (item) item.qty = qty;
     renderCart();
   }
