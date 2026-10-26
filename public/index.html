@@ -478,7 +478,7 @@
                         </div>
                         <!-- Cashier Shift Controls: Start Shift & End Shift on Top (Cashier only) -->
                         <div id="pos-shift-controls" style="display:none; align-items:center; gap:8px; margin-left:auto; flex-shrink:0;">
-                            <button id="btn-start-shift" class="primary-btn" style="padding:7px 15px; font-size:0.82rem; font-weight:700; border-radius:8px; background:#10b981; color:white; border:none; cursor:pointer; display:none; white-space:nowrap; touch-action:manipulation;" onpointerdown="openStartShiftModal(event)" onclick="openStartShiftModal(event)">
+                            <button id="btn-start-shift" class="primary-btn" style="padding:7px 15px; font-size:0.82rem; font-weight:700; border-radius:8px; background:#10b981; color:white; border:none; cursor:pointer; display:none; white-space:nowrap; touch-action:manipulation;" onclick="openStartShiftModal(event)">
                                 <i class="fa-solid fa-play"></i> Start Shift
                             </button>
                             <button id="btn-end-shift" class="secondary-btn" style="padding:7px 15px; font-size:0.82rem; font-weight:700; border-radius:8px; background:var(--danger); color:white; border:none; cursor:pointer; display:none; white-space:nowrap;" onclick="openEndShiftModal()">
@@ -1703,7 +1703,7 @@
             </div>
             <div class="modal-actions" style="display:flex; gap:10px; justify-content:flex-end;">
                 <button type="button" class="secondary-btn" onclick="closeStartShiftModal()" style="padding:10px 18px;">Cancel</button>
-                <button type="button" id="btn-submit-start-shift" class="primary-btn" onpointerdown="confirmStartShift(event)" onclick="confirmStartShift(event)" style="padding:10px 20px; background:#10b981; border-color:#10b981; color:#fff; touch-action:manipulation;">
+                <button type="button" id="btn-submit-start-shift" class="primary-btn" onclick="confirmStartShift(event)" style="padding:10px 20px; background:#10b981; border-color:#10b981; color:#fff; touch-action:manipulation;">
                     <i class="fa-solid fa-check"></i> Start Shift
                 </button>
             </div>

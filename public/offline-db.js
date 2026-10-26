@@ -51,7 +51,9 @@ const NO_CACHE_PATTERNS = [
     'customer-invoices',
     '/deliveries',
     '/transactions',
-    '/pos_orders'
+    '/pos_orders',
+    'current-shift',
+    'cashier_shifts'
 ];
 
 function shouldNeverCache(url) {

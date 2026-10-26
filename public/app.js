@@ -2873,8 +2873,9 @@ async function fetchAuth(url, options = {}) {
         { pattern: "/pos_orders",     busts: ["/api/pos_orders", "/api/transactions", "/api/deliveries", "/api/reports/products-sold", "/reports/products-sold"] },
         { pattern: "/checkout",       busts: ["/api/products", "/api/reports/products-sold", "/reports/products-sold", "/api/pos_orders", "/api/transactions", "/api/deliveries"] },
         { pattern: "/attendance",     busts: ["/api/attendance"] },
-        { pattern: "/schedules",      busts: ["/api/schedules"] },
-        { pattern: "/shift",          busts: ["/api/shifts", "/api/shift-assignments"] },
+        { pattern: "/shift",          busts: ["/api/shifts", "/api/shift-assignments", "/api/pos/current-shift", "/pos/current-shift"] },
+        { pattern: "/pos/start-shift", busts: ["/api/pos/current-shift", "/pos/current-shift"] },
+        { pattern: "/pos/end-shift",   busts: ["/api/pos/current-shift", "/pos/current-shift"] },
         { pattern: "/notices",        busts: ["/api/notices"] },
         { pattern: "/notes",          busts: ["/api/notes"] },
         { pattern: "/messages",       busts: ["/api/messages"] },
@@ -4195,7 +4196,7 @@ window.ensureCashierShiftActive = async function (actionName = "proceed") {
   if (window._hasActiveCashierShift === true) return true;
 
   try {
-    const res = await fetchAuth(`${API_URL}/pos/current-shift`);
+    const res = await fetchAuth(`${API_URL}/pos/current-shift?force_refresh=true&_t=${Date.now()}`);
     if (res.ok) {
       const data = await res.json();
       window._hasActiveCashierShift = !!(data.has_active_shift && data.shift);
@@ -5565,7 +5566,7 @@ window.updateCashierShiftUI = async function () {
   if (shiftControls) shiftControls.style.setProperty("display", "flex", "important");
 
   try {
-    const res = await fetchAuth(`${API_URL}/pos/current-shift`);
+    const res = await fetchAuth(`${API_URL}/pos/current-shift?force_refresh=true&_t=${Date.now()}`);
     if (res.ok) {
       const data = await res.json();
       window._hasActiveCashierShift = !!(data.has_active_shift && data.shift);
@@ -5726,6 +5727,9 @@ window.confirmStartShift = async function (e) {
 
       window._hasActiveCashierShift = true;
       try { localStorage.setItem("jomish_active_shift", "true"); } catch (_) {}
+      if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {
+        try { await window.OfflineDB.bustCache("current-shift"); } catch (_) {}
+      }
       showToast(`Shift started! Opening Income: UGX ${startCash.toLocaleString()}`, "success");
       // Reset in-flight guard so the post-confirm refresh always runs cleanly
       _updateShiftUIInFlight = false;
