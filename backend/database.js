@@ -39,11 +39,104 @@ if (process.env.DATABASE_URL) {
 }
 
 let db;
-const CURRENT_VERSION = 145;
+const CURRENT_VERSION = 152;
 
 if (config.dbType === 'postgres') {
-    const pool = new Pool(config.postgres);
-    
+    const poolConfig = {
+        ...(typeof config.postgres === 'object' ? config.postgres : {}),
+        max: 10,
+        connectionTimeoutMillis: 25000, // 25s for Neon cold start / waking up
+        idleTimeoutMillis: 15000, // close idle connections quickly so dead sockets are dropped
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10000,
+        allowExitOnIdle: false
+    };
+    if (typeof config.postgres === 'string') {
+        poolConfig.connectionString = config.postgres;
+    }
+    const pool = new Pool(poolConfig);
+
+    // Prevent Node process crash from unhandled error when Neon drops idle connections
+    pool.on('error', (err) => {
+        console.warn('[DB Pool] Connection drop detected (Neon asleep / restarting):', err.message);
+    });
+
+    function isTransientDbError(err) {
+        if (!err) return false;
+        const msg = (err.message || '').toLowerCase();
+        const code = err.code || '';
+        if (
+            code === 'ECONNRESET' ||
+            code === 'ETIMEDOUT' ||
+            code === 'ECONNREFUSED' ||
+            code === 'EHOSTUNREACH' ||
+            code === 'ENOTFOUND' ||
+            code === '57P01' || // admin_shutdown
+            code === '57P02' || // crash_shutdown
+            code === '57P03' || // cannot_connect_now
+            code === '08000' || // connection_exception
+            code === '08001' || // sqlclient_unable_to_establish_sqlconnection
+            code === '08003' || // connection_does_not_exist
+            code === '08004' || // sqlserver_rejected_establishment_of_sqlconnection
+            code === '08006' || // connection_failure
+            code === '08P01'    // protocol_violation
+        ) {
+            return true;
+        }
+        if (
+            msg.includes('connection terminated') ||
+            msg.includes('timeout') ||
+            msg.includes('neon') ||
+            msg.includes('endpoint is disabled') ||
+            msg.includes('wake up') ||
+            msg.includes('refused') ||
+            msg.includes('reset') ||
+            msg.includes('econnreset') ||
+            msg.includes('etimedout') ||
+            msg.includes('econnrefused') ||
+            msg.includes('client has already been released')
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+    async function acquireClientWithRetry(maxRetries = 15) {
+        let attempt = 0;
+        while (true) {
+            attempt++;
+            try {
+                const client = await pool.connect();
+                return client;
+            } catch (err) {
+                if (attempt >= maxRetries || !isTransientDbError(err)) {
+                    console.error(`[DB] Connection failed after ${attempt} attempt(s):`, err.message);
+                    throw err;
+                }
+                const delay = Math.min(1000 * Math.pow(1.3, attempt - 1), 4000);
+                console.warn(`[DB] Neon database appears to be asleep/reconnecting (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+
+    async function executeWithRetry(operation, maxRetries = 10) {
+        let attempt = 0;
+        while (true) {
+            attempt++;
+            try {
+                return await operation();
+            } catch (err) {
+                if (attempt >= maxRetries || !isTransientDbError(err)) {
+                    throw err;
+                }
+                const delay = Math.min(1000 * Math.pow(1.3, attempt - 1), 4000);
+                console.warn(`[DB Query] Neon database reconnecting (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+
     // Compatibility Wrapper for Postgres to mimic sqlite3 API
     // IMPORTANT: search_path does NOT include 'public' as a fallback.
     // Each tenant schema is fully isolated — queries must only see their own schema's data.
@@ -56,71 +149,91 @@ if (config.dbType === 'postgres') {
 
     db = {
         pool: pool,
+        acquireClientWithRetry: acquireClientWithRetry,
+        executeWithRetry: executeWithRetry,
         run: function(sql, params, callback) {
             if (typeof params === 'function') { callback = params; params = []; }
             const pgSql = translateSql(sql);
             const schema = asyncLocalStorage.getStore() || 'public';
             
-            pool.connect().then(client => {
-                client.query(`SET search_path TO ${searchPathFor(schema)}`)
-                    .then(() => client.query(pgSql, params))
-                    .then(res => {
-                        client.release();
-                        const ctx = { 
-                            lastID: res.rows.length > 0 ? res.rows[0].id : null, 
-                            changes: res.rowCount 
-                        };
-                        if (callback) callback.call(ctx, null);
-                    })
-                    .catch(err => {
-                        client.release();
-                        if (callback) callback(err);
-                    });
-            }).catch(err => { if (callback) callback(err); });
+            executeWithRetry(async () => {
+                const client = await acquireClientWithRetry();
+                try {
+                    await client.query(`SET search_path TO ${searchPathFor(schema)}`);
+                    const res = await client.query(pgSql, params);
+                    return { 
+                        lastID: res.rows.length > 0 ? res.rows[0].id : null, 
+                        changes: res.rowCount 
+                    };
+                } finally {
+                    client.release();
+                }
+            })
+            .then(ctx => {
+                if (callback) callback.call(ctx, null);
+            })
+            .catch(err => {
+                if (callback) callback(err);
+            });
         },
         get: function(sql, params, callback) {
             if (typeof params === 'function') { callback = params; params = []; }
+            const pgSql = translateSql(sql);
             const schema = asyncLocalStorage.getStore() || 'public';
             
-            pool.connect().then(client => {
-                client.query(`SET search_path TO ${searchPathFor(schema)}`)
-                    .then(() => client.query(translateSql(sql), params))
-                    .then(res => {
-                        client.release();
-                        if (callback) callback(null, res.rows[0]);
-                    })
-                    .catch(err => {
-                        client.release();
-                        if (callback) callback(err);
-                    });
-            }).catch(err => { if (callback) callback(err); });
+            executeWithRetry(async () => {
+                const client = await acquireClientWithRetry();
+                try {
+                    await client.query(`SET search_path TO ${searchPathFor(schema)}`);
+                    const res = await client.query(pgSql, params);
+                    return res.rows[0];
+                } finally {
+                    client.release();
+                }
+            })
+            .then(row => {
+                if (callback) callback(null, row);
+            })
+            .catch(err => {
+                if (callback) callback(err);
+            });
         },
         all: function(sql, params, callback) {
             if (typeof params === 'function') { callback = params; params = []; }
+            const pgSql = translateSql(sql);
             const schema = asyncLocalStorage.getStore() || 'public';
             
-            pool.connect().then(client => {
-                client.query(`SET search_path TO ${searchPathFor(schema)}`)
-                    .then(() => client.query(translateSql(sql), params))
-                    .then(res => {
-                        client.release();
-                        if (callback) callback(null, res.rows);
-                    })
-                    .catch(err => {
-                        client.release();
-                        if (callback) callback(err);
-                    });
-            }).catch(err => { if (callback) callback(err); });
+            executeWithRetry(async () => {
+                const client = await acquireClientWithRetry();
+                try {
+                    await client.query(`SET search_path TO ${searchPathFor(schema)}`);
+                    const res = await client.query(pgSql, params);
+                    return res.rows;
+                } finally {
+                    client.release();
+                }
+            })
+            .then(rows => {
+                if (callback) callback(null, rows);
+            })
+            .catch(err => {
+                if (callback) callback(err);
+            });
         },
         serialize: function(fn) { fn(); }, // Postgres is pool-based, serialize is dummy
         prepare: function(sql) {
+            const pgSql = translateSql(sql);
             return {
                 run: (params) => {
                     const schema = asyncLocalStorage.getStore() || 'public';
-                    return pool.connect().then(client => {
-                        return client.query(`SET search_path TO ${searchPathFor(schema)}`)
-                            .then(() => client.query(translateSql(sql), params))
-                            .finally(() => client.release());
+                    return executeWithRetry(async () => {
+                        const client = await acquireClientWithRetry();
+                        try {
+                            await client.query(`SET search_path TO ${searchPathFor(schema)}`);
+                            return await client.query(pgSql, params);
+                        } finally {
+                            client.release();
+                        }
                     });
                 },
                 finalize: () => {}
@@ -130,29 +243,42 @@ if (config.dbType === 'postgres') {
         // Works for both Postgres (real transaction) and is shimmed for SQLite.
         // Usage: await db.withTransaction(async (q) => { await q('SQL', [params]); ... })
         // Returns { lastID, rows } of the LAST query executed inside.
-        withTransaction: async function(fn) {
+        withTransaction: async function(fn, maxRetries = 5) {
             const schema = asyncLocalStorage.getStore() || 'public';
-            const client = await pool.connect();
-            try {
-                await client.query(`SET search_path TO ${searchPathFor(schema)}`);
-                await client.query('BEGIN');
-                // q() runs a query on the pinned client, returns { lastID, rows }
-                const q = async (sql, params = []) => {
-                    const res = await client.query(translateSql(sql), params);
-                    return {
-                        lastID: res.rows.length > 0 ? res.rows[0].id : null,
-                        rows: res.rows,
-                        rowCount: res.rowCount
+            let attempt = 0;
+            while (true) {
+                attempt++;
+                let client;
+                try {
+                    client = await acquireClientWithRetry();
+                    await client.query(`SET search_path TO ${searchPathFor(schema)}`);
+                    await client.query('BEGIN');
+                    // q() runs a query on the pinned client, returns { lastID, rows }
+                    const q = async (sql, params = []) => {
+                        const res = await client.query(translateSql(sql), params);
+                        return {
+                            lastID: res.rows.length > 0 ? res.rows[0].id : null,
+                            rows: res.rows,
+                            rowCount: res.rowCount
+                        };
                     };
-                };
-                const result = await fn(q);
-                await client.query('COMMIT');
-                return result;
-            } catch (err) {
-                await client.query('ROLLBACK');
-                throw err;
-            } finally {
-                client.release();
+                    const result = await fn(q);
+                    await client.query('COMMIT');
+                    return result;
+                } catch (err) {
+                    if (client) {
+                        try { await client.query('ROLLBACK'); } catch (_) {}
+                    }
+                    if (attempt < maxRetries && isTransientDbError(err)) {
+                        const delay = Math.min(1000 * Math.pow(1.5, attempt - 1), 4000);
+                        console.warn(`[DB Transaction] Neon asleep / connection lost during transaction (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying transaction in ${Math.round(delay)}ms...`);
+                        await new Promise(r => setTimeout(r, delay));
+                        continue;
+                    }
+                    throw err;
+                } finally {
+                    if (client) client.release();
+                }
             }
         }
     };
@@ -162,7 +288,7 @@ if (config.dbType === 'postgres') {
         if (!prefix || !/^[A-Za-z0-9]+$/.test(prefix)) throw new Error('Invalid prefix format');
         const schemaName = 't_' + prefix.toLowerCase();
         
-        const client = await pool.connect();
+        const client = await acquireClientWithRetry();
         try {
             await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
             await client.query(`SET search_path TO "${schemaName}", public`);
@@ -171,6 +297,31 @@ if (config.dbType === 'postgres') {
             for (const sql of schema) {
                 await client.query(translateSql(sql));
             }
+
+            // Guarantee atomic receipt_no sequence, resilient trigger function, and trigger
+            await client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
+            await client.query(`
+                CREATE OR REPLACE FUNCTION assign_receipt_no()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    IF NEW.receipt_no IS NULL THEN
+                        BEGIN
+                            NEW.receipt_no := nextval('receipt_no_seq');
+                        EXCEPTION WHEN OTHERS THEN
+                            SELECT COALESCE(MAX(receipt_no), 0) + 1 INTO NEW.receipt_no FROM transactions;
+                        END;
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+            `).catch(() => {});
+            await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+            await client.query(`
+                CREATE TRIGGER trg_assign_receipt_no
+                BEFORE INSERT ON transactions
+                FOR EACH ROW
+                EXECUTE FUNCTION assign_receipt_no()
+            `).catch(() => {});
 
             // Run seed data / migrations in this new schema
             await new Promise((resolve) => {
@@ -191,7 +342,7 @@ if (config.dbType === 'postgres') {
     db.ensureAllTenantSchemas = async function() {
         let client;
         try {
-            client = await pool.connect();
+            client = await acquireClientWithRetry();
             const result = await client.query(
                 `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\' ORDER BY schema_name`
             );
@@ -202,19 +353,49 @@ if (config.dbType === 'postgres') {
             for (const schemaName of tenantSchemas) {
                 let c2;
                 try {
-                    c2 = await pool.connect();
+                    c2 = await acquireClientWithRetry();
                     await c2.query(`SET search_path TO "${schemaName}", public`);
                     for (const sql of schema) {
                         try {
                             await c2.query(translateSql(sql));
                         } catch (e) {
                             // ignore "already exists" type errors, log others
-                            if (!e.message.includes('already exists')) {
+                            if (!e.message.includes('already exists') && !e.message.includes('duplicate')) {
                                 console.warn(`[MIGRATE] ${schemaName} - ${e.message.split('\n')[0]}`);
                             }
                         }
                     }
-                    console.log(`[MIGRATE] Schema "${schemaName}" tables verified OK.`);
+
+                    // Guarantee receipt_no sequence, sync setval, and resilient trigger
+                    await c2.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_no INTEGER`).catch(() => {});
+                    await c2.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
+                    await c2.query(`
+                        SELECT setval('receipt_no_seq', GREATEST(1, COALESCE((SELECT MAX(receipt_no) FROM transactions), 0) + 1), false)
+                    `).catch(() => {});
+                    await c2.query(`
+                        CREATE OR REPLACE FUNCTION assign_receipt_no()
+                        RETURNS TRIGGER AS $$
+                        BEGIN
+                            IF NEW.receipt_no IS NULL THEN
+                                BEGIN
+                                    NEW.receipt_no := nextval('receipt_no_seq');
+                                EXCEPTION WHEN OTHERS THEN
+                                    SELECT COALESCE(MAX(receipt_no), 0) + 1 INTO NEW.receipt_no FROM transactions;
+                                END;
+                            END IF;
+                            RETURN NEW;
+                        END;
+                        $$ LANGUAGE plpgsql;
+                    `).catch(() => {});
+                    await c2.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+                    await c2.query(`
+                        CREATE TRIGGER trg_assign_receipt_no
+                        BEFORE INSERT ON transactions
+                        FOR EACH ROW
+                        EXECUTE FUNCTION assign_receipt_no()
+                    `).catch(() => {});
+
+                    console.log(`[MIGRATE] Schema "${schemaName}" tables & receipt_no sequence verified OK.`);
                 } catch (e) {
                     console.error(`[MIGRATE] Failed to migrate "${schemaName}":`, e.message);
                 } finally {
@@ -492,7 +673,8 @@ const schema = [
         order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, transaction_id INTEGER,
         payment_method TEXT DEFAULT 'CASH', amount_paid REAL DEFAULT 0,
         buyer_name TEXT, buyer_phone TEXT, served_by TEXT, waiter_id INTEGER,
-        invoice_number INTEGER, split_cash_amount REAL DEFAULT 0, split_second_amount REAL DEFAULT 0, split_second_method TEXT DEFAULT ''
+        invoice_number INTEGER, discount_amount REAL DEFAULT 0, client_uuid TEXT,
+        split_cash_amount REAL DEFAULT 0, split_second_amount REAL DEFAULT 0, split_second_method TEXT DEFAULT ''
     )`,
     `CREATE TABLE IF NOT EXISTS schedules (
         id SERIAL PRIMARY KEY, employee_id INTEGER, shift_date TEXT,
@@ -631,6 +813,24 @@ const schema = [
         note TEXT,
         performed_by TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS cashier_shifts (
+        id SERIAL PRIMARY KEY,
+        cashier_id INTEGER,
+        start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        end_time TIMESTAMP,
+        start_cash REAL DEFAULT 0,
+        end_cash REAL DEFAULT 0,
+        counted_cash REAL DEFAULT 0,
+        difference REAL DEFAULT 0,
+        cash_sales REAL DEFAULT 0,
+        momo_sales REAL DEFAULT 0,
+        total_sales REAL DEFAULT 0,
+        expenses REAL DEFAULT 0,
+        cash_in REAL DEFAULT 0,
+        discount_amount REAL DEFAULT 0,
+        invoice_collected REAL DEFAULT 0,
+        status TEXT DEFAULT 'OPEN'
     )`
 ];
 
@@ -1594,48 +1794,47 @@ function runMigrations(fromVersion) {
         // v152: Replace racy MAX(receipt_no)+1 trigger with a true PostgreSQL SEQUENCE.
         // A SEQUENCE is atomic — concurrent inserts always get distinct values.
         (async () => {
-            const { Pool } = require('pg');
-            const seqPool = new Pool(config.postgres);
+            let client;
             try {
-                const client = await seqPool.connect();
-                try {
-                    // Backfill any NULL receipt_no rows first
-                    await client.query(`
-                        WITH numbered AS (
-                            SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn FROM transactions WHERE receipt_no IS NULL
-                        ) UPDATE transactions SET receipt_no = numbered.rn FROM numbered WHERE transactions.id = numbered.id
-                    `);
-                    const maxRow = await client.query(`SELECT COALESCE(MAX(receipt_no), 0) AS mx FROM transactions`);
-                    const startVal = (parseInt(maxRow.rows[0].mx, 10) || 0) + 1;
-                    await client.query(`DROP SEQUENCE IF EXISTS receipt_no_seq`);
-                    await client.query(`CREATE SEQUENCE receipt_no_seq START WITH ${startVal}`);
-                    await client.query(`
-                        CREATE OR REPLACE FUNCTION assign_receipt_no()
-                        RETURNS TRIGGER AS $$
-                        BEGIN
-                            IF NEW.receipt_no IS NULL THEN
+                client = await db.acquireClientWithRetry();
+                // Backfill any NULL receipt_no rows first
+                await client.query(`
+                    WITH numbered AS (
+                        SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn FROM transactions WHERE receipt_no IS NULL
+                    ) UPDATE transactions SET receipt_no = numbered.rn FROM numbered WHERE transactions.id = numbered.id
+                `);
+                await client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`);
+                await client.query(`
+                    SELECT setval('receipt_no_seq', GREATEST(1, COALESCE((SELECT MAX(receipt_no) FROM transactions), 0) + 1), false)
+                `);
+                await client.query(`
+                    CREATE OR REPLACE FUNCTION assign_receipt_no()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        IF NEW.receipt_no IS NULL THEN
+                            BEGIN
                                 NEW.receipt_no := nextval('receipt_no_seq');
-                            END IF;
-                            RETURN NEW;
-                        END;
-                        $$ LANGUAGE plpgsql;
-                    `);
-                    await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`);
-                    await client.query(`
-                        CREATE TRIGGER trg_assign_receipt_no
-                        BEFORE INSERT ON transactions
-                        FOR EACH ROW EXECUTE FUNCTION assign_receipt_no()
-                    `);
-                    db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '152'], () => {
-                        console.log('Migration to v152 complete: receipt_no now uses atomic PostgreSQL SEQUENCE (public schema).');
-                    });
-                } finally {
-                    client.release();
-                }
+                            EXCEPTION WHEN OTHERS THEN
+                                SELECT COALESCE(MAX(receipt_no), 0) + 1 INTO NEW.receipt_no FROM transactions;
+                            END;
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                `);
+                await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+                await client.query(`
+                    CREATE TRIGGER trg_assign_receipt_no
+                    BEFORE INSERT ON transactions
+                    FOR EACH ROW EXECUTE FUNCTION assign_receipt_no()
+                `);
+                db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ['version', '152'], () => {
+                    console.log('Migration to v152 complete: receipt_no now uses atomic PostgreSQL SEQUENCE (resilient).');
+                });
             } catch (e) {
                 console.error('[Migration v152] Error:', e.message);
             } finally {
-                await seqPool.end();
+                if (client) client.release();
             }
         })();
     } else if (fromVersion < 152) {
@@ -1652,13 +1851,14 @@ initDb();
 // This ensures role seeding and schema updates propagate to all companies, not just new ones.
 if (config.dbType === 'postgres') {
     setTimeout(async () => {
+        let client;
         try {
-            const pool = new Pool(config.postgres);
-            const client = await pool.connect();
+            client = await db.acquireClientWithRetry();
             const result = await client.query(
                 `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\'`
             );
             client.release();
+            client = null;
 
             const tenantSchemas = result.rows.map(r => r.schema_name);
             console.log(`[STARTUP] Found ${tenantSchemas.length} tenant schema(s) — running migrations...`);
@@ -1678,21 +1878,26 @@ if (config.dbType === 'postgres') {
             // Runs unconditionally regardless of version counter, using IF NOT EXISTS.
             // This fixes tenants where version was bumped but the ALTER didn't apply.
             setTimeout(async () => {
+                let safetyClient;
                 try {
-                    const safetyPool = new Pool(config.postgres);
+                    safetyClient = await db.acquireClientWithRetry();
                     // Re-fetch tenant list + include public schema
-                    const tResult = await safetyPool.query(
+                    const tResult = await safetyClient.query(
                         `SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\'`
                     );
+                    safetyClient.release();
+                    safetyClient = null;
+
                     const allSchemas = ['public', ...tResult.rows.map(r => r.schema_name)];
                     for (const sc of allSchemas) {
-                        const sc_client = await safetyPool.connect();
+                        let sc_client;
                         try {
+                            sc_client = await db.acquireClientWithRetry();
                             await sc_client.query(`SET search_path TO "${sc}"`);
                             // Ensure low_stock_threshold column exists
                             await sc_client.query(
                                 `ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INTEGER DEFAULT 10`
-                            );
+                            ).catch(() => {});
                             // Ensure stock_movements table exists
                             await sc_client.query(`
                                 CREATE TABLE IF NOT EXISTS stock_movements (
@@ -1707,11 +1912,11 @@ if (config.dbType === 'postgres') {
                                     performed_by TEXT,
                                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                                 )
-                            `);
+                            `).catch(() => {});
                             // Ensure invoice_number column exists on pos_orders & backfill
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS invoice_number INTEGER`
-                            );
+                            ).catch(() => {});
                             await sc_client.query(`
                                 WITH numbered AS (
                                     SELECT id, ROW_NUMBER() OVER (ORDER BY order_date ASC, id ASC) as rn
@@ -1779,23 +1984,21 @@ if (config.dbType === 'postgres') {
                                 FROM numbered
                                 WHERE transactions.id = numbered.id AND transactions.receipt_no IS NULL
                             `).catch(() => {});
-                            // Create a per-schema sequence for receipt_no — atomic & concurrent-safe
-                            await (async () => {
-                                try {
-                                    const maxR = await sc_client.query(`SELECT COALESCE(MAX(receipt_no), 0) AS mx FROM transactions`);
-                                    const seqStart = (parseInt(maxR.rows[0].mx, 10) || 0) + 1;
-                                    await sc_client.query(`DROP SEQUENCE IF EXISTS receipt_no_seq`).catch(() => {});
-                                    await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH ${seqStart}`);
-                                } catch (_) {
-                                    await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
-                                }
-                            })();
+                            // Create a per-schema sequence for receipt_no — atomic & concurrent-safe (NEVER drop!)
+                            await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
+                            await sc_client.query(`
+                                SELECT setval('receipt_no_seq', GREATEST(1, COALESCE((SELECT MAX(receipt_no) FROM transactions), 0) + 1), false)
+                            `).catch(() => {});
                             await sc_client.query(`
                                 CREATE OR REPLACE FUNCTION assign_receipt_no()
                                 RETURNS TRIGGER AS $$
                                 BEGIN
                                     IF NEW.receipt_no IS NULL THEN
-                                        NEW.receipt_no := nextval('receipt_no_seq');
+                                        BEGIN
+                                            NEW.receipt_no := nextval('receipt_no_seq');
+                                        EXCEPTION WHEN OTHERS THEN
+                                            SELECT COALESCE(MAX(receipt_no), 0) + 1 INTO NEW.receipt_no FROM transactions;
+                                        END;
                                     END IF;
                                     RETURN NEW;
                                 END;
@@ -1817,17 +2020,19 @@ if (config.dbType === 'postgres') {
                                 console.error(`[SAFETY PATCH] ${sc}:`, patchErr.message);
                             }
                         } finally {
-                            sc_client.release();
+                            if (sc_client) sc_client.release();
                         }
                     }
-                    await safetyPool.end();
                 } catch (safetyErr) {
                     console.error('[SAFETY PATCH] Failed:', safetyErr.message);
+                } finally {
+                    if (safetyClient) safetyClient.release();
                 }
             }, 2000); // run 2s after tenant migrations finish
 
         } catch (e) {
             console.error('[STARTUP] Failed to run tenant migrations:', e.message);
+            if (client) client.release();
         }
     }, 3000); // Delay 3s so public schema migrations finish first
 }

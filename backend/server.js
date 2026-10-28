@@ -3423,34 +3423,25 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       const txType = isCredit ? "GOODS_ON_CREDIT" : "INCOME";
 
       // INSERT transaction — receipt_no is assigned atomically by the DB trigger/sequence.
-      // We do NOT pre-compute MAX+1 here (that was racy under concurrent inserts).
+      const isPg = Boolean(db.pool);
       let txResult;
       if (recycledId) {
-        // When reusing a recycled ID we must still omit receipt_no so the trigger fires.
-        txResult = await q(
-          "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, receipt_no",
-          [recycledId, txAmount, txType, description, cashier_id, now, payment_status]
-        ).catch(() =>
-          // Fallback for SQLite (no RETURNING)
-          q("INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [recycledId, txAmount, txType, description, cashier_id, now, payment_status])
-        );
+        const sql = isPg
+          ? "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, receipt_no"
+          : "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        txResult = await q(sql, [recycledId, txAmount, txType, description, cashier_id, now, payment_status]);
         txResult.lastID = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID || recycledId;
       } else {
-        txResult = await q(
-          "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, receipt_no",
-          [txAmount, txType, description, cashier_id, now, payment_status]
-        ).catch(() =>
-          // Fallback for SQLite (no RETURNING)
-          q("INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
-            [txAmount, txType, description, cashier_id, now, payment_status])
-        );
+        const sql = isPg
+          ? "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, receipt_no"
+          : "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)";
+        txResult = await q(sql, [txAmount, txType, description, cashier_id, now, payment_status]);
       }
       const transaction_id = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID;
       // Read the DB-assigned receipt_no (from RETURNING row, or fall back to a SELECT)
       let assignedReceiptNo = (txResult.rows && txResult.rows[0]) ? txResult.rows[0].receipt_no : null;
       if (!assignedReceiptNo) {
-        const rcptBack = await q("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id]).catch(() => ({ rows: [] }));
+        const rcptBack = await q("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id]);
         assignedReceiptNo = (rcptBack.rows && rcptBack.rows[0]) ? rcptBack.rows[0].receipt_no : transaction_id;
       }
       const nextReceiptNo = assignedReceiptNo || transaction_id;
@@ -3475,7 +3466,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         await q(
           "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
           [buyer_name || "Customer", buyer_phone || "", pos_order_id, total_amount, split_cash_amount, split_second_amount]
-        ).catch((e) => console.error("[credit_records] SPLIT credit error:", e.message));
+        );
       }
 
       // Stock deductions (skip for Made-To-Order items where track_stock = 0)
@@ -3489,7 +3480,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         const stockBeforeRes = await q(
           "SELECT stock FROM products WHERE id = ?",
           [item.id]
-        ).catch(() => ({ rows: [] }));
+        );
         const stockBeforeVal = (stockBeforeRes.rows && stockBeforeRes.rows[0]) ? stockBeforeRes.rows[0].stock : null;
         await q(
           "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
@@ -3500,7 +3491,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         await q(
           `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)`,
           [item.id, item.name, -item.qty, stockBeforeVal, stockAfter, `Sale #${transaction_id}`, servedByLabel]
-        ).catch(e => console.error('[stock_movements] SALE insert error:', e.message));
+        );
         if (item.barcodes && Array.isArray(item.barcodes)) {
           for (const bc of item.barcodes) {
             await q(

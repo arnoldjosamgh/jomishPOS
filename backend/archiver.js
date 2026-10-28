@@ -332,24 +332,27 @@ async function archiveOldTransactions(options = {}) {
  */
 async function checkAndRunScheduledArchive() {
   try {
-    const configData = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../config/config.json'), 'utf8'));
-    if (configData.dbType === 'postgres') {
-      const { Pool } = require('pg');
-      const pool = new Pool(configData.postgres);
-      const res = await pool.query(`SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\'`);
-      const schemas = ['public', ...res.rows.map(r => r.schema_name)];
+    if (db.pool) {
+      const client = await (db.acquireClientWithRetry ? db.acquireClientWithRetry() : db.pool.connect());
+      let schemas = [];
+      try {
+        const res = await client.query(`SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 't\\_%' ESCAPE '\\'`);
+        schemas = ['public', ...res.rows.map(r => r.schema_name)];
+      } finally {
+        client.release();
+      }
       
       for (const sc of schemas) {
         try {
-          const client = await pool.connect();
+          const scClient = await (db.acquireClientWithRetry ? db.acquireClientWithRetry() : db.pool.connect());
           let shouldRun = false;
           try {
-            await client.query(`SET search_path TO "${sc}"`);
-            const sRes = await client.query(`SELECT setting_value FROM app_settings WHERE setting_key = 'last_auto_archive_date'`);
+            await scClient.query(`SET search_path TO "${sc}"`);
+            const sRes = await scClient.query(`SELECT setting_value FROM app_settings WHERE setting_key = 'last_auto_archive_date'`);
             const lastDateStr = (sRes.rows && sRes.rows[0]) ? sRes.rows[0].setting_value : null;
             if (!lastDateStr) {
               // Never run before: check if there are transactions older than 3 weeks
-              const checkOld = await client.query(`SELECT COUNT(*) as cnt FROM transactions WHERE transaction_date < NOW() - INTERVAL '21 days'`);
+              const checkOld = await scClient.query(`SELECT COUNT(*) as cnt FROM transactions WHERE transaction_date < NOW() - INTERVAL '21 days'`);
               if (parseInt(checkOld.rows[0].cnt, 10) > 0) {
                 shouldRun = true;
               }
@@ -360,7 +363,7 @@ async function checkAndRunScheduledArchive() {
               }
             }
           } finally {
-            client.release();
+            scClient.release();
           }
 
           if (shouldRun) {
@@ -380,7 +383,7 @@ async function checkAndRunScheduledArchive() {
           // ignore single schema errors
         }
       }
-      await pool.end();
+      // db.pool is shared — do NOT call pool.end() here
     }
   } catch (err) {
     console.error('[AUTO-ARCHIVER] Scheduler check error:', err.message);
