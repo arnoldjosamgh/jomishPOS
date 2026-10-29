@@ -3690,86 +3690,63 @@ async function computeShiftSummary(startTime, endTime = null, startCash = 0, cou
   const endIso = endTime ? (endTime instanceof Date ? endTime.toISOString() : String(endTime)) : null;
 
   const orderDateClause = endIso ? "order_date >= ? AND order_date <= ?" : "order_date >= ?";
-  const txDateClause = endIso ? "transaction_date >= ? AND transaction_date <= ?" : "transaction_date >= ?";
-  const orderParams = endIso ? [startIso, endIso] : [startIso];
-  const txParams = endIso ? [startIso, endIso] : [startIso];
+  const txDateClause    = endIso ? "transaction_date >= ? AND transaction_date <= ?" : "transaction_date >= ?";
+  const params          = endIso ? [startIso, endIso] : [startIso];
 
-  const runQuery = (sql, params, desc) =>
+  const [posRow, txRow] = await Promise.all([
     new Promise((resolve) => {
-      db.get(sql, params, (err, row) => {
-        if (err) {
-          console.error(`[Shift Reconciliation] Error in ${desc}:`, err.message);
-          resolve(0);
-        } else {
-          resolve(row && row.s !== null && row.s !== undefined ? Number(row.s) : 0);
+      db.get(
+        `SELECT
+          COALESCE(SUM(total_amount), 0) as total_sales,
+          COALESCE(SUM(CASE
+            WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount
+            WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0)
+            WHEN payment_method = 'CREDIT' THEN COALESCE(amount_paid, 0)
+            ELSE 0 END), 0) as cash_sales,
+          COALESCE(SUM(CASE
+            WHEN payment_method = 'MOBILE MONEY' THEN total_amount
+            WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0)
+            ELSE 0 END), 0) as momo_sales,
+          COALESCE(SUM(CASE WHEN payment_method IN ('COD','INVOICE') THEN total_amount ELSE 0 END), 0) as invoice_collected,
+          COALESCE(SUM(discount_amount), 0) as discount_amount
+        FROM pos_orders WHERE ${orderDateClause}`,
+        params,
+        (err, row) => {
+          if (err) { console.error("[Shift Reconciliation] POS query error:", err.message); resolve({}); }
+          else resolve(row || {});
         }
-      });
-    });
-
-  const [
-    cashSales,
-    momoSales,
-    totalSales,
-    expenses,
-    cashIn,
-    invoiceCollected,
-    discountAmount,
-    incomeTransactions
-  ] = await Promise.all([
-    runQuery(
-      `SELECT SUM(CASE 
-        WHEN (payment_method = 'CASH' OR payment_method = 'DISCOUNT') THEN total_amount 
-        WHEN payment_method = 'SPLIT' THEN COALESCE(split_cash_amount, 0) 
-        WHEN payment_method = 'CREDIT' THEN COALESCE(amount_paid, 0) 
-        ELSE 0 END) as s FROM pos_orders WHERE ${orderDateClause}`,
-      orderParams,
-      "cashSales"
-    ),
-    runQuery(
-      `SELECT SUM(CASE 
-        WHEN payment_method = 'MOBILE MONEY' THEN total_amount 
-        WHEN payment_method = 'SPLIT' AND (split_second_method = 'MOBILE MONEY' OR split_second_method = 'MOMO') THEN COALESCE(split_second_amount, 0) 
-        ELSE 0 END) as s FROM pos_orders WHERE ${orderDateClause}`,
-      orderParams,
-      "momoSales"
-    ),
-    runQuery(
-      `SELECT SUM(total_amount) as s FROM pos_orders WHERE ${orderDateClause}`,
-      orderParams,
-      "totalSales"
-    ),
-    runQuery(
-      `SELECT SUM(amount) as s FROM transactions WHERE type = 'EXPENSE' AND ${txDateClause}`,
-      txParams,
-      "expenses"
-    ),
-    runQuery(
-      `SELECT SUM(amount) as s FROM transactions WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' AND ${txDateClause}`,
-      txParams,
-      "cashIn"
-    ),
-    runQuery(
-      `SELECT SUM(total_amount) as s FROM pos_orders WHERE payment_method IN ('COD','INVOICE') AND ${orderDateClause}`,
-      orderParams,
-      "invoiceCollected"
-    ),
-    runQuery(
-      `SELECT SUM(discount_amount) as s FROM pos_orders WHERE ${orderDateClause}`,
-      orderParams,
-      "discountAmount"
-    ),
-    runQuery(
-      `SELECT SUM(amount) as s FROM transactions WHERE type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' AND ${txDateClause}`,
-      txParams,
-      "incomeTransactions"
-    )
+      );
+    }),
+    new Promise((resolve) => {
+      db.get(
+        `SELECT
+          COALESCE(SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END), 0) as expenses,
+          COALESCE(SUM(CASE WHEN (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' THEN amount ELSE 0 END), 0) as cash_in,
+          COALESCE(SUM(CASE WHEN type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' THEN amount ELSE 0 END), 0) as income_transactions
+        FROM transactions WHERE ${txDateClause}`,
+        params,
+        (err, row) => {
+          if (err) { console.error("[Shift Reconciliation] TX query error:", err.message); resolve({}); }
+          else resolve(row || {});
+        }
+      );
+    })
   ]);
+
+  const cashSales          = Number(posRow.cash_sales || 0);
+  const momoSales          = Number(posRow.momo_sales || 0);
+  const totalSales         = Number(posRow.total_sales || 0);
+  const invoiceCollected   = Number(posRow.invoice_collected || 0);
+  const discountAmount     = Number(posRow.discount_amount || 0);
+  const expenses           = Number(txRow.expenses || 0);
+  const cashIn             = Number(txRow.cash_in || 0);
+  const incomeTransactions = Number(txRow.income_transactions || 0);
 
   const sCash = Number(startCash || 0);
   const cashInDrawer = sCash + cashSales + cashIn + incomeTransactions - expenses;
   const expectedCash = cashInDrawer + momoSales;
-  const actualCounted = countedCash !== null && !isNaN(countedCash) ? countedCash : expectedCash;
-  const difference = actualCounted - expectedCash;
+  const actualCounted = countedCash !== null && !isNaN(countedCash) ? countedCash : cashInDrawer;
+  const difference = actualCounted - cashInDrawer;
 
   return {
     start_cash: sCash,
@@ -4207,62 +4184,133 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   if (!start_date || !end_date)
     return res.status(400).json({ error: "Start and end dates required" });
 
-  // ── Summary: group sales by pos_orders.cashier_id (the person who cashed out),
-  // not by transactions.recorded_by. This means waiter-placed orders that were
-  // checked out by a cashier correctly appear under that cashier.
-  // Exclude employees whose ONLY role is 'Waiter' (they don't collect cash).
-  // Expenses are pulled as a correlated subquery from transactions (recorded_by = cashier).
-  const summaryParams = [start_date, end_date + " 23:59:59", start_date, end_date + " 23:59:59", start_date, end_date + " 23:59:59"];
-  let summarySql = `
-        SELECT
-            po.cashier_id AS recorded_by,
-            CASE WHEN po.cashier_id = 9999 THEN 'System Technician'
-                 ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name)
-            END AS cashier_name,
-            COUNT(CASE WHEN po.payment_method NOT IN ('CREDIT', 'COD', 'INVOICE') OR COALESCE(po.amount_paid, 0) > 0 THEN po.id END) AS income_count,
-            (SELECT COUNT(*) FROM transactions tx
-             WHERE tx.type = 'EXPENSE' AND tx.recorded_by = po.cashier_id
-               AND tx.transaction_date >= ? AND tx.transaction_date <= ?) AS expense_count,
-            SUM(CASE 
-                  WHEN po.payment_method = 'CREDIT' THEN COALESCE(po.amount_paid, 0)
-                  WHEN po.payment_method IN ('COD', 'INVOICE') THEN 0
-                  WHEN po.payment_method = 'DISCOUNT' THEN po.total_amount
-                  WHEN po.payment_method = 'SPLIT' THEN (COALESCE(po.split_cash_amount, 0) + CASE WHEN po.split_second_method NOT IN ('CREDIT', 'COD', 'INVOICE') THEN COALESCE(po.split_second_amount, 0) ELSE 0 END)
-                  ELSE po.total_amount
-                END) AS total_income,
-            (SELECT COALESCE(SUM(tx.amount), 0) FROM transactions tx
-             WHERE tx.type = 'EXPENSE' AND tx.recorded_by = po.cashier_id
-               AND tx.transaction_date >= ? AND tx.transaction_date <= ?) AS total_expense,
-            SUM(CASE WHEN po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT' THEN po.total_amount WHEN po.payment_method = 'SPLIT' THEN COALESCE(po.split_cash_amount, 0) WHEN po.payment_method = 'CREDIT' THEN COALESCE(po.amount_paid, 0) ELSE 0 END) AS cash_sales,
-            SUM(CASE WHEN po.payment_method = 'MOBILE MONEY' THEN po.total_amount WHEN po.payment_method = 'SPLIT' AND (po.split_second_method = 'MOBILE MONEY' OR po.split_second_method = 'MOMO') THEN COALESCE(po.split_second_amount, 0) ELSE 0 END) AS momo_sales,
-            SUM(po.total_amount) AS total_sales
-        FROM pos_orders po
-        LEFT JOIN employees e ON po.cashier_id = e.id
-        WHERE po.order_date >= ? AND po.order_date <= ?
-          AND COALESCE(UPPER(e.role), '') NOT IN ('WAITER')
-    `;
-  if (cashier_id) { summarySql += ` AND po.cashier_id = ?`; summaryParams.push(cashier_id); }
-  summarySql += ` GROUP BY po.cashier_id, e.nickname, e.first_name, e.last_name, e.role ORDER BY total_income DESC`;
+  // Convert user-supplied local Uganda dates (UTC+3) to UTC ISO bounds for Postgres,
+  // which stores timestamps as UTC (without time zone).
+  const isPg = Boolean(db.pool);
+  const startIso = isPg
+    ? new Date(`${start_date}T00:00:00+03:00`).toISOString()
+    : start_date;
+  const endIso = isPg
+    ? new Date(`${end_date}T23:59:59.999+03:00`).toISOString()
+    : end_date + " 23:59:59";
 
-  // ── Detail: transactions in window, attributed to the cashier who recorded them
-  const detailParams = [start_date, end_date + " 23:59:59"];
-  let detailSql = `
-        SELECT 
-            t.id, t.transaction_date, t.amount, t.type, t.description, t.payment_status,
-            CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
-            COALESCE(t.receipt_no, t.id) AS receipt_no
-        FROM transactions t
-        LEFT JOIN employees e ON t.recorded_by = e.id
-        WHERE t.transaction_date >= ? AND t.transaction_date <= ?
-    `;
-  if (cashier_id) { detailSql += ` AND t.recorded_by = ?`; detailParams.push(cashier_id); }
-  detailSql += ` ORDER BY t.transaction_date ASC, t.id ASC`;
+  // ── 1. POS orders: aggregate income/sales totals grouped by cashier_id
+  const posParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
+  const posFilter = cashier_id ? " AND po.cashier_id = ?" : "";
+  const posSql = `
+    SELECT
+      po.cashier_id,
+      COUNT(po.id) as orders_count,
+      COUNT(CASE WHEN po.payment_method NOT IN ('CREDIT', 'COD', 'INVOICE') OR COALESCE(po.amount_paid, 0) > 0 THEN po.id END) as income_count,
+      COALESCE(SUM(po.total_amount), 0) as total_sales,
+      COALESCE(SUM(CASE
+        WHEN (po.payment_method = 'CASH' OR po.payment_method = 'DISCOUNT') THEN po.total_amount
+        WHEN po.payment_method = 'SPLIT' THEN COALESCE(po.split_cash_amount, 0)
+        WHEN po.payment_method = 'CREDIT' THEN COALESCE(po.amount_paid, 0)
+        ELSE 0 END), 0) as cash_sales,
+      COALESCE(SUM(CASE
+        WHEN po.payment_method = 'MOBILE MONEY' THEN po.total_amount
+        WHEN po.payment_method = 'SPLIT' AND (po.split_second_method = 'MOBILE MONEY' OR po.split_second_method = 'MOMO') THEN COALESCE(po.split_second_amount, 0)
+        ELSE 0 END), 0) as momo_sales,
+      COALESCE(SUM(CASE
+        WHEN po.payment_method = 'CREDIT' THEN COALESCE(po.amount_paid, 0)
+        WHEN po.payment_method IN ('COD', 'INVOICE') THEN 0
+        WHEN po.payment_method = 'DISCOUNT' THEN po.total_amount
+        WHEN po.payment_method = 'SPLIT' THEN (COALESCE(po.split_cash_amount, 0) + CASE WHEN po.split_second_method NOT IN ('CREDIT', 'COD', 'INVOICE') THEN COALESCE(po.split_second_amount, 0) ELSE 0 END)
+        ELSE po.total_amount
+      END), 0) as total_income
+    FROM pos_orders po
+    WHERE po.order_date >= ? AND po.order_date <= ?${posFilter}
+    GROUP BY po.cashier_id
+  `;
 
-  db.all(summarySql, summaryParams, (err, summaryRows) => {
+  // ── 2. Transactions: expenses + manual income per cashier
+  const txParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
+  const txFilter = cashier_id ? " AND tx.recorded_by = ?" : "";
+  const txSql = `
+    SELECT
+      tx.recorded_by as cashier_id,
+      COUNT(CASE WHEN tx.type = 'EXPENSE' THEN 1 END) as expense_count,
+      COALESCE(SUM(CASE WHEN tx.type = 'EXPENSE' THEN tx.amount ELSE 0 END), 0) as total_expense,
+      COALESCE(SUM(CASE WHEN tx.type = 'INCOME' AND tx.description NOT LIKE 'POS Sale%' AND tx.description NOT LIKE '%Opening Cash%' THEN tx.amount ELSE 0 END), 0) as manual_income
+    FROM transactions tx
+    WHERE tx.transaction_date >= ? AND tx.transaction_date <= ?${txFilter}
+    GROUP BY tx.recorded_by
+  `;
+
+  // ── 3. Detail: all transactions in window for the transaction log
+  const detailParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
+  const detailFilter = cashier_id ? " AND t.recorded_by = ?" : "";
+  const detailSql = `
+    SELECT
+      t.id, t.transaction_date, t.amount, t.type, t.description, t.payment_status,
+      CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
+      COALESCE(t.receipt_no, t.id) AS receipt_no
+    FROM transactions t
+    LEFT JOIN employees e ON t.recorded_by = e.id
+    WHERE t.transaction_date >= ? AND t.transaction_date <= ?${detailFilter}
+    ORDER BY t.transaction_date ASC, t.id ASC
+  `;
+
+  db.all(posSql, posParams, (err, posRows) => {
     if (err) return res.status(500).json({ error: err.message });
-    db.all(detailSql, detailParams, (err2, detailRows) => {
+    db.all(txSql, txParams, (err2, txRows) => {
       if (err2) return res.status(500).json({ error: err2.message });
-      res.json({ reports: summaryRows, transactions: detailRows || [] });
+      db.all(detailSql, detailParams, (err3, detailRows) => {
+        if (err3) return res.status(500).json({ error: err3.message });
+
+        // Merge POS + transaction rows by cashier_id; resolve names from employees table
+        db.all("SELECT id, first_name, last_name, nickname, role FROM employees", [], (err4, emps) => {
+          const empMap = new Map((emps || []).map(e => [e.id, e]));
+          const summaryMap = new Map();
+
+          const getOrCreate = (cid) => {
+            const key = String(cid);
+            if (!summaryMap.has(key)) {
+              const emp = empMap.get(Number(cid));
+              let name = "System Technician";
+              if (Number(cid) !== 9999) {
+                name = (emp && (emp.nickname || `${emp.first_name || ""} ${emp.last_name || ""}`.trim())) || `Staff #${cid}`;
+              }
+              summaryMap.set(key, {
+                recorded_by: cid,
+                cashier_name: name,
+                income_count: 0,
+                expense_count: 0,
+                total_income: 0,
+                total_expense: 0,
+                cash_sales: 0,
+                momo_sales: 0,
+                total_sales: 0
+              });
+            }
+            return summaryMap.get(key);
+          };
+
+          (posRows || []).forEach(p => {
+            if (p.cashier_id == null) return;
+            const s = getOrCreate(p.cashier_id);
+            s.income_count += Number(p.income_count || 0);
+            s.total_income += Number(p.total_income || 0);
+            s.cash_sales   += Number(p.cash_sales   || 0);
+            s.momo_sales   += Number(p.momo_sales   || 0);
+            s.total_sales  += Number(p.total_sales  || 0);
+          });
+
+          (txRows || []).forEach(t => {
+            if (t.cashier_id == null) return;
+            const s = getOrCreate(t.cashier_id);
+            s.expense_count += Number(t.expense_count || 0);
+            s.total_expense += Number(t.total_expense || 0);
+            s.total_income  += Number(t.manual_income || 0);
+          });
+
+          const reports = Array.from(summaryMap.values())
+            .sort((a, b) => b.total_income - a.total_income);
+
+          res.json({ reports, transactions: detailRows || [] });
+        });
+      });
     });
   });
 });
