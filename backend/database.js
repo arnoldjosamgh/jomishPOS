@@ -45,8 +45,8 @@ if (config.dbType === 'postgres') {
     const poolConfig = {
         ...(typeof config.postgres === 'object' ? config.postgres : {}),
         max: 10,
-        connectionTimeoutMillis: 25000, // 25s for Neon cold start / waking up
-        idleTimeoutMillis: 15000, // close idle connections quickly so dead sockets are dropped
+        connectionTimeoutMillis: 30000, // 30s for Neon cold start / waking up
+        idleTimeoutMillis: 10000, // close idle connections quickly so dead sockets are dropped
         keepAlive: true,
         keepAliveInitialDelayMillis: 10000,
         allowExitOnIdle: false
@@ -74,6 +74,8 @@ if (config.dbType === 'postgres') {
             code === '57P01' || // admin_shutdown
             code === '57P02' || // crash_shutdown
             code === '57P03' || // cannot_connect_now
+            code === '53300' || // too_many_connections
+            code === '53400' || // configuration_limit_exceeded
             code === '08000' || // connection_exception
             code === '08001' || // sqlclient_unable_to_establish_sqlconnection
             code === '08003' || // connection_does_not_exist
@@ -94,14 +96,20 @@ if (config.dbType === 'postgres') {
             msg.includes('econnreset') ||
             msg.includes('etimedout') ||
             msg.includes('econnrefused') ||
-            msg.includes('client has already been released')
+            msg.includes('client has already been released') ||
+            msg.includes('too many clients') ||
+            msg.includes('remaining connection slots are reserved') ||
+            msg.includes('connection limit exceeded') ||
+            msg.includes('terminating connection due to administrator command') ||
+            msg.includes('sorry, too many clients already') ||
+            msg.includes('closed the connection unexpectedly')
         ) {
             return true;
         }
         return false;
     }
 
-    async function acquireClientWithRetry(maxRetries = 15) {
+    async function acquireClientWithRetry(maxRetries = 20) {
         let attempt = 0;
         while (true) {
             attempt++;
@@ -120,7 +128,7 @@ if (config.dbType === 'postgres') {
         }
     }
 
-    async function executeWithRetry(operation, maxRetries = 10) {
+    async function executeWithRetry(operation, maxRetries = 15) {
         let attempt = 0;
         while (true) {
             attempt++;

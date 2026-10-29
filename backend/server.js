@@ -162,9 +162,30 @@ setInterval(
 );
 
 // 0. System Diagnostics
-app.get("/api/system/status", (req, res) => {
-  // Return DB info and app version
+app.get("/api/system/status", async (req, res) => {
+  // If in Postgres mode, run a quick lightweight query with retry to verify DB connectivity
+  let dbStatus = "connected";
+  if (db.pool) {
+    try {
+      await (db.executeWithRetry
+        ? db.executeWithRetry(async () => {
+            const client = await db.acquireClientWithRetry();
+            try {
+              await client.query("SELECT 1");
+            } finally {
+              client.release();
+            }
+          }, 3)
+        : db.pool.query("SELECT 1"));
+    } catch (e) {
+      dbStatus = "reconnecting";
+    }
+  }
+
+  // Always return 200 so Render/Cloud health checks do NOT terminate or cycle the container
   res.json({
+    status: "ok",
+    dbStatus: dbStatus,
     dbType: process.env.DATABASE_URL ? "postgres" : "sqlite",
     version: "1.0.0 (Enterprise)",
     host: os.hostname(),
@@ -196,6 +217,42 @@ app.use((req, res, next) => {
   res.removeHeader("X-Powered-By");
   next();
 });
+
+// Periodic background keep-alive ping to prevent Neon compute and Render web instance from sleeping
+if (process.env.DATABASE_URL || process.env.NODE_ENV === "production") {
+  const KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000; // Every 4 minutes (Neon sleeps at 5m, Render at 15m)
+  setInterval(async () => {
+    // 1. Keep Neon Database compute warm
+    if (db.pool) {
+      try {
+        if (db.executeWithRetry) {
+          await db.executeWithRetry(async () => {
+            const client = await db.acquireClientWithRetry();
+            try {
+              await client.query("SELECT 1");
+            } finally {
+              client.release();
+            }
+          }, 3);
+        } else {
+          await db.pool.query("SELECT 1");
+        }
+      } catch (err) {
+        console.warn("[Keep-Alive DB] Ping failed:", err.message);
+      }
+    }
+
+    // 2. Keep Render Web Service active if RENDER_EXTERNAL_URL is available
+    const serviceUrl = process.env.RENDER_EXTERNAL_URL;
+    if (serviceUrl) {
+      try {
+        const pingUrl = `${serviceUrl.replace(/\/+$/, "")}/api/system/status`;
+        await fetch(pingUrl, { timeout: 10000 }).catch(() => {});
+      } catch (_) {}
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+  console.log("[KEEPALIVE] Background 4-minute keep-alive ping initialized (Neon + Render).");
+}
 
 // Global API rate limit — 600 req/min per IP.
 // Read-only POS endpoints (products, orders listing, finance summary, current-shift)
@@ -701,8 +758,8 @@ app.delete("/api/system/companies/:prefix", authenticateToken, async (req, res) 
 
   try {
     if (db.pool) {
-      // Postgres: use a single client to avoid leaving an aborted transaction on a pooled connection
-      const client = await db.pool.connect();
+      // Postgres: use acquireClientWithRetry to safely acquire and clean up connection
+      const client = await (db.acquireClientWithRetry ? db.acquireClientWithRetry() : db.pool.connect());
       try {
         await client.query("BEGIN");
         await client.query(`SET search_path TO public`);
@@ -1887,7 +1944,7 @@ app.get(
   requireTech,
   async (req, res) => {
     try {
-      const client = await db.pool.connect();
+      const client = await (db.acquireClientWithRetry ? db.acquireClientWithRetry() : db.pool.connect());
       let tenants = [];
       try {
         // Primary source: read the master companies registry in the public schema
@@ -1917,7 +1974,7 @@ app.get(
             schemas.map(async (schema) => {
               const prefix = schema.replace(/^t_/, "").toUpperCase();
               try {
-                const c = await db.pool.connect();
+                const c = await (db.acquireClientWithRetry ? db.acquireClientWithRetry() : db.pool.connect());
                 try {
                   await c.query(`SET search_path TO "${schema}", public`);
                   const r = await c.query(
@@ -1977,7 +2034,7 @@ app.post(
       await new Promise((r) => setTimeout(r, 3000));
 
       // 2. Save company settings and create admin in the new schema
-      const client = await db.pool.connect();
+      const client = await (db.acquireClientWithRetry ? db.acquireClientWithRetry() : db.pool.connect());
       try {
         await client.query(`BEGIN`);
         await client.query(`SET search_path TO "${schemaName}", public`);
@@ -2072,7 +2129,7 @@ app.post(
     const ceoUsername = `${normalPrefix}001`;
     try {
       const newHash = await bcrypt.hash("password", 10);
-      const client = await db.pool.connect();
+      const client = await (db.acquireClientWithRetry ? db.acquireClientWithRetry() : db.pool.connect());
       try {
         await client.query(`SET search_path TO "${schemaName}", public`);
 
