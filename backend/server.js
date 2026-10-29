@@ -28,6 +28,29 @@ const archiver = require("./archiver");
 // Expose asyncLocalStorage from the db module proxy so all existing references work
 const asyncLocalStorage = db.asyncLocalStorage;
 
+// Standard Uganda (EAT / UTC+3) Date & Time Helpers
+function getUgandaTodayDateString() {
+  try {
+    return new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Kampala" });
+  } catch (_) {
+    return new Date().toISOString().split("T")[0];
+  }
+}
+
+function getUgandaDateRangeIso(startDate, endDate) {
+  const isPg = Boolean(db.pool);
+  if (!isPg) {
+    return {
+      startIso: startDate,
+      endIso: endDate ? endDate + " 23:59:59" : startDate + " 23:59:59"
+    };
+  }
+  const sIso = new Date(`${startDate}T00:00:00+03:00`).toISOString();
+  const targetEnd = endDate || startDate;
+  const eIso = new Date(`${targetEnd}T23:59:59.999+03:00`).toISOString();
+  return { startIso: sIso, endIso: eIso };
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -2574,12 +2597,7 @@ app.get("/api/products", authenticateToken, (req, res) => {
           });
         }
 
-        let todayDateStr = "";
-        try {
-          todayDateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Kampala" });
-        } catch (_) {
-          todayDateStr = new Date().toISOString().split("T")[0];
-        }
+        const todayDateStr = getUgandaTodayDateString();
         const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
         const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
 
@@ -2646,12 +2664,7 @@ app.get("/api/products", authenticateToken, (req, res) => {
 // Dedicated product sales analytics / counter report for CEO and Management
 app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
   const { start_date, end_date, shift_start, shift_end } = req.query;
-  let todayDateStr = "";
-  try {
-    todayDateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Kampala" });
-  } catch (_) {
-    todayDateStr = new Date().toISOString().split("T")[0];
-  }
+  const todayDateStr = getUgandaTodayDateString();
   const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
   const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
 
@@ -2665,8 +2678,9 @@ app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
       : "AND po.order_date >= ?";
     params = shift_end ? [shift_start, shift_end] : [shift_start];
   } else if (start_date && end_date) {
+    const { startIso, endIso } = getUgandaDateRangeIso(start_date, end_date);
     dateFilter = "AND po.order_date >= ? AND po.order_date <= ?";
-    params = [start_date, end_date + " 23:59:59"];
+    params = [startIso, endIso];
   }
 
   // The "sold_today" column uses the period start (shift start or today start)
@@ -4184,15 +4198,8 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
   if (!start_date || !end_date)
     return res.status(400).json({ error: "Start and end dates required" });
 
-  // Convert user-supplied local Uganda dates (UTC+3) to UTC ISO bounds for Postgres,
-  // which stores timestamps as UTC (without time zone).
-  const isPg = Boolean(db.pool);
-  const startIso = isPg
-    ? new Date(`${start_date}T00:00:00+03:00`).toISOString()
-    : start_date;
-  const endIso = isPg
-    ? new Date(`${end_date}T23:59:59.999+03:00`).toISOString()
-    : end_date + " 23:59:59";
+  // Convert user-supplied local Uganda dates (UTC+3) to ISO bounds
+  const { startIso, endIso } = getUgandaDateRangeIso(start_date, end_date);
 
   // ── 1. POS orders: aggregate income/sales totals grouped by cashier_id
   const posParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
@@ -4320,6 +4327,8 @@ app.get("/api/reports/cashier-shifts", authenticateToken, (req, res) => {
   if (!start_date || !end_date)
     return res.status(400).json({ error: "Start and end dates required" });
 
+  const { startIso, endIso } = getUgandaDateRangeIso(start_date, end_date);
+
   let sql = `
         SELECT s.id as shift_id, s.open_time, s.close_time, s.status as shift_status,
                CASE WHEN s.opened_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
@@ -4330,7 +4339,7 @@ app.get("/api/reports/cashier-shifts", authenticateToken, (req, res) => {
         LEFT JOIN employees e ON s.opened_by = e.id
         WHERE s.open_time >= ? AND s.open_time <= ?
     `;
-  const params = [start_date, end_date + " 23:59:59"];
+  const params = [startIso, endIso];
 
   if (cashier_id) {
     sql += ` AND s.opened_by = ?`;
