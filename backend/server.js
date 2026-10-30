@@ -164,20 +164,14 @@ setInterval(
 
 // 0. System Diagnostics
 app.get("/api/system/status", async (req, res) => {
-  // If in Postgres mode, run a quick lightweight query with retry to verify DB connectivity
   let dbStatus = "connected";
   if (db.pool) {
     try {
-      await (db.executeWithRetry
-        ? db.executeWithRetry(async () => {
-            const client = await db.acquireClientWithRetry();
-            try {
-              await client.query("SELECT 1");
-            } finally {
-              client.release();
-            }
-          }, 3)
-        : db.pool.query("SELECT 1"));
+      // Direct pool query with strict 2.5s timeout so health check NEVER hangs or blocks
+      await Promise.race([
+        db.pool.query("SELECT 1"),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("DB ping timeout")), 2500))
+      ]);
     } catch (e) {
       dbStatus = "reconnecting";
     }
@@ -222,34 +216,36 @@ app.use((req, res, next) => {
 // Periodic background keep-alive ping to prevent Neon compute and Render web instance from sleeping
 if (process.env.DATABASE_URL || process.env.NODE_ENV === "production") {
   const KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000; // Every 4 minutes (Neon sleeps at 5m, Render at 15m)
+  let _keepaliveRunning = false;
   setInterval(async () => {
-    // 1. Keep Neon Database compute warm
-    if (db.pool) {
-      try {
-        if (db.executeWithRetry) {
-          await db.executeWithRetry(async () => {
-            const client = await db.acquireClientWithRetry();
-            try {
-              await client.query("SELECT 1");
-            } finally {
-              client.release();
-            }
-          }, 3);
-        } else {
-          await db.pool.query("SELECT 1");
+    if (_keepaliveRunning) return;
+    _keepaliveRunning = true;
+    try {
+      // 1. Keep Neon Database compute warm using direct pool ping
+      if (db.pool) {
+        try {
+          await Promise.race([
+            db.pool.query("SELECT 1"),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Ping timeout")), 4000))
+          ]);
+        } catch (err) {
+          console.warn("[Keep-Alive DB] Ping failed:", err.message);
         }
-      } catch (err) {
-        console.warn("[Keep-Alive DB] Ping failed:", err.message);
       }
-    }
 
-    // 2. Keep Render Web Service active if RENDER_EXTERNAL_URL is available
-    const serviceUrl = process.env.RENDER_EXTERNAL_URL;
-    if (serviceUrl) {
-      try {
-        const pingUrl = `${serviceUrl.replace(/\/+$/, "")}/api/system/status`;
-        await fetch(pingUrl, { timeout: 10000 }).catch(() => {});
-      } catch (_) {}
+      // 2. Keep Render Web Service active if RENDER_EXTERNAL_URL is available
+      const serviceUrl = process.env.RENDER_EXTERNAL_URL;
+      if (serviceUrl) {
+        try {
+          const pingUrl = `${serviceUrl.replace(/\/+$/, "")}/api/system/status`;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000);
+          await fetch(pingUrl, { signal: controller.signal, cache: "no-store" }).catch(() => {});
+          clearTimeout(timeoutId);
+        } catch (_) {}
+      }
+    } finally {
+      _keepaliveRunning = false;
     }
   }, KEEPALIVE_INTERVAL_MS);
   console.log("[KEEPALIVE] Background 4-minute keep-alive ping initialized (Neon + Render).");
@@ -5337,16 +5333,19 @@ app.get("/api/alerts/low-stock", authenticateToken, (req, res) => {
 });
 
 // 15. Hardware Radar (Device Tracking)
+let _radarTimeoutRunning = false;
 setInterval(() => {
+  if (_radarTimeoutRunning) return; // Prevent overlapping runs if DB query is slow
+  _radarTimeoutRunning = true;
   // Mark devices as OFFLINE if they haven't been seen in 120 seconds
   asyncLocalStorage.run("public", () => {
     db.run(
       `UPDATE devices SET status = 'OFFLINE' 
               WHERE status = 'ONLINE' AND last_seen < datetime('now', '-120 seconds')`,
       function (err) {
+        _radarTimeoutRunning = false;
         // NOTE: must use regular function (not arrow) so 'this' refers to sqlite stmt context
         if (err) {
-          console.error("[RADAR] Device timeout error:", err.message);
           return;
         }
         if (this.changes > 0) {
@@ -5876,8 +5875,11 @@ async function fetchGmailInbox() {
   }
 }
 
-// Background Polling (silent â€” errors are logged, not thrown)
+// Background Polling (silent — errors are logged, not thrown)
+let _emailPollRunning = false;
 setInterval(async () => {
+  if (_emailPollRunning) return; // Prevent overlapping runs
+  _emailPollRunning = true;
   try {
     await fetchGmailInbox();
   } catch (e) {
@@ -5888,6 +5890,8 @@ setInterval(async () => {
     ) {
       console.error("[EMAIL BG]", e.message);
     }
+  } finally {
+    _emailPollRunning = false;
   }
 }, 60 * 1000); // Poll every 60 seconds
 

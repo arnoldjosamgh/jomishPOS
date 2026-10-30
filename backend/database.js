@@ -44,9 +44,11 @@ const CURRENT_VERSION = 152;
 if (config.dbType === 'postgres') {
     const poolConfig = {
         ...(typeof config.postgres === 'object' ? config.postgres : {}),
-        max: 10,
-        connectionTimeoutMillis: 30000, // 30s for Neon cold start / waking up
-        idleTimeoutMillis: 10000, // close idle connections quickly so dead sockets are dropped
+        max: 20, // Increased to 20 to prevent pool starvation under multi-device load
+        connectionTimeoutMillis: 10000, // 10s max wait for acquiring a pool client
+        idleTimeoutMillis: 15000, // close idle connections after 15s so dead sockets are dropped
+        statement_timeout: 20000, // 20s statement timeout to prevent hung queries from freezing connection
+        query_timeout: 20000,
         keepAlive: true,
         keepAliveInitialDelayMillis: 10000,
         allowExitOnIdle: false
@@ -109,7 +111,7 @@ if (config.dbType === 'postgres') {
         return false;
     }
 
-    async function acquireClientWithRetry(maxRetries = 20) {
+    async function acquireClientWithRetry(maxRetries = 4) {
         let attempt = 0;
         while (true) {
             attempt++;
@@ -121,14 +123,14 @@ if (config.dbType === 'postgres') {
                     console.error(`[DB] Connection failed after ${attempt} attempt(s):`, err.message);
                     throw err;
                 }
-                const delay = Math.min(1000 * Math.pow(1.3, attempt - 1), 4000);
-                console.warn(`[DB] Neon database appears to be asleep/reconnecting (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+                const delay = Math.min(800 * Math.pow(1.5, attempt - 1), 3000);
+                console.warn(`[DB] Neon database waking up (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
                 await new Promise(r => setTimeout(r, delay));
             }
         }
     }
 
-    async function executeWithRetry(operation, maxRetries = 15) {
+    async function executeWithRetry(operation, maxRetries = 3) {
         let attempt = 0;
         while (true) {
             attempt++;
@@ -138,8 +140,8 @@ if (config.dbType === 'postgres') {
                 if (attempt >= maxRetries || !isTransientDbError(err)) {
                     throw err;
                 }
-                const delay = Math.min(1000 * Math.pow(1.3, attempt - 1), 4000);
-                console.warn(`[DB Query] Neon database reconnecting (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+                const delay = Math.min(600 * Math.pow(1.5, attempt - 1), 2500);
+                console.warn(`[DB Query] Neon reconnecting (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
                 await new Promise(r => setTimeout(r, delay));
             }
         }
@@ -165,16 +167,21 @@ if (config.dbType === 'postgres') {
             const schema = asyncLocalStorage.getStore() || 'public';
             
             executeWithRetry(async () => {
-                const client = await acquireClientWithRetry();
+                let client;
+                let clientErr = null;
                 try {
+                    client = await acquireClientWithRetry();
                     await client.query(`SET search_path TO ${searchPathFor(schema)}`);
                     const res = await client.query(pgSql, params);
                     return { 
                         lastID: res.rows.length > 0 ? res.rows[0].id : null, 
                         changes: res.rowCount 
                     };
+                } catch (err) {
+                    clientErr = err;
+                    throw err;
                 } finally {
-                    client.release();
+                    if (client) client.release(clientErr);
                 }
             })
             .then(ctx => {
@@ -190,13 +197,18 @@ if (config.dbType === 'postgres') {
             const schema = asyncLocalStorage.getStore() || 'public';
             
             executeWithRetry(async () => {
-                const client = await acquireClientWithRetry();
+                let client;
+                let clientErr = null;
                 try {
+                    client = await acquireClientWithRetry();
                     await client.query(`SET search_path TO ${searchPathFor(schema)}`);
                     const res = await client.query(pgSql, params);
                     return res.rows[0];
+                } catch (err) {
+                    clientErr = err;
+                    throw err;
                 } finally {
-                    client.release();
+                    if (client) client.release(clientErr);
                 }
             })
             .then(row => {
@@ -212,13 +224,18 @@ if (config.dbType === 'postgres') {
             const schema = asyncLocalStorage.getStore() || 'public';
             
             executeWithRetry(async () => {
-                const client = await acquireClientWithRetry();
+                let client;
+                let clientErr = null;
                 try {
+                    client = await acquireClientWithRetry();
                     await client.query(`SET search_path TO ${searchPathFor(schema)}`);
                     const res = await client.query(pgSql, params);
                     return res.rows;
+                } catch (err) {
+                    clientErr = err;
+                    throw err;
                 } finally {
-                    client.release();
+                    if (client) client.release(clientErr);
                 }
             })
             .then(rows => {
@@ -235,12 +252,17 @@ if (config.dbType === 'postgres') {
                 run: (params) => {
                     const schema = asyncLocalStorage.getStore() || 'public';
                     return executeWithRetry(async () => {
-                        const client = await acquireClientWithRetry();
+                        let client;
+                        let clientErr = null;
                         try {
+                            client = await acquireClientWithRetry();
                             await client.query(`SET search_path TO ${searchPathFor(schema)}`);
                             return await client.query(pgSql, params);
+                        } catch (err) {
+                            clientErr = err;
+                            throw err;
                         } finally {
-                            client.release();
+                            if (client) client.release(clientErr);
                         }
                     });
                 },
@@ -251,12 +273,13 @@ if (config.dbType === 'postgres') {
         // Works for both Postgres (real transaction) and is shimmed for SQLite.
         // Usage: await db.withTransaction(async (q) => { await q('SQL', [params]); ... })
         // Returns { lastID, rows } of the LAST query executed inside.
-        withTransaction: async function(fn, maxRetries = 5) {
+        withTransaction: async function(fn, maxRetries = 3) {
             const schema = asyncLocalStorage.getStore() || 'public';
             let attempt = 0;
             while (true) {
                 attempt++;
                 let client;
+                let clientErr = null;
                 try {
                     client = await acquireClientWithRetry();
                     await client.query(`SET search_path TO ${searchPathFor(schema)}`);
@@ -274,18 +297,19 @@ if (config.dbType === 'postgres') {
                     await client.query('COMMIT');
                     return result;
                 } catch (err) {
+                    clientErr = err;
                     if (client) {
                         try { await client.query('ROLLBACK'); } catch (_) {}
                     }
                     if (attempt < maxRetries && isTransientDbError(err)) {
-                        const delay = Math.min(1000 * Math.pow(1.5, attempt - 1), 4000);
+                        const delay = Math.min(800 * Math.pow(1.5, attempt - 1), 3000);
                         console.warn(`[DB Transaction] Neon asleep / connection lost during transaction (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying transaction in ${Math.round(delay)}ms...`);
                         await new Promise(r => setTimeout(r, delay));
                         continue;
                     }
                     throw err;
                 } finally {
-                    if (client) client.release();
+                    if (client) client.release(clientErr);
                 }
             }
         }
@@ -296,8 +320,10 @@ if (config.dbType === 'postgres') {
         if (!prefix || !/^[A-Za-z0-9]+$/.test(prefix)) throw new Error('Invalid prefix format');
         const schemaName = 't_' + prefix.toLowerCase();
         
-        const client = await acquireClientWithRetry();
+        let client;
+        let clientErr = null;
         try {
+            client = await acquireClientWithRetry();
             await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
             await client.query(`SET search_path TO "${schemaName}", public`);
             
@@ -338,8 +364,11 @@ if (config.dbType === 'postgres') {
                     setTimeout(resolve, 1500); // Give migrations time to finish
                 });
             });
+        } catch (err) {
+            clientErr = err;
+            throw err;
         } finally {
-            client.release();
+            if (client) client.release(clientErr);
         }
         return schemaName;
     };
@@ -349,6 +378,7 @@ if (config.dbType === 'postgres') {
     // the schema array after companies were already provisioned.
     db.ensureAllTenantSchemas = async function() {
         let client;
+        let clientErr = null;
         try {
             client = await acquireClientWithRetry();
             const result = await client.query(
@@ -360,6 +390,7 @@ if (config.dbType === 'postgres') {
 
             for (const schemaName of tenantSchemas) {
                 let c2;
+                let c2Err = null;
                 try {
                     c2 = await acquireClientWithRetry();
                     await c2.query(`SET search_path TO "${schemaName}", public`);
@@ -405,14 +436,17 @@ if (config.dbType === 'postgres') {
 
                     console.log(`[MIGRATE] Schema "${schemaName}" tables & receipt_no sequence verified OK.`);
                 } catch (e) {
+                    c2Err = e;
                     console.error(`[MIGRATE] Failed to migrate "${schemaName}":`, e.message);
                 } finally {
-                    if (c2) c2.release();
+                    if (c2) c2.release(c2Err);
                 }
             }
         } catch (e) {
+            clientErr = e;
             console.error('[MIGRATE] ensureAllTenantSchemas failed:', e.message);
-            if (client) client.release();
+        } finally {
+            if (client) client.release(clientErr);
         }
     };
 
