@@ -662,6 +662,11 @@ window.onunhandledrejection = function(e) {
                         const hash = bcrypt.hashSync(password, salt);
                         await window.OfflineDB.saveOfflineCredentials(email, hash, data);
                     } catch (e) { console.warn('Offline save failed', e); }
+                    try {
+                        if (typeof window.OfflineDB.clearAllCache === 'function') {
+                            await window.OfflineDB.clearAllCache();
+                        }
+                    } catch (e) {}
                 }
 
                 localStorage.removeItem('jomish_demo');

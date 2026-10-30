@@ -363,15 +363,23 @@ const authenticateToken = (req, res, next) => {
     req.user = user;
 
     // Strict multi-tenant schema isolation: lock AsyncLocalStorage to the user's tenant schema
-    if (user && user.prefix) {
-      const p = String(user.prefix).toLowerCase().trim();
-      const schemaName = (p === "public" || p === "demo") ? p : "t_" + p;
-      return db.asyncLocalStorage.run(schemaName, () => {
-        next();
-      });
+    let targetSchema = "public";
+    let p = user && user.prefix ? String(user.prefix).toLowerCase().trim() : "";
+    if (!p && user && user.username) {
+      const uMatch = String(user.username).trim().match(/^([A-Za-z]{2,8})\d+$/);
+      if (uMatch) p = uMatch[1].toLowerCase();
+    }
+    if (user && user.role === "TECH") {
+      targetSchema = "public";
+    } else if (p === "public" || p === "demo") {
+      targetSchema = p;
+    } else if (p) {
+      targetSchema = "t_" + p;
     }
 
-    next();
+    return db.asyncLocalStorage.run(targetSchema, () => {
+      next();
+    });
   });
 };
 
@@ -2635,95 +2643,117 @@ del "%~f0"
 
 // 5. POS (Point of Sale)
 app.get("/api/products", authenticateToken, (req, res) => {
-  let schema = getSchema();
-  if (schema === "public" && req.user && req.user.role !== "TECH" && req.user.prefix && req.user.prefix.toLowerCase() !== "public") {
-    schema = "t_" + req.user.prefix.toLowerCase();
+  let userPrefix = (req.user && req.user.prefix) ? String(req.user.prefix).toLowerCase().trim() : "";
+  if (!userPrefix && req.user && req.user.username) {
+    const uMatch = String(req.user.username).trim().match(/^([A-Za-z]{2,8})\d+$/);
+    if (uMatch) userPrefix = uMatch[1].toLowerCase();
   }
-  const cached = getCache(schema, "products");
-  if (cached) return res.json(cached);
-  // Exclude photo_base64 from list for performance — use /api/products/:id/photo for individual photos
-  db.all("SELECT id, name, category, price, stock, barcode, barcode_end, buying_price, track_stock, low_stock_threshold, CASE WHEN photo_base64 IS NOT NULL AND LENGTH(photo_base64) > 50 THEN 1 ELSE 0 END AS has_photo FROM products", [], (err, products) => {
-    if (err) return res.status(500).json({ error: err.message });
-    db.all(
-      "SELECT product_id, barcode FROM product_barcodes",
-      [],
-      (err, barcodes) => {
-        const barcodeMap = {};
-        if (!err && barcodes) {
-          barcodes.forEach((b) => {
-            if (!barcodeMap[b.product_id]) barcodeMap[b.product_id] = [];
-            barcodeMap[b.product_id].push(b.barcode);
-          });
-        }
+  let schema = getSchema();
+  if (req.user && req.user.role !== "TECH" && userPrefix && userPrefix !== "public") {
+    schema = userPrefix === "demo" ? "demo" : "t_" + userPrefix;
+  }
 
-        const todayDateStr = getUgandaTodayDateString();
-        const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
-        const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
-
-        const salesSql = `
-          SELECT 
-            oi.product_id, 
-            oi.product_name, 
-            COALESCE(SUM(oi.qty), 0) AS total_sold,
-            COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today
-          FROM order_items oi
-          JOIN pos_orders po ON oi.pos_order_id = po.id
-          LEFT JOIN transactions t ON po.transaction_id = t.id
-          WHERE (t.payment_status IS NULL OR t.payment_status != 'PENDING')
-          GROUP BY oi.product_id, oi.product_name
-        `;
-
-        db.all(salesSql, [todayStartSql], (salesErr, salesRows) => {
-          const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
-          const prodById = new Map();
-          const prodByName = new Map();
-          const prodSales = new Map();
-
-          products.forEach((p) => {
-            prodById.set(Number(p.id), p);
-            const n = norm(p.name);
-            if (n && !prodByName.has(n)) prodByName.set(n, p);
-            prodSales.set(p.id, { total_sold: 0, sold_today: 0 });
-          });
-
-          if (!salesErr && salesRows) {
-            salesRows.forEach((r) => {
-              const qty = Number(r.total_sold) || 0;
-              const todayQty = Number(r.sold_today) || 0;
-              const pid = Number(r.product_id);
-              const pNameNorm = norm(r.product_name);
-              const matchedProd = (pid && prodById.get(pid)) || (pNameNorm && prodByName.get(pNameNorm));
-              if (matchedProd) {
-                const s = prodSales.get(matchedProd.id);
-                s.total_sold += qty;
-                s.sold_today += todayQty;
-              }
+  asyncLocalStorage.run(schema, () => {
+    const isForceRefresh = req.query.force_refresh === "true" || !!req.query._t;
+    if (!isForceRefresh) {
+      const cached = getCache(schema, "products");
+      if (cached) return res.json(cached);
+    }
+    // Exclude photo_base64 from list for performance — use /api/products/:id/photo for individual photos
+    db.all("SELECT id, name, category, price, stock, barcode, barcode_end, buying_price, track_stock, low_stock_threshold, CASE WHEN photo_base64 IS NOT NULL AND LENGTH(photo_base64) > 50 THEN 1 ELSE 0 END AS has_photo FROM products", [], (err, products) => {
+      if (err) return res.status(500).json({ error: err.message });
+      db.all(
+        "SELECT product_id, barcode FROM product_barcodes",
+        [],
+        (err, barcodes) => {
+          const barcodeMap = {};
+          if (!err && barcodes) {
+            barcodes.forEach((b) => {
+              if (!barcodeMap[b.product_id]) barcodeMap[b.product_id] = [];
+              barcodeMap[b.product_id].push(b.barcode);
             });
           }
 
-          const productsWithDetails = products.map((p) => {
-            const s = prodSales.get(p.id) || { total_sold: 0, sold_today: 0 };
-            return {
-              ...p,
-              additional_barcodes: barcodeMap[p.id] || [],
-              total_sold: s.total_sold,
-              sold_today: s.sold_today,
-            };
-          });
+          const todayDateStr = getUgandaTodayDateString();
+          const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
+          const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
 
-          const result = { products: productsWithDetails };
-          setCache(schema, "products", result, 15); // 15s TTL
-          res.json(result);
-        });
-      },
-    );
+          const salesSql = `
+            SELECT 
+              oi.product_id, 
+              oi.product_name, 
+              COALESCE(SUM(oi.qty), 0) AS total_sold,
+              COALESCE(SUM(CASE WHEN po.order_date >= ? THEN oi.qty ELSE 0 END), 0) AS sold_today
+            FROM order_items oi
+            JOIN pos_orders po ON oi.pos_order_id = po.id
+            LEFT JOIN transactions t ON po.transaction_id = t.id
+            WHERE (t.payment_status IS NULL OR t.payment_status != 'PENDING')
+            GROUP BY oi.product_id, oi.product_name
+          `;
+
+          db.all(salesSql, [todayStartSql], (salesErr, salesRows) => {
+            const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+            const prodById = new Map();
+            const prodByName = new Map();
+            const prodSales = new Map();
+
+            products.forEach((p) => {
+              prodById.set(Number(p.id), p);
+              const n = norm(p.name);
+              if (n && !prodByName.has(n)) prodByName.set(n, p);
+              prodSales.set(p.id, { total_sold: 0, sold_today: 0 });
+            });
+
+            if (!salesErr && salesRows) {
+              salesRows.forEach((r) => {
+                const qty = Number(r.total_sold) || 0;
+                const todayQty = Number(r.sold_today) || 0;
+                const pid = Number(r.product_id);
+                const pNameNorm = norm(r.product_name);
+                const matchedProd = (pid && prodById.get(pid)) || (pNameNorm && prodByName.get(pNameNorm));
+                if (matchedProd) {
+                  const s = prodSales.get(matchedProd.id);
+                  s.total_sold += qty;
+                  s.sold_today += todayQty;
+                }
+              });
+            }
+
+            const productsWithDetails = products.map((p) => {
+              const s = prodSales.get(p.id) || { total_sold: 0, sold_today: 0 };
+              return {
+                ...p,
+                additional_barcodes: barcodeMap[p.id] || [],
+                total_sold: s.total_sold,
+                sold_today: s.sold_today,
+              };
+            });
+
+            const result = { products: productsWithDetails };
+            setCache(schema, "products", result, 15); // 15s TTL
+            res.json(result);
+          });
+        },
+      );
+    });
   });
 });
 
 // Dedicated product sales analytics / counter report for CEO and Management
 app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
-  const { start_date, end_date, shift_start, shift_end } = req.query;
-  const todayDateStr = getUgandaTodayDateString();
+  let userPrefix = (req.user && req.user.prefix) ? String(req.user.prefix).toLowerCase().trim() : "";
+  if (!userPrefix && req.user && req.user.username) {
+    const uMatch = String(req.user.username).trim().match(/^([A-Za-z]{2,8})\d+$/);
+    if (uMatch) userPrefix = uMatch[1].toLowerCase();
+  }
+  let schema = getSchema();
+  if (req.user && req.user.role !== "TECH" && userPrefix && userPrefix !== "public") {
+    schema = userPrefix === "demo" ? "demo" : "t_" + userPrefix;
+  }
+
+  asyncLocalStorage.run(schema, () => {
+    const { start_date, end_date, shift_start, shift_end } = req.query;
+    const todayDateStr = getUgandaTodayDateString();
   const todayStartIso = new Date(todayDateStr + "T00:00:00+03:00").toISOString();
   const todayStartSql = todayStartIso.replace("T", " ").replace(/\.\d+Z$/, "");
 
@@ -2860,6 +2890,7 @@ app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
       });
     }
   );
+  });
 });
 
 

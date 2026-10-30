@@ -45,7 +45,7 @@ function getDB() {
 
 // ─── API CACHE METHODS ──────────────────────────────────────────
 
-// Endpoints that MUST NEVER be cached locally because they are real-time transactional queues
+// Endpoints that MUST NEVER be cached locally because they are real-time transactional queues or live catalogs
 const NO_CACHE_PATTERNS = [
     'pending-cod',
     'customer-invoices',
@@ -53,7 +53,10 @@ const NO_CACHE_PATTERNS = [
     '/transactions',
     '/pos_orders',
     'current-shift',
-    'cashier_shifts'
+    'cashier_shifts',
+    '/products',
+    '/reports/products-sold',
+    '/categories'
 ];
 
 function shouldNeverCache(url) {
