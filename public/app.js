@@ -767,8 +767,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }, { passive: true });
 
-  // Offline mode support
-  function updateAppOnlineStatus() {
+  // Offline mode support & active connectivity health checker
+  function updateAppOnlineStatus(forceOffline) {
     let banner = document.getElementById("app-offline-banner");
     if (!banner) {
       banner = document.createElement("div");
@@ -777,14 +777,23 @@ document.addEventListener("DOMContentLoaded", () => {
         "display:none; background:#f59e0b; color:#fff; text-align:center; padding:8px; font-size:0.85rem; font-weight:bold; position:fixed; top:0; left:0; width:100%; z-index:99999;";
       document.body.prepend(banner);
     }
-    if (!navigator.onLine) {
-      banner.style.display = "block";
+    const isOffline = forceOffline === true || !navigator.onLine;
+    if (isOffline) {
       if (window.OfflineDB) {
         window.OfflineDB.getPendingSyncCount().then((count) => {
-          banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode — ${count} actions pending sync`;
+          if (count > 0) {
+            banner.style.display = "block";
+            banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode — ${count} actions pending sync`;
+          } else if (forceOffline === true) {
+            banner.style.display = "block";
+            banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode — Server unreachable`;
+          } else {
+            banner.style.display = "none";
+          }
         });
-      } else {
-        banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode`;
+      } else if (forceOffline === true) {
+        banner.style.display = "block";
+        banner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Offline Mode — Server unreachable`;
       }
     } else {
       banner.style.display = "none";
@@ -792,12 +801,33 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   window.updateAppOnlineStatus = updateAppOnlineStatus;
 
+  // Active server verification — checks real server reachability rather than trusting OS navigator.onLine
+  async function verifyServerConnectivity() {
+    try {
+      const res = await fetch(`${API_URL}/system/status`, { cache: "no-store" });
+      if (res.ok) {
+        const banner = document.getElementById("app-offline-banner");
+        if (banner) banner.style.display = "none";
+        if (typeof syncQueuedMutations === "function") syncQueuedMutations();
+        if (typeof syncOfflineSales === "function") syncOfflineSales();
+      }
+    } catch (_) {
+      // Server truly unreachable
+    }
+  }
+  window.verifyServerConnectivity = verifyServerConnectivity;
+
   window.addEventListener("online", () => {
-    updateAppOnlineStatus();
-    if (typeof syncQueuedMutations === "function") syncQueuedMutations();
+    verifyServerConnectivity();
   });
-  window.addEventListener("offline", updateAppOnlineStatus);
+  window.addEventListener("offline", () => {
+    // Double check with real HTTP ping before marking offline to avoid OS false alarms
+    fetch(`${API_URL}/system/status`, { cache: "no-store" })
+      .then(r => { if (!r.ok) updateAppOnlineStatus(true); else updateAppOnlineStatus(false); })
+      .catch(() => updateAppOnlineStatus(true));
+  });
   updateAppOnlineStatus();
+  setInterval(verifyServerConnectivity, 45000);
 });
 
 function initNavigation() {
@@ -2783,59 +2813,32 @@ async function fetchAuth(url, options = {}) {
 
   const method = (options.method || "GET").toUpperCase();
 
-  // --- OFFLINE & CACHE LOGIC ---
+  // --- CACHE-FIRST FOR READ-ONLY (if fresh) ---
   if (method === "GET" && window.OfflineDB) {
     const cachedObj = await window.OfflineDB.getCachedApiResponse(url);
-    const CACHE_TTL = 5 * 60 * 1000; // 5 minutes TTL for online caching
-
-    // If offline, return cache if available
-    if (!navigator.onLine) {
-      if (cachedObj && cachedObj.data) {
-        return new Response(JSON.stringify(cachedObj.data), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      throw new Error("Offline and no cached data available for " + url);
-    }
-
-    // If online, use cache if it's fresh (less than 5 mins old) to save DB hits
-    // (Bypass cache if url contains ?force=true or similar if needed in future)
+    const CACHE_TTL = 3 * 60 * 1000; // 3 minutes TTL for online caching
     if (cachedObj && cachedObj.data && cachedObj.timestamp) {
       const age = Date.now() - cachedObj.timestamp;
       if (age < CACHE_TTL && !url.includes("force_refresh")) {
-        console.log("[Cache Hit] Skipping network request for:", url);
         return new Response(JSON.stringify(cachedObj.data), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
     }
-  } else if (!navigator.onLine && window.OfflineDB && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-    // Queue offline mutations
-    await window.OfflineDB.queueMutation(url, method, options);
-    showToast(
-      "Offline Mode: Action queued and will sync when online.",
-      "info",
-    );
-    if (typeof window.updateAppOnlineStatus === "function") window.updateAppOnlineStatus();
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: "Offline queued action",
-        offlineQueued: true,
-        id: Date.now(),
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
   }
 
+  // ALWAYS ATTEMPT NETWORK FETCH FIRST (Never block based on unreliable OS navigator.onLine)
   try {
     const res = await fetch(url, options);
-    if (res.status === 401) {
+
+    // If server responded, we are online: auto-heal offline banner
+    const banner = document.getElementById("app-offline-banner");
+    if (banner && banner.style.display !== "none") {
+      banner.style.display = "none";
+    }
+
+    if (res.status === 401 || (res.status === 403 && (res.statusText || "").toLowerCase().includes("token"))) {
       try {
         await fetch(`${API_URL}/logout`, { method: "POST" });
       } catch (e) {}
@@ -2846,6 +2849,7 @@ async function fetchAuth(url, options = {}) {
       } catch (e) {}
       localStorage.clear();
       window.location.href = "login.html";
+      return res;
     }
 
     // If GET request is successful, clone and cache it
@@ -2903,7 +2907,13 @@ async function fetchAuth(url, options = {}) {
     return res;
   } catch (e) {
     console.error("[Offline/Network Error]", e.message, url);
-    // Fallback for fetch failure even if navigator.onLine was technically true
+
+    // Update banner to reflect actual offline state
+    if (typeof window.updateAppOnlineStatus === "function") {
+      window.updateAppOnlineStatus(true);
+    }
+
+    // Fallback for fetch failure: serve from cache if GET
     if (method === "GET" && window.OfflineDB) {
       const cachedObj = await window.OfflineDB.getCachedApiResponse(url);
       if (cachedObj && cachedObj.data) {
@@ -2913,7 +2923,26 @@ async function fetchAuth(url, options = {}) {
         });
       }
     }
-    throw e; // Re-throw so callers can handle with their own try/catch
+
+    // Queue mutation if offline on POST/PUT/PATCH/DELETE
+    if (window.OfflineDB && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+      await window.OfflineDB.queueMutation(url, method, options);
+      showToast("Offline: Action queued locally. Will sync automatically once connection restores.", "info");
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: "Offline queued action",
+          offlineQueued: true,
+          id: Date.now(),
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    throw e;
   }
 }
 window.fetchAuth = fetchAuth;

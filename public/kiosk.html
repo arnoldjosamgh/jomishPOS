@@ -296,9 +296,19 @@
 
     async function pingServer() {
         try {
-            await fetch(`${API}/devices/ping`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device_id:DEVICE_ID,device_name:DEVICE_NAME,device_type:DEVICE_TYPE}) });
-            setConn(true);
-        } catch(e) { setConn(false); }
+            const res = await fetch(`${API}/devices/ping`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device_id:DEVICE_ID,device_name:DEVICE_NAME,device_type:DEVICE_TYPE}) });
+            if (res.ok) {
+                setConn(true);
+                return;
+            }
+        } catch(e) {}
+        // Fallback test before claiming offline
+        try {
+            const chk = await fetch(`${API}/system/status`, { cache: 'no-store' });
+            setConn(chk.ok);
+        } catch(_) {
+            setConn(false);
+        }
     }
     function setConn(on) {
         document.getElementById('status-dot').className = `conn-dot ${on?'on':'off'}`;

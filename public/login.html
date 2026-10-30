@@ -713,13 +713,25 @@ window.onunhandledrejection = function(e) {
         }
     }
 
-    // ───── Online/Offline banner ─────
-    function updateOnlineStatus() {
-        document.getElementById('offline-banner').style.display = navigator.onLine ? 'none' : 'block';
+    // ───── Online/Offline banner with active server validation ─────
+    async function updateOnlineStatus() {
+        const banner = document.getElementById('offline-banner');
+        if (navigator.onLine) {
+            banner.style.display = 'none';
+            return;
+        }
+        // Verify with real server ping before claiming offline to prevent false alarms
+        try {
+            const res = await fetch('/api/system/status', { cache: 'no-store' });
+            banner.style.display = res.ok ? 'none' : 'block';
+        } catch (_) {
+            banner.style.display = 'block';
+        }
     }
     window.addEventListener('online', updateOnlineStatus);
     window.addEventListener('offline', updateOnlineStatus);
     updateOnlineStatus();
+    setInterval(updateOnlineStatus, 45000);
 
     // ───── Reset URL params ─────
     const params = new URLSearchParams(window.location.search);

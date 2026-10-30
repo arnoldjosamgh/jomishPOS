@@ -52,6 +52,7 @@ function getUgandaDateRangeIso(startDate, endDate) {
 }
 
 const app = express();
+app.set("trust proxy", 1);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" },
@@ -254,9 +255,8 @@ if (process.env.DATABASE_URL || process.env.NODE_ENV === "production") {
   console.log("[KEEPALIVE] Background 4-minute keep-alive ping initialized (Neon + Render).");
 }
 
-// Global API rate limit — 600 req/min per IP.
-// Read-only POS endpoints (products, orders listing, finance summary, current-shift)
-// are excluded entirely so a busy cashier can never be rate-limited during normal work.
+// Global API rate limit — 1200 req/min per IP.
+// Exclude read-only POS endpoints, heartbeats, and pings so multiple cashiers on the same shop network are never throttled
 const RATE_LIMIT_EXCLUDED = [
   "/api/products",
   "/api/pos_orders",
@@ -265,14 +265,16 @@ const RATE_LIMIT_EXCLUDED = [
   "/api/alerts/low-stock",
   "/api/deliveries",
   "/api/customer-invoices",
+  "/api/devices/ping",
+  "/api/system/status",
 ];
 app.use("/api/", (req, res, next) => {
-  // Skip read-only endpoints that fire on every POS page refresh
-  if (req.method === "GET" && RATE_LIMIT_EXCLUDED.some(p => req.path.startsWith(p.replace("/api", "")))) {
+  // Skip read-only and heartbeat endpoints
+  if (RATE_LIMIT_EXCLUDED.some(p => req.path.startsWith(p.replace("/api", "")))) {
     return next();
   }
-  const ip = req.ip || req.socket?.remoteAddress || "unknown";
-  if (rateLimit("api_" + ip, 600, 60 * 1000)) {
+  const ip = req.ip || req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket?.remoteAddress || "unknown";
+  if (rateLimit("api_" + ip, 1200, 60 * 1000)) {
     return res
       .status(429)
       .json({ error: "Too many requests. Please wait a moment." });
@@ -563,9 +565,9 @@ app.post("/api/login", async (req, res) => {
       const token = jwt.sign(
         { id: 9999, role: "TECH", name: techName, permissions: {}, prefix },
         JWT_SECRET,
-        { expiresIn: "8h" }
+        { expiresIn: "30d" }
       );
-      res.cookie("jomish_auth", token, { httpOnly: true, secure: false, sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 });
+      res.cookie("jomish_auth", token, { httpOnly: true, secure: false, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
       return res.json({ token, role: "TECH", name: techName, permissions: {}, user_id: 9999, prefix });
     }
     return res.status(401).json({ error: "Invalid credentials" });
@@ -680,9 +682,9 @@ app.post("/api/login", async (req, res) => {
   const token = jwt.sign(
     { id: foundUser.id, role: foundUser.role, name: `${foundUser.first_name} ${foundUser.last_name}`, permissions, prefix: foundPrefix },
     JWT_SECRET,
-    { expiresIn: "8h" }
+    { expiresIn: "30d" }
   );
-  res.cookie("jomish_auth", token, { httpOnly: true, secure: false, sameSite: "lax", maxAge: 8 * 60 * 60 * 1000 });
+  res.cookie("jomish_auth", token, { httpOnly: true, secure: false, sameSite: "lax", maxAge: 30 * 24 * 60 * 60 * 1000 });
   return res.json({
     token,
     role: foundUser.role,
@@ -5305,21 +5307,23 @@ app.get("/api/alerts/low-stock", authenticateToken, (req, res) => {
 
 // 15. Hardware Radar (Device Tracking)
 setInterval(() => {
-  // Mark devices as OFFLINE if they haven't been seen in 90 seconds
-  db.run(
-    `UPDATE devices SET status = 'OFFLINE' 
-            WHERE status = 'ONLINE' AND last_seen < datetime('now', '-90 seconds')`,
-    function (err) {
-      // NOTE: must use regular function (not arrow) so 'this' refers to sqlite stmt context
-      if (err) {
-        console.error("[RADAR] Device timeout error:", err.message);
-        return;
-      }
-      if (this.changes > 0) {
-        io.emit("db_updated", { module: "devices" });
-      }
-    },
-  );
+  // Mark devices as OFFLINE if they haven't been seen in 120 seconds
+  asyncLocalStorage.run("public", () => {
+    db.run(
+      `UPDATE devices SET status = 'OFFLINE' 
+              WHERE status = 'ONLINE' AND last_seen < datetime('now', '-120 seconds')`,
+      function (err) {
+        // NOTE: must use regular function (not arrow) so 'this' refers to sqlite stmt context
+        if (err) {
+          console.error("[RADAR] Device timeout error:", err.message);
+          return;
+        }
+        if (this.changes > 0) {
+          io.emit("db_updated", { module: "devices" });
+        }
+      },
+    );
+  });
 }, 30000);
 
 app.post("/api/devices/ping", (req, res) => {
@@ -5327,7 +5331,7 @@ app.post("/api/devices/ping", (req, res) => {
     req.body;
   // Determine the best IP: X-Forwarded-For > X-Real-IP > req.ip > socket remoteAddress
   let ip =
-    req.headers["x-forwarded-for"] ||
+    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     req.headers["x-real-ip"] ||
     req.ip ||
     req.socket?.remoteAddress ||
@@ -5338,20 +5342,22 @@ app.post("/api/devices/ping", (req, res) => {
     .split(",")[0]
     .trim();
   // If still local loopback, use the client-reported IP if available
-  if ((ip === "127.0.0.1" || ip === "::1") && client_ip) ip = client_ip;
-  const schema = company_schema || "public";
-  db.run(
-    `INSERT INTO devices (device_id, device_name, device_type, ip_address, status, last_seen, company_schema) 
-            VALUES (?, ?, ?, ?, 'ONLINE', datetime('now'), ?)
-            ON CONFLICT(device_id) DO UPDATE SET 
-            last_seen=datetime('now'), status='ONLINE', ip_address=?, company_schema=?`,
-    [device_id, device_name, device_type, ip, schema, ip, schema],
-    (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      io.emit("db_updated", { module: "devices" });
-      res.json({ message: "Ping recorded" });
-    },
-  );
+  if ((ip === "127.0.0.1" || ip === "::1" || ip === "0.0.0.0") && client_ip) ip = client_ip;
+  const schema = (company_schema || "public").toLowerCase();
+  asyncLocalStorage.run("public", () => {
+    db.run(
+      `INSERT INTO devices (device_id, device_name, device_type, ip_address, status, last_seen, company_schema) 
+              VALUES (?, ?, ?, ?, 'ONLINE', datetime('now'), ?)
+              ON CONFLICT(device_id) DO UPDATE SET 
+              last_seen=datetime('now'), status='ONLINE', ip_address=?, company_schema=?`,
+      [device_id, device_name, device_type, ip, schema, ip, schema],
+      (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        io.emit("db_updated", { module: "devices" });
+        res.json({ message: "Ping recorded" });
+      },
+    );
+  });
 });
 
 app.get("/api/devices", authenticateToken, (req, res) => {
@@ -5362,14 +5368,16 @@ app.get("/api/devices", authenticateToken, (req, res) => {
   const userPrefix = req.user.prefix;
   const safeP = (userPrefix || "").toLowerCase();
   const companySchema = (!safeP || safeP === "public" || safeP === "demo") ? safeP || "public" : "t_" + safeP;
-  db.all(
-    "SELECT * FROM devices WHERE company_schema = ? ORDER BY last_seen DESC",
-    [companySchema],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ devices: rows });
-    },
-  );
+  asyncLocalStorage.run("public", () => {
+    db.all(
+      "SELECT * FROM devices WHERE company_schema = ? OR company_schema = ? ORDER BY last_seen DESC",
+      [companySchema, safeP],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ devices: rows });
+      },
+    );
+  });
 });
 
 app.post("/api/devices/logout", authenticateToken, (req, res) => {
@@ -5381,19 +5389,21 @@ app.post("/api/devices/logout", authenticateToken, (req, res) => {
   const safeP2 = (userPrefix || "").toLowerCase();
   const companySchema = (!safeP2 || safeP2 === "public" || safeP2 === "demo") ? safeP2 || "public" : "t_" + safeP2;
   // Ensure device belongs to the same company before deleting
-  db.run(
-    `DELETE FROM devices WHERE device_id = ? AND company_schema = ?`,
-    [device_id, companySchema],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      if (this.changes === 0)
-        return res
-          .status(404)
-          .json({ error: "Device not found in your company." });
-      io.emit("force_logout", { device_id });
-      res.json({ message: "Device logged out successfully." });
-    },
-  );
+  asyncLocalStorage.run("public", () => {
+    db.run(
+      `DELETE FROM devices WHERE device_id = ? AND (company_schema = ? OR company_schema = ?)`,
+      [device_id, companySchema, safeP2],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        if (this.changes === 0)
+          return res
+            .status(404)
+            .json({ error: "Device not found in your company." });
+        io.emit("force_logout", { device_id });
+        res.json({ message: "Device logged out successfully." });
+      },
+    );
+  });
 });
 
 // 15b. Kiosk Terminal APIs (no user login required â€” device-based auth)
