@@ -41,7 +41,7 @@ function formatDocNo(prefix, num) {
   if (!num && num !== 0) return "";
   const raw = String(num).replace(/^(INV|RCPT)[-#\s]*/i, "");
   const n = parseInt(raw, 10);
-  const padded = isNaN(n) ? raw : String(n).padStart(3, "0");
+  const padded = isNaN(n) ? raw : String(n).padStart(4, "0");
   return `${prefix}${padded}`;
 }
 window.formatDocNo = formatDocNo;

@@ -3349,6 +3349,127 @@ setInterval(() => {
   }
 }, 60000);
 
+// ── RECEIPT NUMBER RECYCLING AT RCPT 4000 ────────────────────────────────────
+// When receipt_no hits 4000, preserves all orders/transactions from the current/latest shift
+// (and any pending/unpaid invoices/COD or active credit debts), purges older closed orders,
+// and recycles receipt_no_seq to start back at 1 (0001).
+const RCPT_RECYCLE_THRESHOLD = 4000;
+// Per-schema flag so one tenant's recycle doesn't block others
+const _recyclingInProgress = {};
+
+async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
+  const schema = targetSchema || getSchema();
+  if (!schema || _recyclingInProgress[schema]) return;
+
+  _recyclingInProgress[schema] = true;
+  try {
+    await db.withTransaction(async (q) => {
+      // 1. Check max receipt_no in this tenant schema
+      const maxRes = await q("SELECT COALESCE(MAX(receipt_no), 0) AS max_rcpt FROM transactions");
+      const maxReceiptNo = (maxRes.rows && maxRes.rows[0]) ? parseInt(maxRes.rows[0].max_rcpt, 10) : 0;
+
+      if (!force && maxReceiptNo < RCPT_RECYCLE_THRESHOLD) {
+        return; // Threshold not reached
+      }
+
+      console.log(`[RECYCLE] Schema "${schema}": receipt_no (${maxReceiptNo}) reached threshold (${RCPT_RECYCLE_THRESHOLD}). Starting order cleanup & recycling...`);
+
+      // 2. Identify the latest shift in cashier_shifts
+      const shiftRes = await q("SELECT id, start_time, end_time, status FROM cashier_shifts ORDER BY id DESC LIMIT 1");
+      const latestShift = (shiftRes.rows && shiftRes.rows[0]) ? shiftRes.rows[0] : null;
+
+      let cutoffIso;
+      if (latestShift && latestShift.start_time) {
+        const sTime = latestShift.start_time;
+        cutoffIso = sTime instanceof Date ? sTime.toISOString() : new Date(sTime).toISOString();
+      } else {
+        const todayStr = getUgandaTodayDateString();
+        cutoffIso = new Date(todayStr + "T00:00:00+03:00").toISOString();
+      }
+
+      console.log(`[RECYCLE] Schema "${schema}": Keeping all orders from latest shift starting at: ${cutoffIso}`);
+
+      // 3. Find transaction IDs to KEEP:
+      // - Belongs to current/latest shift (transaction_date >= cutoffIso)
+      // - Has pending payment (payment_status = 'PENDING')
+      // - Linked to an active credit record with an unpaid balance (cr.balance > 0)
+      const keptTxRes = await q(`
+        SELECT id FROM transactions 
+        WHERE transaction_date >= ? 
+           OR payment_status = 'PENDING'
+           OR id IN (
+             SELECT po.transaction_id FROM pos_orders po 
+             JOIN credit_records cr ON cr.pos_order_id = po.id 
+             WHERE cr.balance > 0
+           )
+      `, [cutoffIso]);
+      const keptTxIds = (keptTxRes.rows || []).map(r => r.id);
+
+      // Find pos_order IDs to KEEP:
+      // - Belongs to current/latest shift (order_date >= cutoffIso)
+      // - Linked to a kept transaction
+      // - Pending COD or INVOICE
+      // - Linked to credit record with balance > 0
+      const keptOrdersRes = await q(`
+        SELECT id FROM pos_orders 
+        WHERE order_date >= ? 
+           OR (transaction_id IS NOT NULL AND transaction_id IN (
+             SELECT id FROM transactions WHERE transaction_date >= ? OR payment_status = 'PENDING'
+           ))
+           OR payment_method IN ('COD', 'INVOICE')
+           OR id IN (SELECT pos_order_id FROM credit_records WHERE balance > 0)
+      `, [cutoffIso, cutoffIso]);
+      const keptOrderIds = (keptOrdersRes.rows || []).map(r => r.id);
+
+      console.log(`[RECYCLE] Schema "${schema}": Preserving ${keptTxIds.length} transaction(s) and ${keptOrderIds.length} order(s) from current shift.`);
+
+      // 4. Delete old records from prior closed shifts
+      if (keptOrderIds.length > 0) {
+        const orderPlaceholders = keptOrderIds.map(() => "?").join(",");
+        await q(`DELETE FROM order_items WHERE pos_order_id NOT IN (${orderPlaceholders})`, keptOrderIds);
+        // NOTE: orderPlaceholders appears twice in query (order_id AND pos_order_id checks),
+        // so keptOrderIds must be spread twice to match the total placeholder count.
+        await q(`DELETE FROM deliveries WHERE (order_id NOT IN (${orderPlaceholders}) AND (pos_order_id IS NULL OR pos_order_id NOT IN (${orderPlaceholders}))) AND status IN ('Delivered', 'Cancelled')`, [...keptOrderIds, ...keptOrderIds]);
+        await q(`DELETE FROM pos_orders WHERE id NOT IN (${orderPlaceholders})`, keptOrderIds);
+      } else {
+        await q("DELETE FROM order_items WHERE pos_order_id IN (SELECT id FROM pos_orders WHERE order_date < ?)", [cutoffIso]);
+        await q("DELETE FROM deliveries WHERE created_at < ? AND status IN ('Delivered', 'Cancelled')", [cutoffIso]);
+        await q("DELETE FROM pos_orders WHERE order_date < ?", [cutoffIso]);
+      }
+
+      if (keptTxIds.length > 0) {
+        const txPlaceholders = keptTxIds.map(() => "?").join(",");
+        await q(`DELETE FROM sold_barcodes WHERE transaction_id NOT IN (${txPlaceholders})`, keptTxIds);
+        await q(`DELETE FROM transactions WHERE id NOT IN (${txPlaceholders})`, keptTxIds);
+      } else {
+        await q("DELETE FROM sold_barcodes WHERE transaction_id IN (SELECT id FROM transactions WHERE transaction_date < ?)", [cutoffIso]);
+        await q("DELETE FROM transactions WHERE transaction_date < ?", [cutoffIso]);
+      }
+
+      // Clear old recycled IDs
+      await q("DELETE FROM recycled_transaction_ids").catch(() => {});
+
+      // 5. Reset receipt_no_seq to start back at 1 (0001)
+      if (db.pool) {
+        await q("SELECT setval('receipt_no_seq', 1, false)");
+      }
+
+      console.log(`[RECYCLE] Schema "${schema}": Successfully recycled receipt numbers to start at 0001!`);
+    });
+
+    // 6. Bust cache & notify clients
+    bustCache(schema, "transactions", "finance_summary", "products");
+    emitToTenant(schema, "db_updated", { module: "transactions" });
+    emitToTenant(schema, "db_updated", { module: "pos" });
+    emitToTenant(schema, "db_updated", { module: "deliveries" });
+
+  } catch (err) {
+    console.error(`[RECYCLE ERROR] Failed for schema "${schema}":`, err.message);
+  } finally {
+    _recyclingInProgress[schema] = false;
+  }
+}
+
 app.post("/api/checkout", authenticateToken, async (req, res) => {
   const {
     total_amount,
@@ -3674,6 +3795,13 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     const receipt_no = txReceiptNo || transaction_id;
     const successRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
     if (trimmedUuid) rememberCheckout(trimmedUuid, successRes);
+
+    if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
+      setTimeout(() => {
+        checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
+      }, 500);
+    }
+
     res.json(successRes);
 
   } catch (err) {
@@ -7060,6 +7188,12 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       receipt_no = rnRow?.receipt_no || transactionData.transaction_id;
     } catch (_) {}
 
+    if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
+      setTimeout(() => {
+        checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
+      }, 500);
+    }
+
     res.json({
       success: true,
       transaction_id: transactionData.transaction_id,
@@ -7401,6 +7535,18 @@ app.post("/api/archives/run", authenticateToken, async (req, res) => {
     console.error("[ARCHIVER API] Error:", err.message);
     res.status(500).json({ error: "Archive failed: " + err.message });
   }
+});
+
+// Manual / Tech trigger for receipt recycling
+app.post("/api/tech/recycle-receipts", authenticateToken, async (req, res) => {
+  const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+  if (role !== "TECH" && role !== "CEO" && role !== "ADMIN") {
+    return res.status(403).json({ error: "Access denied." });
+  }
+  const force = req.body && (req.body.force === true || req.body.force === "true");
+  const schema = getSchema();
+  await checkAndRecycleReceiptNumbers(schema, force);
+  res.json({ success: true, message: `Receipt recycling check finished for schema "${schema}".` });
 });
 
 // Start Server

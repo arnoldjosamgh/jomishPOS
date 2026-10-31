@@ -406,12 +406,9 @@ if (config.dbType === 'postgres') {
                         }
                     }
 
-                    // Guarantee receipt_no sequence, sync setval, and resilient trigger
+                    // Guarantee receipt_no sequence and resilient trigger (do NOT overwrite running/recycled sequence)
                     await c2.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_no INTEGER`).catch(() => {});
                     await c2.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
-                    await c2.query(`
-                        SELECT setval('receipt_no_seq', GREATEST(1, COALESCE((SELECT MAX(receipt_no) FROM transactions), 0) + 1), false)
-                    `).catch(() => {});
                     await c2.query(`
                         CREATE OR REPLACE FUNCTION assign_receipt_no()
                         RETURNS TRIGGER AS $$
@@ -2027,11 +2024,8 @@ if (config.dbType === 'postgres') {
                                 FROM numbered
                                 WHERE transactions.id = numbered.id AND transactions.receipt_no IS NULL
                             `).catch(() => {});
-                            // Create a per-schema sequence for receipt_no — atomic & concurrent-safe (NEVER drop!)
+                            // Create a per-schema sequence for receipt_no — atomic & concurrent-safe (do NOT overwrite running/recycled sequence)
                             await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
-                            await sc_client.query(`
-                                SELECT setval('receipt_no_seq', GREATEST(1, COALESCE((SELECT MAX(receipt_no) FROM transactions), 0) + 1), false)
-                            `).catch(() => {});
                             await sc_client.query(`
                                 CREATE OR REPLACE FUNCTION assign_receipt_no()
                                 RETURNS TRIGGER AS $$
