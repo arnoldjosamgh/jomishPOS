@@ -130,10 +130,22 @@ function bustCache(schema, ...keys) {
 function getSchema() {
   return asyncLocalStorage.getStore() || "public";
 }
-// Helper: emit + bust cache in one call
+// Helper: tenant-scoped socket emission to prevent cross-tenant UI desync
+function emitToTenant(schema, event, payload = {}) {
+  const target = schema || getSchema();
+  const data = { ...payload, schema: target };
+  if (target && target !== "public") {
+    io.to(target).emit(event, data);
+    io.to("public").emit(event, data); // Tech users / admins in public room see all
+  } else {
+    io.emit(event, data);
+  }
+}
+
+// Helper: emit + bust cache in one call (strictly tenant-isolated)
 function emitAndBust(module, ...cacheKeys) {
   const schema = getSchema();
-  io.emit("db_updated", { module });
+  emitToTenant(schema, "db_updated", { module });
   bustCache(schema, ...cacheKeys);
 }
 
@@ -1806,23 +1818,24 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [numericId]).catch(() => {});
     });
 
+    const currentSchema = getSchema();
     emitAndBust("transactions", "finance_summary");
-    io.emit("db_updated", { module: "products" }); // update stock on clients
-    io.emit("db_updated", {
+    emitToTenant(currentSchema, "db_updated", { module: "products" }); // update stock on clients
+    emitToTenant(currentSchema, "db_updated", {
       module: "deliveries",
       action: "delete",
       transaction_id: Number(id),
       pos_order_id: deletedPosOrderIds[0] || null,
       pos_order_ids: deletedPosOrderIds,
     });
-    io.emit("db_updated", {
+    emitToTenant(currentSchema, "db_updated", {
       module: "pos",
       action: "delete",
       transaction_id: Number(id),
       pos_order_id: deletedPosOrderIds[0] || null,
       pos_order_ids: deletedPosOrderIds,
     });
-    io.emit("order_deleted", {
+    emitToTenant(currentSchema, "order_deleted", {
       transaction_id: Number(id),
       pos_order_id: deletedPosOrderIds[0] || null,
       pos_order_ids: deletedPosOrderIds,
@@ -3645,16 +3658,17 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       return res.json(dupRes);
     }
 
-    // ── 4. Emit real-time updates ──────────────────────────────────────────
+    // ── 4. Emit real-time updates (tenant-isolated) ──────────────────────────
+    const currentSchema = getSchema();
     emitAndBust("transactions", "finance_summary");
     emitAndBust("products", "products");
-    io.emit("db_updated", { module: "pos" });
+    emitToTenant(currentSchema, "db_updated", { module: "pos" });
     if (isCredit) {
       emitAndBust("credits", "credits");
-      io.emit("db_updated", { module: "credits" });
+      emitToTenant(currentSchema, "db_updated", { module: "credits" });
     }
     if (effectiveIsDelivery || effectivePaymentMethod === "COD") {
-      io.emit("db_updated", { module: "deliveries" });
+      emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
     }
 
     const receipt_no = txReceiptNo || transaction_id;
@@ -3769,7 +3783,7 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
               );
             }
 
-            io.emit("db_updated", { module: "shifts" });
+            emitToTenant(getSchema(), "db_updated", { module: "shifts" });
             res.json({
               success: true,
               shift_id: shiftId,
@@ -4009,7 +4023,7 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
           // Close any lingering open shifts
           await new Promise((r) => db.run("UPDATE cashier_shifts SET status = 'CLOSED', end_time = COALESCE(end_time, ?) WHERE status = 'OPEN'", [endTimeNow], r));
 
-          io.emit("db_updated", { module: "shifts" });
+          emitToTenant(getSchema(), "db_updated", { module: "shifts" });
 
           res.json({
             start_time: startTime,
@@ -4221,8 +4235,9 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
 
     emitAndBust("products", "products");
     emitAndBust("transactions", "finance_summary");
-    io.emit("db_updated", { module: "deliveries" });
-    io.emit("db_updated", { module: "pos" });
+    const currentSchema = getSchema();
+    emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
+    emitToTenant(currentSchema, "db_updated", { module: "pos" });
 
     res.json({ success: true, message: "Order updated successfully", total_amount: newTotal });
   } catch (err) {
@@ -4511,7 +4526,7 @@ app.post("/api/credits/pay", authenticateToken, (req, res) => {
                   err2.message,
                 );
               emitAndBust("transactions", "finance_summary");
-              io.emit("db_updated", { module: "credits" });
+              emitAndBust("credits", "credits");
               res.json({
                 success: true,
                 message: `Payment of UGX ${paid.toLocaleString()} recorded for ${buyer_name}.`,
@@ -4534,7 +4549,6 @@ app.delete("/api/credits/account/:buyer_name", authenticateToken, (req, res) => 
   db.run("DELETE FROM credit_records WHERE buyer_name = ?", [buyer_name], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     emitAndBust("credits", "credits");
-    io.emit("db_updated", { module: "credits" });
     res.json({ success: true, message: `Credit account for "${buyer_name}" has been deleted.` });
   });
 });
@@ -4548,7 +4562,6 @@ app.delete("/api/credits/account", authenticateToken, (req, res) => {
   db.run("DELETE FROM credit_records WHERE buyer_name = ?", [buyer_name], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     emitAndBust("credits", "credits");
-    io.emit("db_updated", { module: "credits" });
     res.json({ success: true, message: `Credit account for "${buyer_name}" has been deleted.` });
   });
 });
@@ -4559,7 +4572,6 @@ app.delete("/api/credits/:id", authenticateToken, (req, res) => {
   db.run("DELETE FROM credit_records WHERE id = ?", [creditId], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     emitAndBust("credits", "credits");
-    io.emit("db_updated", { module: "credits" });
     res.json({ success: true, message: "Credit record deleted." });
   });
 });
@@ -7030,12 +7042,13 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       transactionData = row;
     });
 
+    const currentSchema = getSchema();
     emitAndBust("transactions", "finance_summary");
-    io.emit("db_updated", { module: "pos" });
-    io.emit("db_updated", { module: "deliveries" });
+    emitToTenant(currentSchema, "db_updated", { module: "pos" });
+    emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
     if (isCredit) {
       emitAndBust("credits", "credits");
-      io.emit("db_updated", { module: "credits" });
+      emitToTenant(currentSchema, "db_updated", { module: "credits" });
     }
 
     // Fetch unique sequential receipt_no
@@ -7297,7 +7310,7 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
         );
       }
 
-      try { io.emit("db_updated", { module: "pos" }); } catch (e) {}
+      try { emitToTenant(getSchema(), "db_updated", { module: "pos" }); } catch (e) {}
       success = true;
     } catch (syncErr) {
       console.error("[BATCH-SYNC] Failed to sync tx:", client_uuid, syncErr.message);
@@ -7392,6 +7405,34 @@ app.post("/api/archives/run", authenticateToken, async (req, res) => {
 
 // Start Server
 io.on("connection", (socket) => {
+  // Extract token or prefix from socket handshake (auth, query, or cookie)
+  let prefix = "";
+  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      if (decoded && decoded.prefix) prefix = decoded.prefix;
+      if (decoded && decoded.role === "TECH") prefix = "public";
+    } catch (_) {}
+  }
+  if (!prefix) {
+    prefix = socket.handshake.auth?.prefix || socket.handshake.query?.prefix || "public";
+  }
+  const cleanPrefix = String(prefix).toLowerCase().trim();
+  const schema = (cleanPrefix === "public" || cleanPrefix === "demo") ? cleanPrefix : "t_" + cleanPrefix;
+
+  socket.join(schema);
+  socket.tenantSchema = schema;
+
+  // Allow client to explicitly join/switch tenant room on login
+  socket.on("join_tenant", (p) => {
+    if (p) {
+      const clean = String(p).toLowerCase().trim();
+      const s = (clean === "public" || clean === "demo") ? clean : "t_" + clean;
+      socket.join(s);
+      socket.tenantSchema = s;
+    }
+  });
 });
 
 server

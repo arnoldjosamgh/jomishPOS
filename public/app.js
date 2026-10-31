@@ -2054,8 +2054,12 @@ function initSockets() {
     }
     return;
   }
-  // Dynamic connection: automatically use current host/port
+  // Dynamic connection: automatically use current host/port with tenant credentials
+  const currentToken = localStorage.getItem("jomish_token") || "";
+  const currentPrefix = (localStorage.getItem("jomish_prefix") || "public").toLowerCase().trim();
   const socket = io({
+    auth: { token: currentToken, prefix: currentPrefix },
+    query: { prefix: currentPrefix },
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
@@ -2064,7 +2068,18 @@ function initSockets() {
   });
   window._socket = socket; // Expose for sub-modules (Smart Timetable IIFE)
 
+  function isMyTenantEvent(data) {
+    if (!data || !data.schema) return true; // Legacy/global broadcast
+    const p = (localStorage.getItem("jomish_prefix") || "public").toLowerCase().trim();
+    const mySchema = (p === "public" || p === "demo") ? p : "t_" + p;
+    const myRole = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+    if (myRole === "TECH") return true; // Tech user sees all tenants
+    return data.schema === mySchema;
+  }
+
   socket.on("connect", () => {
+    const p = (localStorage.getItem("jomish_prefix") || "public").toLowerCase().trim();
+    socket.emit("join_tenant", p);
     const statusEl = document.getElementById("live-sync-indicator");
     if (statusEl) {
       statusEl.style.color = "var(--success)";
@@ -2083,6 +2098,7 @@ function initSockets() {
   });
 
   socket.on("db_updated", (data) => {
+    if (!isMyTenantEvent(data)) return; // Ignore events from other companies / tenant databases
     if (data.module === "employees") {
       if (USER_PERMISSIONS.can_see_hr) loadEmployees();
       if (typeof loadUserAccounts === "function") loadUserAccounts();
@@ -2202,9 +2218,10 @@ function initSockets() {
     }
   });
 
-  // Real-time order deleted notification
+  // Real-time order deleted notification (strictly tenant-isolated)
   socket.on("order_deleted", (data) => {
     if (!data) return;
+    if (!isMyTenantEvent(data)) return; // Ignore order deletions from other companies
     if (typeof removePendingOrderFromUI === "function") {
       const ids = data.pos_order_ids || (data.pos_order_id ? [data.pos_order_id] : []);
       ids.forEach(pId => removePendingOrderFromUI(pId, data.transaction_id));

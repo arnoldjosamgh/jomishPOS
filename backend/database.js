@@ -161,6 +161,7 @@ if (config.dbType === 'postgres') {
         pool: pool,
         acquireClientWithRetry: acquireClientWithRetry,
         executeWithRetry: executeWithRetry,
+        asyncLocalStorage: asyncLocalStorage,
         run: function(sql, params, callback) {
             if (typeof params === 'function') { callback = params; params = []; }
             const pgSql = translateSql(sql);
