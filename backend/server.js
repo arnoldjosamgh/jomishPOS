@@ -162,10 +162,26 @@ function emitToTenant(schema, event, payload = {}) {
 }
 
 // Helper: emit + bust cache in one call (strictly tenant-isolated)
-function emitAndBust(module, ...cacheKeys) {
-  const schema = getSchema();
-  emitToTenant(schema, "db_updated", { module });
-  bustCache(schema, ...cacheKeys);
+function emitAndBust(targetSchemaOrModule, ...args) {
+  let targetSchema = null;
+  let module = null;
+  let cacheKeys = [];
+
+  if (
+    typeof targetSchemaOrModule === "string" &&
+    (targetSchemaOrModule.startsWith("t_") || targetSchemaOrModule === "demo" || targetSchemaOrModule === "public")
+  ) {
+    targetSchema = targetSchemaOrModule;
+    module = args[0];
+    cacheKeys = args.slice(1);
+  } else {
+    targetSchema = getSchema();
+    module = targetSchemaOrModule;
+    cacheKeys = args;
+  }
+
+  emitToTenant(targetSchema, "db_updated", { module });
+  bustCache(targetSchema, ...cacheKeys);
 }
 
 // ---- Rate Limiting (no external deps) ----
@@ -349,13 +365,23 @@ app.use((req, res, next) => {
   if (token) {
     try {
       const user = jwt.verify(token, JWT_SECRET);
-      if (user.prefix) prefix = user.prefix;
+      if (user.prefix) {
+        prefix = user.prefix;
+      } else if (user.username) {
+        const uMatch = String(user.username).trim().match(/^([A-Za-z]{2,8})\d+$/);
+        if (uMatch) prefix = uMatch[1];
+      }
     } catch (e) {}
   }
 
   // 1b. Try from X-Tenant-Prefix header
   if ((!prefix || prefix === "public") && req.headers["x-tenant-prefix"]) {
     prefix = req.headers["x-tenant-prefix"].trim();
+  }
+
+  // 1c. Try from query param
+  if ((!prefix || prefix === "public") && req.query && req.query.prefix) {
+    prefix = String(req.query.prefix).trim();
   }
 
   // 2. Override for login endpoint parsing (e.g. ABC00001 -> prefix ABC)
@@ -467,6 +493,8 @@ const authenticateToken = (req, res, next) => {
     } catch (_) {
       targetSchema = "public";
     }
+
+    req.tenantSchema = targetSchema;
 
     return db.asyncLocalStorage.run(targetSchema, () => {
       next();
@@ -2735,15 +2763,7 @@ del "%~f0"
 
 // 5. POS (Point of Sale)
 app.get("/api/products", authenticateToken, (req, res) => {
-  let userPrefix = (req.user && req.user.prefix) ? String(req.user.prefix).toLowerCase().trim() : "";
-  if (!userPrefix && req.user && req.user.username) {
-    const uMatch = String(req.user.username).trim().match(/^([A-Za-z]{2,8})\d+$/);
-    if (uMatch) userPrefix = uMatch[1].toLowerCase();
-  }
-  let schema = getSchema();
-  if (req.user && req.user.role !== "TECH" && userPrefix && userPrefix !== "public") {
-    schema = userPrefix === "demo" ? "demo" : "t_" + userPrefix;
-  }
+  const schema = req.tenantSchema || getSchema();
 
   asyncLocalStorage.run(schema, () => {
     const isForceRefresh = req.query.force_refresh === "true" || !!req.query._t;
@@ -2833,15 +2853,7 @@ app.get("/api/products", authenticateToken, (req, res) => {
 
 // Dedicated product sales analytics / counter report for CEO and Management
 app.get("/api/reports/products-sold", authenticateToken, (req, res) => {
-  let userPrefix = (req.user && req.user.prefix) ? String(req.user.prefix).toLowerCase().trim() : "";
-  if (!userPrefix && req.user && req.user.username) {
-    const uMatch = String(req.user.username).trim().match(/^([A-Za-z]{2,8})\d+$/);
-    if (uMatch) userPrefix = uMatch[1].toLowerCase();
-  }
-  let schema = getSchema();
-  if (req.user && req.user.role !== "TECH" && userPrefix && userPrefix !== "public") {
-    schema = userPrefix === "demo" ? "demo" : "t_" + userPrefix;
-  }
+  const schema = req.tenantSchema || getSchema();
 
   asyncLocalStorage.run(schema, () => {
     const { start_date, end_date, shift_start, shift_end } = req.query;
@@ -3442,7 +3454,7 @@ const _recyclingInProgress = {};
 
 async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
   const schema = targetSchema || getSchema();
-  if (!schema || _recyclingInProgress[schema]) return;
+  if (!schema || schema === "public" || _recyclingInProgress[schema]) return;
 
   _recyclingInProgress[schema] = true;
   try {
@@ -3534,14 +3546,15 @@ async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
 
       // 5. Reset receipt_no_seq to start back at 1 (0001)
       if (db.pool) {
-        await q("SELECT setval('receipt_no_seq', 1, false)");
+        await q("SELECT setval('receipt_no_seq', 1, false)").catch(() => {});
       }
 
       console.log(`[RECYCLE] Schema "${schema}": Successfully recycled receipt numbers to start at 0001!`);
-    });
+    }, 3, schema);
 
     // 6. Bust cache & notify clients
-    bustCache(schema, "transactions", "finance_summary", "products");
+    emitAndBust(schema, "products", "products");
+    emitAndBust(schema, "transactions", "finance_summary");
     emitToTenant(schema, "db_updated", { module: "transactions" });
     emitToTenant(schema, "db_updated", { module: "pos" });
     emitToTenant(schema, "db_updated", { module: "deliveries" });
@@ -3553,350 +3566,489 @@ async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
   }
 }
 
+// ── INVOICE NUMBER RECYCLING AT INV 5500 ─────────────────────────────────────
+// When invoice_number reaches 5500, clears all past orders up to INV 5200 (preserving
+// pending COD/invoices and active credit debts), and starts afresh with INV 0001.
+const INV_RECYCLE_THRESHOLD = 5500;
+const INV_PURGE_CUTOFF = 5200;
+const _invRecyclingInProgress = {};
+
+async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
+  const schema = targetSchema || getSchema();
+  if (!schema || schema === "public" || _invRecyclingInProgress[schema]) return;
+
+  _invRecyclingInProgress[schema] = true;
+  try {
+    await db.withTransaction(async (q) => {
+      // 1. Check max invoice_number in this tenant schema
+      const maxRes = await q("SELECT COALESCE(MAX(invoice_number), 0) AS max_inv FROM pos_orders");
+      const maxInv = (maxRes.rows && maxRes.rows[0]) ? parseInt(maxRes.rows[0].max_inv, 10) : 0;
+
+      if (!force && maxInv < INV_RECYCLE_THRESHOLD) {
+        return; // Threshold not reached
+      }
+
+      console.log(`[INV RECYCLE] Schema "${schema}": invoice_number (${maxInv}) reached threshold (${INV_RECYCLE_THRESHOLD}). Clearing past orders up to INV ${INV_PURGE_CUTOFF} and restarting at INV 0001...`);
+
+      // 2. Find pos_order IDs to KEEP:
+      // - invoice_number > INV_PURGE_CUTOFF (the last ~300 orders)
+      // - Pending COD or INVOICE (payment_status = 'PENDING')
+      // - Linked to active credit record with an unpaid balance (balance > 0)
+      const keptOrdersRes = await q(`
+        SELECT po.id FROM pos_orders po
+        LEFT JOIN transactions t ON po.transaction_id = t.id
+        LEFT JOIN credit_records cr ON cr.pos_order_id = po.id
+        WHERE po.invoice_number > ?
+           OR po.payment_method IN ('COD', 'INVOICE')
+           OR (t.payment_status = 'PENDING')
+           OR (cr.balance IS NOT NULL AND cr.balance > 0)
+      `, [INV_PURGE_CUTOFF]);
+      const keptOrderIds = (keptOrdersRes.rows || []).map(r => r.id);
+
+      // Find transaction IDs to KEEP
+      let keptTxIds = [];
+      if (keptOrderIds.length > 0) {
+        const txHolders = keptOrderIds.map(() => "?").join(",");
+        const keptTxRes = await q(`
+          SELECT id FROM transactions
+          WHERE payment_status = 'PENDING'
+             OR id IN (
+               SELECT po.transaction_id FROM pos_orders po
+               JOIN credit_records cr ON cr.pos_order_id = po.id
+               WHERE cr.balance > 0
+             )
+             OR id IN (
+               SELECT transaction_id FROM pos_orders WHERE id IN (${txHolders})
+             )
+        `, keptOrderIds);
+        keptTxIds = (keptTxRes.rows || []).map(r => r.id);
+      } else {
+        const keptTxRes = await q(`
+          SELECT id FROM transactions
+          WHERE payment_status = 'PENDING'
+             OR id IN (
+               SELECT po.transaction_id FROM pos_orders po
+               JOIN credit_records cr ON cr.pos_order_id = po.id
+               WHERE cr.balance > 0
+             )
+        `);
+        keptTxIds = (keptTxRes.rows || []).map(r => r.id);
+      }
+
+      console.log(`[INV RECYCLE] Schema "${schema}": Preserving ${keptOrderIds.length} order(s) and ${keptTxIds.length} transaction(s).`);
+
+      // 3. Delete old records with invoice_number <= INV_PURGE_CUTOFF
+      if (keptOrderIds.length > 0) {
+        const orderPlaceholders = keptOrderIds.map(() => "?").join(",");
+        await q(`DELETE FROM order_items WHERE pos_order_id NOT IN (${orderPlaceholders})`, keptOrderIds);
+        await q(`DELETE FROM deliveries WHERE (order_id NOT IN (${orderPlaceholders}) AND (pos_order_id IS NULL OR pos_order_id NOT IN (${orderPlaceholders}))) AND status IN ('Delivered', 'Cancelled')`, [...keptOrderIds, ...keptOrderIds]);
+        await q(`DELETE FROM pos_orders WHERE id NOT IN (${orderPlaceholders})`, keptOrderIds);
+      } else {
+        await q("DELETE FROM order_items WHERE pos_order_id IN (SELECT id FROM pos_orders WHERE invoice_number <= ?)", [INV_PURGE_CUTOFF]);
+        await q("DELETE FROM deliveries WHERE order_id IN (SELECT id FROM pos_orders WHERE invoice_number <= ?) AND status IN ('Delivered', 'Cancelled')", [INV_PURGE_CUTOFF]);
+        await q("DELETE FROM pos_orders WHERE invoice_number <= ?", [INV_PURGE_CUTOFF]);
+      }
+
+      if (keptTxIds.length > 0) {
+        const txPlaceholders = keptTxIds.map(() => "?").join(",");
+        await q(`DELETE FROM sold_barcodes WHERE transaction_id NOT IN (${txPlaceholders})`, keptTxIds);
+        await q(`DELETE FROM transactions WHERE id NOT IN (${txPlaceholders})`, keptTxIds);
+      }
+
+      // 4. Clear invoice_number on completed/paid orders so MAX() query in SQLite/fallback also resets
+      await q(`
+        UPDATE pos_orders 
+        SET invoice_number = NULL 
+        WHERE id IN (
+          SELECT po.id FROM pos_orders po 
+          LEFT JOIN transactions t ON po.transaction_id = t.id 
+          WHERE (t.payment_status IS NULL OR t.payment_status != 'PENDING') AND po.invoice_number > ?
+        )
+      `, [INV_PURGE_CUTOFF]);
+
+      // 5. Reset invoice_no_seq to start afresh at 1 (INV 0001)
+      if (db.pool) {
+        await q("SELECT setval('invoice_no_seq', 1, false)").catch(() => {});
+      }
+
+      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset invoice numbering to INV 0001!`);
+    }, 3, schema);
+
+    // 6. Bust cache & notify clients
+    emitAndBust(schema, "products", "products");
+    emitAndBust(schema, "transactions", "finance_summary");
+    emitToTenant(schema, "db_updated", { module: "pos" });
+    emitToTenant(schema, "db_updated", { module: "deliveries" });
+
+  } catch (err) {
+    console.error(`[INV RECYCLE ERROR] Failed for schema "${schema}":`, err.message);
+  } finally {
+    _invRecyclingInProgress[schema] = false;
+  }
+}
+
 app.post("/api/checkout", authenticateToken, async (req, res) => {
-  const currentSchema = getSchema();
+  const currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
   if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
     console.error(`[CHECKOUT BLOCKED] Attempted write to public schema by non-TECH user ${req.user.id} (${req.user.name})`);
     return res.status(403).json({ error: "Invalid tenant schema context. Please refresh or re-login." });
   }
 
-  const {
-    total_amount,
-    items,
-    payment_method = "CASH",
-    amount_paid,
-    buyer_name,
-    buyer_phone,
-    promised_date,
-    is_delivery,
-    delivery_address,
-    driver_name,
-    served_by,
-    waiter_id,
-    client_uuid,
-  } = req.body;
-  // If the requesting user is a Waiter, attribute the order to the open shift cashier (if any).
-  // Waiters take orders but don't cash out — the cashier on shift is accountable for the drawer.
-  let cashier_id = req.user.id;
-  const isReqUserWaiterForCheckout = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
-  if (isReqUserWaiterForCheckout) {
-    const openShiftRow = await new Promise((resolve) => {
-      db.get(
-        "SELECT cashier_id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-        [],
-        (err, row) => resolve(row || null)
-      );
-    });
-    if (openShiftRow && openShiftRow.cashier_id) {
-      cashier_id = openShiftRow.cashier_id;
-    }
-  }
-
-  const trimmedUuid = client_uuid ? String(client_uuid).trim() : null;
-
-  // Fast-path in-memory idempotency check (stops rapid double-clicks / network retries)
-  if (trimmedUuid && recentCheckouts.has(trimmedUuid)) {
-    console.log(`[Checkout] Intercepted duplicate in-memory submit for client_uuid: ${trimmedUuid}`);
-    return res.json(recentCheckouts.get(trimmedUuid).result);
-  }
-
-  // Database check for duplicate client_uuid
-  if (trimmedUuid) {
-    const existing = await new Promise((resolve) => {
-      db.get(
-        "SELECT id AS pos_order_id, transaction_id, invoice_number, total_amount FROM pos_orders WHERE client_uuid = ?",
-        [trimmedUuid],
-        (err, row) => resolve(row)
-      );
-    });
-    if (existing) {
-      console.log(`[Checkout] Intercepted duplicate DB order for client_uuid: ${trimmedUuid}`);
-      let receipt_no = existing.transaction_id;
-      try {
-        const rnResult = await new Promise((resolve, reject) => {
-          db.get("SELECT receipt_no FROM transactions WHERE id = ?", [existing.transaction_id], (err, row) => err ? reject(err) : resolve(row));
-        });
-        receipt_no = rnResult?.receipt_no || existing.transaction_id;
-      } catch (_) {}
-      const dupRes = {
-        message: "Checkout successful!",
-        transaction_id: existing.transaction_id,
-        receipt_no,
-        pos_order_id: existing.pos_order_id,
-        invoice_number: existing.invoice_number
-      };
-      rememberCheckout(trimmedUuid, dupRes);
-      return res.json(dupRes);
-    }
-  }
-
-  const userRoleForShift = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  if (userRoleForShift === "CASHIER") {
-    const openShift = await new Promise((resolve) => {
-      db.get(
-        "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-        [],
-        (err, row) => resolve(row || null)
-      );
-    });
-    if (!openShift) {
-      return res.status(403).json({ error: "Please start your shift before adding or processing orders." });
-    }
-  }
-
-  const isReqUserWaiter = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
-  const userFirstName = (req.user && req.user.name ? req.user.name : "").trim().split(/\s+/)[0] || "";
-  const effectiveServedBy = (served_by ? String(served_by).trim().split(/\s+/)[0] : "") || (isReqUserWaiter ? userFirstName : null);
-  const effectiveWaiterId = waiter_id || (isReqUserWaiter ? req.user.id : null);
-  const discount_amount = payment_method === "DISCOUNT"
-    ? Math.max(0, (parseFloat(req.body.original_total || total_amount) || 0) - (parseFloat(amount_paid) || 0))
-    : 0;
-
-  const split_cash_amount = payment_method === "SPLIT" ? (parseFloat(req.body.split_cash_amount) || 0) : 0;
-  const split_second_amount = payment_method === "SPLIT" ? (parseFloat(req.body.split_second_amount) || 0) : 0;
-  const split_second_method = payment_method === "SPLIT" ? String(req.body.split_second_method || "MOBILE MONEY").toUpperCase() : "";
-
-  if (!items || items.length === 0)
-    return res.status(400).json({ error: "Cart is empty" });
-
-  let paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
-  let payment_status = "PAID";
-  const isCredit = (payment_method || "").toUpperCase() === "CREDIT";
-
-  if (payment_method === "COD") {
-    paid = 0;
-    payment_status = "PENDING";
-  } else if (payment_method === "INVOICE") {
-    paid = 0;
-    payment_status = "PENDING";
-  } else if (payment_method === "DISCOUNT") {
-    paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
-    payment_status = "PAID";
-  } else if (payment_method === "SPLIT") {
-    if (split_second_method === "CREDIT") {
-      paid = split_cash_amount;
-      payment_status = split_second_amount > 0 ? "PARTIAL" : "PAID";
-    } else {
-      paid = total_amount;
-      payment_status = "PAID";
-    }
-  } else if (isCredit) {
-    // If cashier entered total_amount as paid (or clicked EXACT), it represents full credit (0 deposit paid)
-    if (paid >= total_amount) {
-      paid = 0;
-    }
-    payment_status = paid === 0 ? "UNPAID" : "PARTIAL";
-  }
-
-  // INVOICE stores as COD in pos_orders (pending COD)
-  const effectivePaymentMethod = payment_method === "INVOICE" ? "COD" : payment_method;
-  // INVOICE must never create a transport/delivery record
-  const effectiveIsDelivery = payment_method === "INVOICE" ? false : is_delivery;
-
-  try {
-    // ── 1. Claim a recycled receipt ID if one is available ─────────────────
-    // Done OUTSIDE the transaction so we don't hold a lock while deciding
-    let recycledId = null;
-    await new Promise((resolve) => {
-      db.get("SELECT id FROM recycled_transaction_ids ORDER BY id ASC LIMIT 1", [], (err, row) => {
-        if (!err && row) {
-          recycledId = row.id;
-          // Consume it immediately — best-effort, ignore errors
-          db.run("DELETE FROM recycled_transaction_ids WHERE id = ?", [recycledId], () => {});
-        }
-        resolve();
+  // Wrap the entire checkout request in the guaranteed tenant schema context
+  return asyncLocalStorage.run(currentSchema, async () => {
+    const {
+      total_amount,
+      items,
+      payment_method = "CASH",
+      amount_paid,
+      buyer_name,
+      buyer_phone,
+      promised_date,
+      is_delivery,
+      delivery_address,
+      driver_name,
+      served_by,
+      waiter_id,
+      client_uuid,
+    } = req.body;
+    // If the requesting user is a Waiter, attribute the order to the open shift cashier (if any).
+    // Waiters take orders but don't cash out — the cashier on shift is accountable for the drawer.
+    let cashier_id = req.user.id;
+    const isReqUserWaiterForCheckout = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
+    if (isReqUserWaiterForCheckout) {
+      const openShiftRow = await new Promise((resolve) => {
+        db.get(
+          "SELECT cashier_id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+          [],
+          (err, row) => resolve(row || null)
+        );
       });
-    });
-
-    // ── 2. Run all DB writes inside a single atomic transaction ─────────────
-    const { transaction_id, pos_order_id, invoice_number, receipt_no: txReceiptNo, already_done } = await db.withTransaction(async (q) => {
-      // Race condition check inside transaction lock
-      if (trimmedUuid) {
-        const raceCheck = await q("SELECT id AS pos_order_id, transaction_id, invoice_number FROM pos_orders WHERE client_uuid = ?", [trimmedUuid]);
-        if (raceCheck.rows && raceCheck.rows.length > 0) {
-          const r = raceCheck.rows[0];
-          return {
-            already_done: true,
-            transaction_id: r.transaction_id,
-            pos_order_id: r.pos_order_id,
-            invoice_number: r.invoice_number
-          };
-        }
+      if (openShiftRow && openShiftRow.cashier_id) {
+        cashier_id = openShiftRow.cashier_id;
       }
+    }
 
-      const now = new Date().toISOString();
-      let description;
-      if (payment_method === "INVOICE") {
-        description = "POS Sale (COD - Pending Invoice)";
-      } else if (payment_method === "DISCOUNT") {
-        description = `POS Sale (DISCOUNT: UGX ${paid.toLocaleString()})`;
-      } else if (payment_method === "SPLIT") {
-        const isSplitCredit = split_second_method === "CREDIT";
-        description = `POS Sale (SPLIT: Cash UGX ${split_cash_amount.toLocaleString()} + ${split_second_method} UGX ${split_second_amount.toLocaleString()}${isSplitCredit && buyer_name ? ` - ${buyer_name}` : ""})`;
-      } else if (isCredit) {
-        const creditBuyer = (buyer_name || "Customer").trim();
-        description = paid > 0
-          ? `POS Sale (CREDIT: ${creditBuyer} paid UGX ${paid.toLocaleString()} deposit)`
-          : `POS Sale (CREDIT: ${creditBuyer})`;
+    const trimmedUuid = client_uuid ? String(client_uuid).trim() : null;
+
+    // Fast-path in-memory idempotency check (stops rapid double-clicks / network retries)
+    if (trimmedUuid && recentCheckouts.has(trimmedUuid)) {
+      console.log(`[Checkout] Intercepted duplicate in-memory submit for client_uuid: ${trimmedUuid}`);
+      return res.json(recentCheckouts.get(trimmedUuid).result);
+    }
+
+    // Database check for duplicate client_uuid
+    if (trimmedUuid) {
+      const existing = await new Promise((resolve) => {
+        db.get(
+          "SELECT id AS pos_order_id, transaction_id, invoice_number, total_amount FROM pos_orders WHERE client_uuid = ?",
+          [trimmedUuid],
+          (err, row) => resolve(row)
+        );
+      });
+      if (existing) {
+        console.log(`[Checkout] Intercepted duplicate DB order for client_uuid: ${trimmedUuid}`);
+        let receipt_no = existing.transaction_id;
+        try {
+          const rnResult = await new Promise((resolve, reject) => {
+            db.get("SELECT receipt_no FROM transactions WHERE id = ?", [existing.transaction_id], (err, row) => err ? reject(err) : resolve(row));
+          });
+          receipt_no = rnResult?.receipt_no || existing.transaction_id;
+        } catch (_) {}
+        const dupRes = {
+          message: "Checkout successful!",
+          transaction_id: existing.transaction_id,
+          receipt_no,
+          pos_order_id: existing.pos_order_id,
+          invoice_number: existing.invoice_number
+        };
+        rememberCheckout(trimmedUuid, dupRes);
+        return res.json(dupRes);
+      }
+    }
+
+    const userRoleForShift = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+    if (userRoleForShift === "CASHIER") {
+      const openShift = await new Promise((resolve) => {
+        db.get(
+          "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+          [],
+          (err, row) => resolve(row || null)
+        );
+      });
+      if (!openShift) {
+        return res.status(403).json({ error: "Please start your shift before adding or processing orders." });
+      }
+    }
+
+    const isReqUserWaiter = req.user && req.user.role && req.user.role.toUpperCase() === "WAITER";
+    const userFirstName = (req.user && req.user.name ? req.user.name : "").trim().split(/\s+/)[0] || "";
+    const effectiveServedBy = (served_by ? String(served_by).trim().split(/\s+/)[0] : "") || (isReqUserWaiter ? userFirstName : null);
+    const effectiveWaiterId = waiter_id || (isReqUserWaiter ? req.user.id : null);
+    const discount_amount = payment_method === "DISCOUNT"
+      ? Math.max(0, (parseFloat(req.body.original_total || total_amount) || 0) - (parseFloat(amount_paid) || 0))
+      : 0;
+
+    const split_cash_amount = payment_method === "SPLIT" ? (parseFloat(req.body.split_cash_amount) || 0) : 0;
+    const split_second_amount = payment_method === "SPLIT" ? (parseFloat(req.body.split_second_amount) || 0) : 0;
+    const split_second_method = payment_method === "SPLIT" ? String(req.body.split_second_method || "MOBILE MONEY").toUpperCase() : "";
+
+    if (!items || items.length === 0)
+      return res.status(400).json({ error: "Cart is empty" });
+
+    let paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
+    let payment_status = "PAID";
+    const isCredit = (payment_method || "").toUpperCase() === "CREDIT";
+
+    if (payment_method === "COD") {
+      paid = 0;
+      payment_status = "PENDING";
+    } else if (payment_method === "INVOICE") {
+      paid = 0;
+      payment_status = "PENDING";
+    } else if (payment_method === "DISCOUNT") {
+      paid = amount_paid !== undefined ? parseFloat(amount_paid) || 0 : total_amount;
+      payment_status = "PAID";
+    } else if (payment_method === "SPLIT") {
+      if (split_second_method === "CREDIT") {
+        paid = split_cash_amount;
+        payment_status = split_second_amount > 0 ? "PARTIAL" : "PAID";
       } else {
-        description = `POS Sale (${payment_method})`;
+        paid = total_amount;
+        payment_status = "PAID";
       }
-      const txAmount = (payment_method === "COD" || payment_method === "INVOICE" || isCredit)
-        ? total_amount : paid;
-      const txType = isCredit ? "GOODS_ON_CREDIT" : "INCOME";
-
-      // INSERT transaction — receipt_no is assigned atomically by the DB trigger/sequence.
-      const isPg = Boolean(db.pool);
-      let txResult;
-      if (recycledId) {
-        const sql = isPg
-          ? "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, receipt_no"
-          : "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)";
-        txResult = await q(sql, [recycledId, txAmount, txType, description, cashier_id, now, payment_status]);
-        txResult.lastID = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID || recycledId;
-      } else {
-        const sql = isPg
-          ? "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, receipt_no"
-          : "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)";
-        txResult = await q(sql, [txAmount, txType, description, cashier_id, now, payment_status]);
+    } else if (isCredit) {
+      // If cashier entered total_amount as paid (or clicked EXACT), it represents full credit (0 deposit paid)
+      if (paid >= total_amount) {
+        paid = 0;
       }
-      const transaction_id = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID;
-      // Read the DB-assigned receipt_no (from RETURNING row, or fall back to a SELECT)
-      let assignedReceiptNo = (txResult.rows && txResult.rows[0]) ? txResult.rows[0].receipt_no : null;
-      if (!assignedReceiptNo) {
-        const rcptBack = await q("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id]);
-        assignedReceiptNo = (rcptBack.rows && rcptBack.rows[0]) ? rcptBack.rows[0].receipt_no : transaction_id;
-      }
-      const nextReceiptNo = assignedReceiptNo || transaction_id;
+      payment_status = paid === 0 ? "UNPAID" : "PARTIAL";
+    }
 
-      // INSERT pos_order — include buyer_name/buyer_phone, waiter tracking and sequential invoice_number
-      // For DISCOUNT, the effective total for the order is whatever was inserted/paid
-      const effectiveOrderTotal = payment_method === "DISCOUNT" ? paid : total_amount;
+    // INVOICE stores as COD in pos_orders (pending COD)
+    const effectivePaymentMethod = payment_method === "INVOICE" ? "COD" : payment_method;
+    // INVOICE must never create a transport/delivery record
+    const effectiveIsDelivery = payment_method === "INVOICE" ? false : is_delivery;
 
-      let invoice_number = null;
-      if (effectivePaymentMethod === "COD" || effectivePaymentMethod === "INVOICE") {
-        const invRow = await q("SELECT COALESCE(MAX(invoice_number), 0) + 1 AS next_inv FROM pos_orders");
-        invoice_number = (invRow.rows && invRow.rows.length > 0) ? parseInt(invRow.rows[0].next_inv) : 1;
-      }
+    try {
+      // ── 1. Claim a recycled receipt ID if one is available ─────────────────
+      // Done OUTSIDE the transaction so we don't hold a lock while deciding
+      let recycledId = null;
+      await new Promise((resolve) => {
+        db.get("SELECT id FROM recycled_transaction_ids ORDER BY id ASC LIMIT 1", [], (err, row) => {
+          if (!err && row) {
+            recycledId = row.id;
+            // Consume it immediately — best-effort, ignore errors
+            db.run("DELETE FROM recycled_transaction_ids WHERE id = ?", [recycledId], () => {});
+          }
+          resolve();
+        });
+      });
 
-      const orderResult = await q(
-        "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid, split_cash_amount, split_second_amount, split_second_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid, split_cash_amount, split_second_amount, split_second_method]
-      );
-      const pos_order_id = orderResult.lastID;
-
-      if (payment_method === "SPLIT" && split_second_method === "CREDIT" && split_second_amount > 0) {
-        await q(
-          "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
-          [buyer_name || "Customer", buyer_phone || "", pos_order_id, total_amount, split_cash_amount, split_second_amount]
-        );
-      }
-
-      // Stock deductions (skip for Made-To-Order items where track_stock = 0)
-      const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
-      const servedByLabel = effectiveServedBy || cashierName;
-      for (const item of items) {
-        if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
-        // Fetch current stock BEFORE deduction using q() — must stay on the SAME
-        // transactional connection/client. Using db.get() here would grab a second
-        // pool connection and could deadlock Postgres or produce stale reads.
-        const stockBeforeRes = await q(
-          "SELECT stock FROM products WHERE id = ?",
-          [item.id]
-        );
-        const stockBeforeVal = (stockBeforeRes.rows && stockBeforeRes.rows[0]) ? stockBeforeRes.rows[0].stock : null;
-        await q(
-          "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
-          [item.qty, item.id, item.qty]
-        );
-        const stockAfter = stockBeforeVal !== null ? Math.max(0, stockBeforeVal - item.qty) : null;
-        // Log stock movement INSIDE the transaction (correct schema context guaranteed)
-        await q(
-          `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)`,
-          [item.id, item.name, -item.qty, stockBeforeVal, stockAfter, `Sale #${transaction_id}`, servedByLabel]
-        );
-        if (item.barcodes && Array.isArray(item.barcodes)) {
-          for (const bc of item.barcodes) {
-            await q(
-              "INSERT OR IGNORE INTO sold_barcodes (barcode, product_id, transaction_id) VALUES (?, ?, ?)",
-              [bc, item.id, transaction_id]
-            );
+      // ── 2. Run all DB writes inside a single atomic transaction ─────────────
+      const { transaction_id, pos_order_id, invoice_number, receipt_no: txReceiptNo, already_done } = await db.withTransaction(async (q) => {
+        // Race condition check inside transaction lock
+        if (trimmedUuid) {
+          const raceCheck = await q("SELECT id AS pos_order_id, transaction_id, invoice_number FROM pos_orders WHERE client_uuid = ?", [trimmedUuid]);
+          if (raceCheck.rows && raceCheck.rows.length > 0) {
+            const r = raceCheck.rows[0];
+            return {
+              already_done: true,
+              transaction_id: r.transaction_id,
+              pos_order_id: r.pos_order_id,
+              invoice_number: r.invoice_number
+            };
           }
         }
+
+        const now = new Date().toISOString();
+        let description;
+        if (payment_method === "INVOICE") {
+          description = "POS Sale (COD - Pending Invoice)";
+        } else if (payment_method === "DISCOUNT") {
+          description = `POS Sale (DISCOUNT: UGX ${paid.toLocaleString()})`;
+        } else if (payment_method === "SPLIT") {
+          const isSplitCredit = split_second_method === "CREDIT";
+          description = `POS Sale (SPLIT: Cash UGX ${split_cash_amount.toLocaleString()} + ${split_second_method} UGX ${split_second_amount.toLocaleString()}${isSplitCredit && buyer_name ? ` - ${buyer_name}` : ""})`;
+        } else if (isCredit) {
+          const creditBuyer = (buyer_name || "Customer").trim();
+          description = paid > 0
+            ? `POS Sale (CREDIT: ${creditBuyer} paid UGX ${paid.toLocaleString()} deposit)`
+            : `POS Sale (CREDIT: ${creditBuyer})`;
+        } else {
+          description = `POS Sale (${payment_method})`;
+        }
+        const txAmount = (payment_method === "COD" || payment_method === "INVOICE" || isCredit)
+          ? total_amount : paid;
+        const txType = isCredit ? "GOODS_ON_CREDIT" : "INCOME";
+
+        // INSERT transaction — receipt_no is assigned atomically by the DB trigger/sequence.
+        const isPg = Boolean(db.pool);
+        let txResult;
+        if (recycledId) {
+          const sql = isPg
+            ? "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, receipt_no"
+            : "INSERT INTO transactions (id, amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)";
+          txResult = await q(sql, [recycledId, txAmount, txType, description, cashier_id, now, payment_status]);
+          txResult.lastID = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID || recycledId;
+        } else {
+          const sql = isPg
+            ? "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, receipt_no"
+            : "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)";
+          txResult = await q(sql, [txAmount, txType, description, cashier_id, now, payment_status]);
+        }
+        const transaction_id = (txResult.rows && txResult.rows[0] && txResult.rows[0].id) || txResult.lastID;
+        // Read the DB-assigned receipt_no (from RETURNING row, or fall back to a SELECT)
+        let assignedReceiptNo = (txResult.rows && txResult.rows[0]) ? txResult.rows[0].receipt_no : null;
+        if (!assignedReceiptNo) {
+          const rcptBack = await q("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id]);
+          assignedReceiptNo = (rcptBack.rows && rcptBack.rows[0]) ? rcptBack.rows[0].receipt_no : transaction_id;
+        }
+        const nextReceiptNo = assignedReceiptNo || transaction_id;
+
+        // INSERT pos_order — include buyer_name/buyer_phone, waiter tracking and sequential invoice_number
+        // For DISCOUNT, the effective total for the order is whatever was inserted/paid
+        const effectiveOrderTotal = payment_method === "DISCOUNT" ? paid : total_amount;
+
+        let invoice_number = null;
+        if (effectivePaymentMethod === "COD" || effectivePaymentMethod === "INVOICE") {
+          if (isPg) {
+            try {
+              const invSeqRes = await q("SELECT nextval('invoice_no_seq') AS next_inv");
+              invoice_number = (invSeqRes.rows && invSeqRes.rows.length > 0) ? parseInt(invSeqRes.rows[0].next_inv, 10) : 1;
+            } catch (_) {
+              const invRow = await q("SELECT COALESCE(MAX(invoice_number), 0) + 1 AS next_inv FROM pos_orders");
+              invoice_number = (invRow.rows && invRow.rows.length > 0) ? parseInt(invRow.rows[0].next_inv, 10) : 1;
+            }
+          } else {
+            const invRow = await q("SELECT COALESCE(MAX(invoice_number), 0) + 1 AS next_inv FROM pos_orders");
+            invoice_number = (invRow.rows && invRow.rows.length > 0) ? parseInt(invRow.rows[0].next_inv, 10) : 1;
+          }
+        }
+
+        const orderResult = await q(
+          "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid, split_cash_amount, split_second_amount, split_second_method, order_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid, split_cash_amount, split_second_amount, split_second_method, now]
+        );
+        const pos_order_id = orderResult.lastID;
+
+        if (payment_method === "SPLIT" && split_second_method === "CREDIT" && split_second_amount > 0) {
+          await q(
+            "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
+            [buyer_name || "Customer", buyer_phone || "", pos_order_id, total_amount, split_cash_amount, split_second_amount]
+          );
+        }
+
+        // Stock deductions (skip for Made-To-Order items where track_stock = 0)
+        const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
+        const servedByLabel = effectiveServedBy || cashierName;
+        for (const item of items) {
+          if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
+          // Fetch current stock BEFORE deduction using q() — must stay on the SAME
+          // transactional connection/client. Using db.get() here would grab a second
+          // pool connection and could deadlock Postgres or produce stale reads.
+          const stockBeforeRes = await q(
+            "SELECT stock FROM products WHERE id = ?",
+            [item.id]
+          );
+          const stockBeforeVal = (stockBeforeRes.rows && stockBeforeRes.rows[0]) ? stockBeforeRes.rows[0].stock : null;
+          await q(
+            "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
+            [item.qty, item.id, item.qty]
+          );
+          const stockAfter = stockBeforeVal !== null ? Math.max(0, stockBeforeVal - item.qty) : null;
+          // Log stock movement INSIDE the transaction (correct schema context guaranteed)
+          await q(
+            `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)`,
+            [item.id, item.name, -item.qty, stockBeforeVal, stockAfter, `Sale #${transaction_id}`, servedByLabel]
+          );
+          if (item.barcodes && Array.isArray(item.barcodes)) {
+            for (const bc of item.barcodes) {
+              await q(
+                "INSERT OR IGNORE INTO sold_barcodes (barcode, product_id, transaction_id) VALUES (?, ?, ?)",
+                [bc, item.id, transaction_id]
+              );
+            }
+          }
+        }
+
+        // CREDIT record
+        if (isCredit) {
+          const creditDeposit = Math.min(paid, total_amount);
+          const balance = Math.max(0, total_amount - creditDeposit);
+          await q(
+            "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance, promised_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [buyer_name || "Walk-in", buyer_phone || "", pos_order_id, total_amount, creditDeposit, balance, req.body.promised_date || null]
+          );
+        }
+
+        // Delivery record
+        if (effectiveIsDelivery) {
+          await q(
+            "INSERT INTO deliveries (order_id, client_name, client_phone, client_location, status, driver_name) VALUES (?, ?, ?, ?, ?, ?)",
+            [pos_order_id, buyer_name || "Customer", buyer_phone || "", delivery_address || "", "Pending", driver_name || null]
+          );
+        }
+
+        // ── Insert order_items INSIDE transaction for complete atomicity ─────
+        for (const item of items) {
+          const itemTotal = (item.price || 0) * (item.qty || 1);
+          await q(
+            "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+            [pos_order_id, item.id, item.name, item.qty, item.price, itemTotal]
+          );
+        }
+
+        return { transaction_id, pos_order_id, invoice_number, receipt_no: nextReceiptNo, already_done: false };
+      }, 3, currentSchema);
+
+      if (already_done) {
+        let receipt_no = transaction_id;
+        try {
+          const rnResult = await new Promise((resolve, reject) => {
+            db.get("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id], (err, row) => err ? reject(err) : resolve(row));
+          });
+          receipt_no = rnResult?.receipt_no || transaction_id;
+        } catch (_) {}
+        const dupRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
+        if (trimmedUuid) rememberCheckout(trimmedUuid, dupRes);
+        return res.json(dupRes);
       }
 
-      // CREDIT record
+      // ── 4. Emit real-time updates (strictly tenant-isolated) ─────────────────
+      emitAndBust(currentSchema, "transactions", "finance_summary");
+      emitAndBust(currentSchema, "products", "products");
+      emitToTenant(currentSchema, "db_updated", { module: "pos" });
       if (isCredit) {
-        const creditDeposit = Math.min(paid, total_amount);
-        const balance = Math.max(0, total_amount - creditDeposit);
-        await q(
-          "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance, promised_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [buyer_name || "Walk-in", buyer_phone || "", pos_order_id, total_amount, creditDeposit, balance, req.body.promised_date || null]
-        );
+        emitAndBust(currentSchema, "credits", "credits");
+        emitToTenant(currentSchema, "db_updated", { module: "credits" });
+      }
+      if (effectiveIsDelivery || effectivePaymentMethod === "COD") {
+        emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
       }
 
-      // Delivery record
-      if (effectiveIsDelivery) {
-        await q(
-          "INSERT INTO deliveries (order_id, client_name, client_phone, client_location, status, driver_name) VALUES (?, ?, ?, ?, ?, ?)",
-          [pos_order_id, buyer_name || "Customer", buyer_phone || "", delivery_address || "", "Pending", driver_name || null]
-        );
+      const receipt_no = txReceiptNo || transaction_id;
+      const successRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
+      if (trimmedUuid) rememberCheckout(trimmedUuid, successRes);
+
+      if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
+        setTimeout(() => {
+          checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
+        }, 500);
       }
 
-      // ── Insert order_items INSIDE transaction for complete atomicity ─────
-      for (const item of items) {
-        const itemTotal = (item.price || 0) * (item.qty || 1);
-        await q(
-          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
-          [pos_order_id, item.id, item.name, item.qty, item.price, itemTotal]
-        );
+      if (invoice_number && Number(invoice_number) >= INV_RECYCLE_THRESHOLD) {
+        setTimeout(() => {
+          checkAndRecycleInvoiceNumbers(currentSchema).catch((e) => console.error(e));
+        }, 500);
       }
 
-      return { transaction_id, pos_order_id, invoice_number, receipt_no: nextReceiptNo, already_done: false };
-    });
+      res.json(successRes);
 
-    if (already_done) {
-      let receipt_no = transaction_id;
-      try {
-        const rnResult = await new Promise((resolve, reject) => {
-          db.get("SELECT receipt_no FROM transactions WHERE id = ?", [transaction_id], (err, row) => err ? reject(err) : resolve(row));
-        });
-        receipt_no = rnResult?.receipt_no || transaction_id;
-      } catch (_) {}
-      const dupRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
-      if (trimmedUuid) rememberCheckout(trimmedUuid, dupRes);
-      return res.json(dupRes);
+    } catch (err) {
+      console.error("[CHECKOUT] Error:", err.message);
+      res.status(500).json({ error: "Checkout failed: " + err.message });
     }
-
-    // ── 4. Emit real-time updates (tenant-isolated) ──────────────────────────
-    const currentSchema = getSchema();
-    emitAndBust("transactions", "finance_summary");
-    emitAndBust("products", "products");
-    emitToTenant(currentSchema, "db_updated", { module: "pos" });
-    if (isCredit) {
-      emitAndBust("credits", "credits");
-      emitToTenant(currentSchema, "db_updated", { module: "credits" });
-    }
-    if (effectiveIsDelivery || effectivePaymentMethod === "COD") {
-      emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
-    }
-
-    const receipt_no = txReceiptNo || transaction_id;
-    const successRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
-    if (trimmedUuid) rememberCheckout(trimmedUuid, successRes);
-
-    if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
-      setTimeout(() => {
-        checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
-      }, 500);
-    }
-
-    res.json(successRes);
-
-  } catch (err) {
-    console.error("[CHECKOUT] Error:", err.message);
-    res.status(500).json({ error: "Checkout failed: " + err.message });
-  }
+  });
 });
 
 // ── CASHIER SHIFTS MANAGEMENT ──────────────────────────────────────────
@@ -4311,170 +4463,176 @@ app.get("/api/pos_orders/:id/items", authenticateToken, (req, res) => {
 
 // Update items of a pending POS order (Cashier edit)
 app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
-  const posOrderId = req.params.id;
-  const { items } = req.body;
-  if (!items || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: "Order must have at least one item." });
+  const currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
+  if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
+    return res.status(403).json({ error: "Invalid tenant schema context. Please refresh or re-login." });
   }
 
-  const userRoleNow = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  if (userRoleNow === "CASHIER") {
-    const openShift = await new Promise((resolve) => {
-      db.get(
-        "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-        [],
-        (err, row) => resolve(row || null)
-      );
-    });
-    if (!openShift) {
-      return res.status(403).json({ error: "Please start your shift before editing orders." });
+  return asyncLocalStorage.run(currentSchema, async () => {
+    const posOrderId = req.params.id;
+    const { items } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Order must have at least one item." });
     }
-  }
 
-  const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
-
-  try {
-    let newTotal = 0;
-    await db.withTransaction(async (q) => {
-      const ordRes = await q("SELECT * FROM pos_orders WHERE id = ?", [posOrderId]);
-      if (!ordRes.rows || ordRes.rows.length === 0) {
-        throw new Error("Order not found");
+    const userRoleNow = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+    if (userRoleNow === "CASHIER") {
+      const openShift = await new Promise((resolve) => {
+        db.get(
+          "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+          [],
+          (err, row) => resolve(row || null)
+        );
+      });
+      if (!openShift) {
+        return res.status(403).json({ error: "Please start your shift before editing orders." });
       }
-      const order = ordRes.rows[0];
+    }
 
-      // Get existing items
-      const existRes = await q("SELECT * FROM order_items WHERE pos_order_id = ?", [posOrderId]);
-      const existingItems = existRes.rows || [];
+    const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
 
-      // Map existing quantities by product_id
-      const existingQtyByPid = {};
-      const existingNamesByPid = {};
-      for (const oldItem of existingItems) {
-        const pid = oldItem.product_id;
-        if (pid) {
-          existingQtyByPid[pid] = (existingQtyByPid[pid] || 0) + (parseInt(oldItem.qty) || 0);
-          existingNamesByPid[pid] = oldItem.product_name;
+    try {
+      let newTotal = 0;
+      await db.withTransaction(async (q) => {
+        const ordRes = await q("SELECT * FROM pos_orders WHERE id = ?", [posOrderId]);
+        if (!ordRes.rows || ordRes.rows.length === 0) {
+          throw new Error("Order not found");
         }
-      }
+        const order = ordRes.rows[0];
 
-      // Map new quantities by product_id
-      const newQtyByPid = {};
-      const newNamesByPid = {};
-      newTotal = 0;
-      for (const item of items) {
-        const pid = item.product_id || item.id;
-        const qty = parseInt(item.qty) || 1;
-        const price = parseFloat(item.price) || 0;
-        newTotal += (qty * price);
-        if (pid) {
-          newQtyByPid[pid] = (newQtyByPid[pid] || 0) + qty;
-          newNamesByPid[pid] = item.product_name || item.name;
-        }
-      }
+        // Get existing items
+        const existRes = await q("SELECT * FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+        const existingItems = existRes.rows || [];
 
-      // SERVER-SIDE GUARD: Once an order is saved, original items cannot be
-      // removed or have their quantity reduced UNLESS user is Admin or CEO.
-      const isUserAdminOrCEO = [
-        "CEO",
-        "ADMIN",
-        "TECH",
-        "MANAGER",
-        "SUPERVISOR",
-      ].includes(userRoleNow) ||
-        userRoleNow.includes("ADMIN") ||
-        userRoleNow.includes("TECH") ||
-        (req.user && req.user.prefix && String(req.user.prefix).endsWith("000"));
-
-      if (!isUserAdminOrCEO) {
-        for (const [pidStr, origQty] of Object.entries(existingQtyByPid)) {
-          const pid = parseInt(pidStr, 10);
-          if (!pid) continue;
-          const newQty = newQtyByPid[pid] || 0;
-          if (newQty < origQty) {
-            const itemName = existingNamesByPid[pidStr] || `Product #${pid}`;
-            throw new Error(
-              `Cannot reduce "${itemName}" from ${origQty} to ${newQty}. ` +
-              `Saved order items can only be reduced or removed by an Admin or CEO.`
-            );
+        // Map existing quantities by product_id
+        const existingQtyByPid = {};
+        const existingNamesByPid = {};
+        for (const oldItem of existingItems) {
+          const pid = oldItem.product_id;
+          if (pid) {
+            existingQtyByPid[pid] = (existingQtyByPid[pid] || 0) + (parseInt(oldItem.qty) || 0);
+            existingNamesByPid[pid] = oldItem.product_name;
           }
         }
-      }
 
-      // Reconcile stock by calculating net differences (delta)
-      const allProductIds = Array.from(new Set([
-        ...Object.keys(existingQtyByPid),
-        ...Object.keys(newQtyByPid)
-      ]));
+        // Map new quantities by product_id
+        const newQtyByPid = {};
+        const newNamesByPid = {};
+        newTotal = 0;
+        for (const item of items) {
+          const pid = item.product_id || item.id;
+          const qty = parseInt(item.qty) || 1;
+          const price = parseFloat(item.price) || 0;
+          newTotal += (qty * price);
+          if (pid) {
+            newQtyByPid[pid] = (newQtyByPid[pid] || 0) + qty;
+            newNamesByPid[pid] = item.product_name || item.name;
+          }
+        }
 
-      for (const pidStr of allProductIds) {
-        const pid = parseInt(pidStr);
-        if (!pid) continue;
-        const oldQty = existingQtyByPid[pid] || 0;
-        const newQty = newQtyByPid[pid] || 0;
-        const delta = newQty - oldQty;
+        // SERVER-SIDE GUARD: Once an order is saved, original items cannot be
+        // removed or have their quantity reduced UNLESS user is Admin or CEO.
+        const isUserAdminOrCEO = [
+          "CEO",
+          "ADMIN",
+          "TECH",
+          "MANAGER",
+          "SUPERVISOR",
+        ].includes(userRoleNow) ||
+          userRoleNow.includes("ADMIN") ||
+          userRoleNow.includes("TECH") ||
+          (req.user && req.user.prefix && String(req.user.prefix).endsWith("000"));
 
-        if (delta !== 0) {
-          const prodRes = await q("SELECT id, name, track_stock, stock FROM products WHERE id = ?", [pid]);
-          if (prodRes.rows && prodRes.rows.length > 0) {
-            const prod = prodRes.rows[0];
-            if (prod.track_stock !== 0) {
-              const stockBefore = prod.stock;
-              if (delta > 0) {
-                // More items added -> deduct stock
-                await q("UPDATE products SET stock = stock - ? WHERE id = ?", [delta, pid]);
-                const stockAfter = Math.max(0, stockBefore - delta);
-                await q(
-                  "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)",
-                  [pid, prod.name || newNamesByPid[pid] || "Product", -delta, stockBefore, stockAfter, `Added to Order #${posOrderId}`, cashierName]
-                ).catch((e) => console.error("[stock_movements] SALE edit error:", e.message));
-              } else {
-                // Items reduced -> restore stock
-                const restoreQty = Math.abs(delta);
-                await q("UPDATE products SET stock = stock + ? WHERE id = ?", [restoreQty, pid]);
-                const stockAfter = stockBefore + restoreQty;
-                await q(
-                  "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'ADJUSTMENT', ?, ?, ?, ?, ?)",
-                  [pid, prod.name || existingNamesByPid[pid] || "Product", restoreQty, stockBefore, stockAfter, `Reduced in Order #${posOrderId}`, cashierName]
-                ).catch((e) => console.error("[stock_movements] ADJUSTMENT edit error:", e.message));
+        if (!isUserAdminOrCEO) {
+          for (const [pidStr, origQty] of Object.entries(existingQtyByPid)) {
+            const pid = parseInt(pidStr, 10);
+            if (!pid) continue;
+            const newQty = newQtyByPid[pid] || 0;
+            if (newQty < origQty) {
+              const itemName = existingNamesByPid[pidStr] || `Product #${pid}`;
+              throw new Error(
+                `Cannot reduce "${itemName}" from ${origQty} to ${newQty}. ` +
+                `Saved order items can only be reduced or removed by an Admin or CEO.`
+              );
+            }
+          }
+        }
+
+        // Reconcile stock by calculating net differences (delta)
+        const allProductIds = Array.from(new Set([
+          ...Object.keys(existingQtyByPid),
+          ...Object.keys(newQtyByPid)
+        ]));
+
+        for (const pidStr of allProductIds) {
+          const pid = parseInt(pidStr);
+          if (!pid) continue;
+          const oldQty = existingQtyByPid[pid] || 0;
+          const newQty = newQtyByPid[pid] || 0;
+          const delta = newQty - oldQty;
+
+          if (delta !== 0) {
+            const prodRes = await q("SELECT id, name, track_stock, stock FROM products WHERE id = ?", [pid]);
+            if (prodRes.rows && prodRes.rows.length > 0) {
+              const prod = prodRes.rows[0];
+              if (prod.track_stock !== 0) {
+                const stockBefore = prod.stock;
+                if (delta > 0) {
+                  // More items added -> deduct stock
+                  await q("UPDATE products SET stock = stock - ? WHERE id = ?", [delta, pid]);
+                  const stockAfter = Math.max(0, stockBefore - delta);
+                  await q(
+                    "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)",
+                    [pid, prod.name || newNamesByPid[pid] || "Product", -delta, stockBefore, stockAfter, `Added to Order #${posOrderId}`, cashierName]
+                  ).catch((e) => console.error("[stock_movements] SALE edit error:", e.message));
+                } else {
+                  // Items reduced -> restore stock
+                  const restoreQty = Math.abs(delta);
+                  await q("UPDATE products SET stock = stock + ? WHERE id = ?", [restoreQty, pid]);
+                  const stockAfter = stockBefore + restoreQty;
+                  await q(
+                    "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'ADJUSTMENT', ?, ?, ?, ?, ?)",
+                    [pid, prod.name || existingNamesByPid[pid] || "Product", restoreQty, stockBefore, stockAfter, `Reduced in Order #${posOrderId}`, cashierName]
+                  ).catch((e) => console.error("[stock_movements] ADJUSTMENT edit error:", e.message));
+                }
               }
             }
           }
         }
-      }
 
-      // Atomic replace of order_items
-      await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
-      for (const item of items) {
-        const pid = item.product_id || item.id;
-        const pname = item.product_name || item.name;
-        const qty = parseInt(item.qty) || 1;
-        const price = parseFloat(item.price) || 0;
-        const total = qty * price;
-        await q(
-          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
-          [posOrderId, pid, pname, qty, price, total]
-        );
-      }
+        // Atomic replace of order_items
+        await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
+        for (const item of items) {
+          const pid = item.product_id || item.id;
+          const pname = item.product_name || item.name;
+          const qty = parseInt(item.qty) || 1;
+          const price = parseFloat(item.price) || 0;
+          const total = qty * price;
+          await q(
+            "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+            [posOrderId, pid, pname, qty, price, total]
+          );
+        }
 
-      // Update pos_orders, transaction & deliveries
-      await q("UPDATE pos_orders SET total_amount = ? WHERE id = ?", [newTotal, posOrderId]);
-      if (order.transaction_id) {
-        await q("UPDATE transactions SET amount = ? WHERE id = ?", [newTotal, order.transaction_id]);
-      }
-      await q("UPDATE deliveries SET total_amount = ? WHERE pos_order_id = ? OR order_id = ?", [newTotal, posOrderId, posOrderId]).catch(() => {});
-    });
+        // Update pos_orders, transaction & deliveries
+        await q("UPDATE pos_orders SET total_amount = ? WHERE id = ?", [newTotal, posOrderId]);
+        if (order.transaction_id) {
+          await q("UPDATE transactions SET amount = ? WHERE id = ?", [newTotal, order.transaction_id]);
+        }
+        await q("UPDATE deliveries SET total_amount = ? WHERE pos_order_id = ? OR order_id = ?", [newTotal, posOrderId, posOrderId]).catch(() => {});
+      }, 3, currentSchema);
 
-    emitAndBust("products", "products");
-    emitAndBust("transactions", "finance_summary");
-    const currentSchema = getSchema();
-    emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
-    emitToTenant(currentSchema, "db_updated", { module: "pos" });
+      emitAndBust(currentSchema, "products", "products");
+      emitAndBust(currentSchema, "transactions", "finance_summary");
+      emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
+      emitToTenant(currentSchema, "db_updated", { module: "pos" });
 
-    res.json({ success: true, message: "Order updated successfully", total_amount: newTotal });
-  } catch (err) {
-    console.error("Edit order error:", err);
-    res.status(err.message === "Order not found" ? 404 : 500).json({ error: err.message });
-  }
+      res.json({ success: true, message: "Order updated successfully", total_amount: newTotal });
+    } catch (err) {
+      console.error("Edit order error:", err);
+      res.status(err.message === "Order not found" ? 404 : 500).json({ error: err.message });
+    }
+  });
 });
 
 app.get("/api/pos_orders/:id", authenticateToken, (req, res) => {
@@ -7069,87 +7227,89 @@ app.delete("/api/notices/:id", authenticateToken, (req, res) => {
 });
 
 // ---- Deliveries API ----
-app.get("/api/deliveries/pending-cod", authenticateToken, (req, res) => {
-  const currentSchema = getSchema();
+app.get("/api/deliveries/pending-cod", authenticateToken, async (req, res) => {
+  const currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
   if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
     // Tenant users should never see public schema orders
     return res.json([]);
   }
 
-  const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  const rawName = req.user && req.user.name ? req.user.name : "";
-  const userFirstName = rawName.trim().split(/\s+/)[0] || "";
+  return asyncLocalStorage.run(currentSchema, () => {
+    const userRole = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+    const rawName = req.user && req.user.name ? req.user.name : "";
+    const userFirstName = rawName.trim().split(/\s+/)[0] || "";
 
-  // Only show pending orders from the last 30 days — anything older is a stale/orphaned record
-  const cutoff30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Only show pending orders from the last 30 days — anything older is a stale/orphaned record
+    const cutoff30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  // The POS Pending tab only shows Waiter / COD table orders (Customer Invoices are moved to Financial Hub)
-  let sql = `
-        SELECT 
-            p.id as pos_order_id,
-            d.id as delivery_id,
-            COALESCE(d.client_name, p.buyer_name, 'Table / Walk-in') as client_name, 
-            COALESCE(d.client_phone, p.buyer_phone, '') as client_phone, 
-            COALESCE(d.client_location, 'In-Store') as client_location,
-            p.id as order_id, 
-            p.total_amount, 
-            p.transaction_id, 
-            p.invoice_number,
-            t.payment_status,
-            p.buyer_name,
-            p.buyer_phone,
-            COALESCE(p.served_by, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.first_name WHEN LOWER(ec.role) = 'waiter' THEN ec.first_name ELSE NULL END) as served_by,
-            COALESCE(p.waiter_id, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.id WHEN LOWER(ec.role) = 'waiter' THEN ec.id ELSE NULL END) as waiter_id
-        FROM pos_orders p
-        JOIN transactions t ON p.transaction_id = t.id
-        LEFT JOIN deliveries d ON d.order_id = p.id
-        LEFT JOIN employees ew ON p.waiter_id = ew.id
-        LEFT JOIN employees ec ON p.cashier_id = ec.id
-        WHERE p.payment_method = 'COD' AND t.payment_status = 'PENDING'
-          AND t.transaction_date >= ?
-          AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
-  `;
-  const params = [cutoff30Days];
+    // The POS Pending tab only shows Waiter / COD table orders (Customer Invoices are moved to Financial Hub)
+    let sql = `
+          SELECT 
+              p.id as pos_order_id,
+              d.id as delivery_id,
+              COALESCE(d.client_name, p.buyer_name, 'Table / Walk-in') as client_name, 
+              COALESCE(d.client_phone, p.buyer_phone, '') as client_phone, 
+              COALESCE(d.client_location, 'In-Store') as client_location,
+              p.id as order_id, 
+              p.total_amount, 
+              p.transaction_id, 
+              p.invoice_number,
+              t.payment_status,
+              p.buyer_name,
+              p.buyer_phone,
+              COALESCE(p.served_by, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.first_name WHEN LOWER(ec.role) = 'waiter' THEN ec.first_name ELSE NULL END) as served_by,
+              COALESCE(p.waiter_id, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.id WHEN LOWER(ec.role) = 'waiter' THEN ec.id ELSE NULL END) as waiter_id
+          FROM pos_orders p
+          JOIN transactions t ON p.transaction_id = t.id
+          LEFT JOIN deliveries d ON d.order_id = p.id
+          LEFT JOIN employees ew ON p.waiter_id = ew.id
+          LEFT JOIN employees ec ON p.cashier_id = ec.id
+          WHERE p.payment_method = 'COD' AND t.payment_status = 'PENDING'
+            AND t.transaction_date >= ?
+            AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
+    `;
+    const params = [cutoff30Days];
 
-  // Waiters only get the orders they personally created/worked on
-  if (userRole === "WAITER") {
-    sql += ` AND (p.waiter_id = ? OR LOWER(p.served_by) = LOWER(?)) `;
-    params.push(req.user.id, userFirstName);
-  }
-
-  sql += ` ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC`;
-
-  db.all(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!rows || rows.length === 0) return res.json([]);
-    const orderIds = rows.map((r) => parseInt(r.pos_order_id, 10)).filter((id) => !isNaN(id) && id > 0);
-    if (!orderIds.length) {
-      rows.forEach(r => r.items = []);
-      return res.json(rows);
+    // Waiters only get the orders they personally created/worked on
+    if (userRole === "WAITER") {
+      sql += ` AND (p.waiter_id = ? OR LOWER(p.served_by) = LOWER(?)) `;
+      params.push(req.user.id, userFirstName);
     }
-    const placeholders = orderIds.map(() => "?").join(",");
-    db.all(
-      `SELECT oi.pos_order_id, oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
-       FROM order_items oi WHERE oi.pos_order_id IN (${placeholders})`,
-      orderIds,
-      (itemErr, items) => {
-        if (itemErr) {
-          console.error("[pending-cod] Error querying order_items:", itemErr.message);
-        }
-        const itemMap = {};
-        if (items && Array.isArray(items)) {
-          items.forEach((it) => {
-            const pId = Number(it.pos_order_id);
-            if (!itemMap[pId]) itemMap[pId] = [];
-            itemMap[pId].push(it);
-          });
-        }
-        rows.forEach((r) => {
-          r.items = itemMap[Number(r.pos_order_id)] || [];
-        });
-        res.json(rows);
+
+    sql += ` ORDER BY p.id DESC`;
+
+    db.all(sql, params, (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!rows || rows.length === 0) return res.json([]);
+      const orderIds = rows.map((r) => parseInt(r.pos_order_id, 10)).filter((id) => !isNaN(id) && id > 0);
+      if (!orderIds.length) {
+        rows.forEach(r => r.items = []);
+        return res.json(rows);
       }
-    );
+      const placeholders = orderIds.map(() => "?").join(",");
+      db.all(
+        `SELECT oi.pos_order_id, oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
+         FROM order_items oi WHERE oi.pos_order_id IN (${placeholders})`,
+        orderIds,
+        (itemErr, items) => {
+          if (itemErr) {
+            console.error("[pending-cod] Error querying order_items:", itemErr.message);
+          }
+          const itemMap = {};
+          if (items && Array.isArray(items)) {
+            items.forEach((it) => {
+              const pId = Number(it.pos_order_id);
+              if (!itemMap[pId]) itemMap[pId] = [];
+              itemMap[pId].push(it);
+            });
+          }
+          rows.forEach((r) => {
+            r.items = itemMap[Number(r.pos_order_id)] || [];
+          });
+          res.json(rows);
+        }
+      );
+    });
   });
 });
 
@@ -7194,143 +7354,151 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
 
 // Use pos_order_id to mark COD/Invoice as received, since Invoices don't have delivery records
 app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res) => {
-  try {
-    const userRoleNow = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-    if (userRoleNow === "CASHIER") {
-      const openShift = await new Promise((resolve) => {
-        db.get(
-          "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-          [],
-          (err, row) => resolve(row || null)
-        );
-      });
-      if (!openShift) {
-        return res.status(403).json({ error: "Please start your shift before collecting payments." });
-      }
-    }
-
-    let transactionData = null;
-    const paymentMethod = (req.body && req.body.payment_method) ? String(req.body.payment_method).toUpperCase() : "CASH";
-    const splitCashAmount = paymentMethod === "SPLIT" ? (parseFloat(req.body.split_cash_amount) || 0) : 0;
-    const splitSecondAmount = paymentMethod === "SPLIT" ? (parseFloat(req.body.split_second_amount) || 0) : 0;
-    const splitSecondMethod = paymentMethod === "SPLIT" ? String(req.body.split_second_method || "MOBILE MONEY").toUpperCase() : "";
-    const isCredit = paymentMethod === "CREDIT" || (paymentMethod === "SPLIT" && splitSecondMethod === "CREDIT");
-    const amountPaid = req.body && req.body.amount_paid !== undefined ? parseFloat(req.body.amount_paid) || 0 : null;
-    const buyerNameInput = req.body && req.body.buyer_name ? String(req.body.buyer_name).trim() : null;
-    const buyerPhoneInput = req.body && req.body.buyer_phone ? String(req.body.buyer_phone).trim() : null;
-    const desc = paymentMethod === "SPLIT"
-      ? `POS Sale (SPLIT: Cash UGX ${splitCashAmount.toLocaleString()} + ${splitSecondMethod} UGX ${splitSecondAmount.toLocaleString()})`
-      : (isCredit ? "POS Sale (CREDIT)" : `POS Sale (${paymentMethod})`);
-
-    await db.withTransaction(async (q) => {
-      const rowRes = await q(
-        "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, buyer_phone, served_by, invoice_number FROM pos_orders WHERE id = ?",
-        [req.params.id]
-      );
-      if (!rowRes.rows || rowRes.rows.length === 0) {
-        throw new Error("Order not found");
-      }
-      const row = rowRes.rows[0];
-      const effBuyerName = buyerNameInput || row.buyer_name || "Walk-in";
-      const effBuyerPhone = buyerPhoneInput || row.buyer_phone || "";
-      const totalAmt = parseFloat(row.total_amount) || 0;
-
-      let effectivePaid = amountPaid !== null ? amountPaid : totalAmt;
-      if (paymentMethod === "SPLIT") {
-        if (splitSecondMethod === "CREDIT") {
-          effectivePaid = splitCashAmount;
-        } else {
-          effectivePaid = totalAmt;
-        }
-      } else if (isCredit && effectivePaid >= totalAmt) {
-        effectivePaid = 0; // full credit
-      }
-
-      const isSplitCredit = paymentMethod === "SPLIT" && splitSecondMethod === "CREDIT";
-      const orderDesc = paymentMethod === "SPLIT"
-        ? `POS Sale (SPLIT: Cash UGX ${splitCashAmount.toLocaleString()} + ${splitSecondMethod} UGX ${splitSecondAmount.toLocaleString()}${isSplitCredit && effBuyerName ? ` - ${effBuyerName}` : ""})`
-        : (isCredit ? (effectivePaid > 0 ? `POS Sale (CREDIT: ${effBuyerName} paid UGX ${effectivePaid.toLocaleString()})` : `POS Sale (CREDIT: ${effBuyerName})`) : `POS Sale (${paymentMethod})`);
-
-      await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
-
-      const now = new Date().toISOString();
-      const paymentStatus = isCredit ? (effectivePaid === 0 ? "UNPAID" : "PARTIAL") : "PAID";
-      await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ?, amount = ?, transaction_date = ? WHERE id = ?", [
-        req.user.id,
-        paymentStatus,
-        orderDesc,
-        isCredit ? effectivePaid : totalAmt,
-        now,
-        row.transaction_id
-      ]);
-
-      await q(
-        "UPDATE pos_orders SET cashier_id = ?, amount_paid = ?, payment_method = ?, buyer_name = ?, buyer_phone = ?, split_cash_amount = ?, split_second_amount = ?, split_second_method = ?, order_date = ? WHERE id = ?",
-        [
-          req.user.id,
-          effectivePaid,
-          paymentMethod,
-          effBuyerName,
-          effBuyerPhone,
-          splitCashAmount,
-          splitSecondAmount,
-          splitSecondMethod,
-          now,
-          row.pos_order_id
-        ]
-      );
-
-      if (isCredit) {
-        const balance = paymentMethod === "SPLIT"
-          ? splitSecondAmount
-          : Math.max(0, totalAmt - effectivePaid);
-        await q(
-          "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
-          [effBuyerName, effBuyerPhone, row.pos_order_id, totalAmt, effectivePaid, balance]
-        );
-      }
-      
-      transactionData = row;
-    });
-
-    const currentSchema = getSchema();
-    emitAndBust("transactions", "finance_summary");
-    emitToTenant(currentSchema, "db_updated", { module: "pos" });
-    emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
-    if (isCredit) {
-      emitAndBust("credits", "credits");
-      emitToTenant(currentSchema, "db_updated", { module: "credits" });
-    }
-
-    // Fetch unique sequential receipt_no
-    let receipt_no = transactionData.transaction_id;
-    try {
-      const rnRow = await new Promise((resolve) => {
-        db.get("SELECT receipt_no FROM transactions WHERE id = ?", [transactionData.transaction_id], (e, r) => resolve(r));
-      });
-      receipt_no = rnRow?.receipt_no || transactionData.transaction_id;
-    } catch (_) {}
-
-    if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
-      setTimeout(() => {
-        checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
-      }, 500);
-    }
-
-    res.json({
-      success: true,
-      transaction_id: transactionData.transaction_id,
-      receipt_no,
-      invoice_number: transactionData.invoice_number || transactionData.pos_order_id,
-      total_amount: transactionData.total_amount,
-      client_name: transactionData.buyer_name || "Customer",
-      client_location: "",
-      served_by: transactionData.served_by || "",
-    });
-  } catch (err) {
-    if (err.message === "Order not found") return res.status(404).json({ error: err.message });
-    res.status(500).json({ error: err.message });
+  const currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
+  if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
+    return res.status(403).json({ error: "Invalid tenant schema context. Please refresh or re-login." });
   }
+
+  return asyncLocalStorage.run(currentSchema, async () => {
+    try {
+      const userRoleNow = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+      if (userRoleNow === "CASHIER") {
+        const openShift = await new Promise((resolve) => {
+          db.get(
+            "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+            [],
+            (err, row) => resolve(row || null)
+          );
+        });
+        if (!openShift) {
+          return res.status(403).json({ error: "Please start your shift before collecting payments." });
+        }
+      }
+
+      let transactionData = null;
+      const paymentMethod = (req.body && req.body.payment_method) ? String(req.body.payment_method).toUpperCase() : "CASH";
+      const splitCashAmount = paymentMethod === "SPLIT" ? (parseFloat(req.body.split_cash_amount) || 0) : 0;
+      const splitSecondAmount = paymentMethod === "SPLIT" ? (parseFloat(req.body.split_second_amount) || 0) : 0;
+      const splitSecondMethod = paymentMethod === "SPLIT" ? String(req.body.split_second_method || "MOBILE MONEY").toUpperCase() : "";
+      const isCredit = paymentMethod === "CREDIT" || (paymentMethod === "SPLIT" && splitSecondMethod === "CREDIT");
+      const amountPaid = req.body && req.body.amount_paid !== undefined ? parseFloat(req.body.amount_paid) || 0 : null;
+      const buyerNameInput = req.body && req.body.buyer_name ? String(req.body.buyer_name).trim() : null;
+      const buyerPhoneInput = req.body && req.body.buyer_phone ? String(req.body.buyer_phone).trim() : null;
+      const desc = paymentMethod === "SPLIT"
+        ? `POS Sale (SPLIT: Cash UGX ${splitCashAmount.toLocaleString()} + ${splitSecondMethod} UGX ${splitSecondAmount.toLocaleString()})`
+        : (isCredit ? "POS Sale (CREDIT)" : `POS Sale (${paymentMethod})`);
+
+      await db.withTransaction(async (q) => {
+        const rowRes = await q(
+          "SELECT id as pos_order_id, transaction_id, total_amount, buyer_name, buyer_phone, served_by, invoice_number FROM pos_orders WHERE id = ?",
+          [req.params.id]
+        );
+        if (!rowRes.rows || rowRes.rows.length === 0) {
+          throw new Error("Order not found");
+        }
+        const row = rowRes.rows[0];
+        const effBuyerName = buyerNameInput || row.buyer_name || "Walk-in";
+        const effBuyerPhone = buyerPhoneInput || row.buyer_phone || "";
+        const totalAmt = parseFloat(row.total_amount) || 0;
+
+        let effectivePaid = amountPaid !== null ? amountPaid : totalAmt;
+        if (paymentMethod === "SPLIT") {
+          if (splitSecondMethod === "CREDIT") {
+            effectivePaid = splitCashAmount;
+          } else {
+            effectivePaid = totalAmt;
+          }
+        } else if (isCredit && effectivePaid >= totalAmt) {
+          effectivePaid = 0; // full credit
+        }
+
+        const isSplitCredit = paymentMethod === "SPLIT" && splitSecondMethod === "CREDIT";
+        const orderDesc = paymentMethod === "SPLIT"
+          ? `POS Sale (SPLIT: Cash UGX ${splitCashAmount.toLocaleString()} + ${splitSecondMethod} UGX ${splitSecondAmount.toLocaleString()}${isSplitCredit && effBuyerName ? ` - ${effBuyerName}` : ""})`
+          : (isCredit ? (effectivePaid > 0 ? `POS Sale (CREDIT: ${effBuyerName} paid UGX ${effectivePaid.toLocaleString()})` : `POS Sale (CREDIT: ${effBuyerName})`) : `POS Sale (${paymentMethod})`);
+
+        await q("UPDATE deliveries SET status = ? WHERE order_id = ?", ["Delivered", row.pos_order_id]);
+
+        const now = new Date().toISOString();
+        const paymentStatus = isCredit ? (effectivePaid === 0 ? "UNPAID" : "PARTIAL") : "PAID";
+        await q("UPDATE transactions SET recorded_by = ?, payment_status = ?, description = ?, amount = ?, transaction_date = ? WHERE id = ?", [
+          req.user.id,
+          paymentStatus,
+          orderDesc,
+          isCredit ? effectivePaid : totalAmt,
+          now,
+          row.transaction_id
+        ]);
+
+        await q(
+          "UPDATE pos_orders SET cashier_id = ?, amount_paid = ?, payment_method = ?, buyer_name = ?, buyer_phone = ?, split_cash_amount = ?, split_second_amount = ?, split_second_method = ?, order_date = ? WHERE id = ?",
+          [
+            req.user.id,
+            effectivePaid,
+            paymentMethod,
+            effBuyerName,
+            effBuyerPhone,
+            splitCashAmount,
+            splitSecondAmount,
+            splitSecondMethod,
+            now,
+            row.pos_order_id
+          ]
+        );
+
+        if (isCredit) {
+          const balance = paymentMethod === "SPLIT"
+            ? splitSecondAmount
+            : Math.max(0, totalAmt - effectivePaid);
+          await q(
+            "INSERT INTO credit_records (buyer_name, buyer_phone, pos_order_id, total_amount, amount_paid, balance) VALUES (?, ?, ?, ?, ?, ?)",
+            [effBuyerName, effBuyerPhone, row.pos_order_id, totalAmt, effectivePaid, balance]
+          );
+        }
+        
+        transactionData = row;
+      }, 3, currentSchema);
+
+      emitAndBust(currentSchema, "transactions", "finance_summary");
+      emitAndBust(currentSchema, "products", "products");
+      emitToTenant(currentSchema, "db_updated", { module: "pos" });
+      emitToTenant(currentSchema, "db_updated", { module: "deliveries" });
+      if (isCredit) {
+        emitAndBust(currentSchema, "credits", "credits");
+        emitToTenant(currentSchema, "db_updated", { module: "credits" });
+      }
+
+      // Fetch unique sequential receipt_no
+      let receipt_no = transactionData.transaction_id;
+      try {
+        const rnRow = await new Promise((resolve) => {
+          db.get("SELECT receipt_no FROM transactions WHERE id = ?", [transactionData.transaction_id], (e, r) => resolve(r));
+        });
+        receipt_no = rnRow?.receipt_no || transactionData.transaction_id;
+      } catch (_) {}
+
+      if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
+        setTimeout(() => {
+          checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
+        }, 500);
+      }
+
+      res.json({
+        success: true,
+        transaction_id: transactionData.transaction_id,
+        receipt_no,
+        invoice_number: transactionData.invoice_number || transactionData.pos_order_id,
+        total_amount: transactionData.total_amount,
+        client_name: transactionData.buyer_name || "Customer",
+        client_location: "",
+        served_by: transactionData.served_by || "",
+      });
+    } catch (err) {
+      if (err.message === "Order not found") return res.status(404).json({ error: err.message });
+      console.error("[COD-RECEIVED] Error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
 });
 
 app.get("/api/deliveries", authenticateToken, (req, res) => {
@@ -7481,112 +7649,116 @@ app.delete("/api/petty-cash/:id", authenticateToken, (req, res) => {
 
 // --- POS OFFLINE BATCH SYNC ---
 app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
-  const currentSchema = getSchema();
+  const currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
   if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
     console.error(`[BATCH-SYNC BLOCKED] Attempted write to public schema by non-TECH user ${req.user.id} (${req.user.name})`);
     return res.status(403).json({ error: "Invalid tenant schema context. Please refresh or re-login." });
   }
 
-  const { transactions } = req.body;
-  if (!Array.isArray(transactions) || transactions.length === 0) {
-    return res.status(400).json({ error: "No transactions provided." });
-  }
-
-  const syncedIds = [];
-  const errors = [];
-
-  for (const tx of transactions) {
-    const { client_uuid, payload } = tx;
-    if (!client_uuid || !payload) {
-      errors.push({ client_uuid, reason: "Missing client_uuid or payload." });
-      continue;
+  return asyncLocalStorage.run(currentSchema, async () => {
+    const { transactions } = req.body;
+    if (!Array.isArray(transactions) || transactions.length === 0) {
+      return res.status(400).json({ error: "No transactions provided." });
     }
 
-    // Idempotency check: was this already synced?
-    const already = await new Promise((resolve) =>
-      db.get(
-        "SELECT id FROM pos_orders WHERE client_uuid = ?",
-        [client_uuid],
-        (err, row) => resolve(row),
-      ),
-    );
-    if (already) {
-      syncedIds.push(client_uuid);
-      continue;
-    }
+    const syncedIds = [];
+    const errors = [];
 
-    const {
-      total_amount,
-      items,
-      payment_method = "CASH",
-      amount_paid,
-    } = payload;
-    if (!items || items.length === 0) {
-      errors.push({ client_uuid, reason: "Empty cart." });
-      continue;
-    }
-
-    const cashier_id = req.user.id;
-    const paid = amount_paid !== undefined ? amount_paid : total_amount;
-    const isCredit = (payment_method || "").toUpperCase() === "CREDIT";
-    const effectivePaymentMethod =
-      payment_method === "INVOICE" ? "COD" : payment_method;
-    const payment_status =
-      payment_method === "COD" || payment_method === "INVOICE"
-        ? "PENDING"
-        : (isCredit ? (paid === 0 ? "UNPAID" : "PARTIAL") : "PAID");
-    const txType = isCredit ? "GOODS_ON_CREDIT" : "INCOME";
-    const txAmount = (payment_status === "PENDING" || isCredit) ? total_amount : paid;
-    const description = `POS Sale - Offline Sync (${payment_method})`;
-    const now = new Date().toISOString();
-
-    let success = false;
-    try {
-      let pos_order_id = null;
-      await db.withTransaction(async (q) => {
-        const txRes = await q(
-          "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
-          [txAmount, txType, description, cashier_id, now, payment_status]
-        );
-        const transaction_id = txRes.lastID;
-
-        const orderRes = await q(
-          "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, client_uuid) VALUES (?, ?, ?, ?, ?, ?)",
-          [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, client_uuid]
-        );
-        pos_order_id = orderRes.lastID;
-
-        for (const item of items) {
-          if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
-          await q(
-            "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
-            [item.qty, item.id, item.qty]
-          );
-        }
-      });
-
-      // Insert order items AFTER commit (they're non-critical audit records)
-      for (const item of items) {
-        db.run(
-          "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
-          [pos_order_id, item.id, item.name, item.qty, item.price, (item.price || 0) * (item.qty || 1)]
-        );
+    for (const tx of transactions) {
+      const { client_uuid, payload } = tx;
+      if (!client_uuid || !payload) {
+        errors.push({ client_uuid, reason: "Missing client_uuid or payload." });
+        continue;
       }
 
-      try { emitToTenant(getSchema(), "db_updated", { module: "pos" }); } catch (e) {}
-      success = true;
-    } catch (syncErr) {
-      console.error("[BATCH-SYNC] Failed to sync tx:", client_uuid, syncErr.message);
+      // Idempotency check: was this already synced?
+      const already = await new Promise((resolve) =>
+        db.get(
+          "SELECT id FROM pos_orders WHERE client_uuid = ?",
+          [client_uuid],
+          (err, row) => resolve(row),
+        ),
+      );
+      if (already) {
+        syncedIds.push(client_uuid);
+        continue;
+      }
+
+      const {
+        total_amount,
+        items,
+        payment_method = "CASH",
+        amount_paid,
+      } = payload;
+      if (!items || items.length === 0) {
+        errors.push({ client_uuid, reason: "Empty cart." });
+        continue;
+      }
+
+      const cashier_id = req.user.id;
+      const paid = amount_paid !== undefined ? amount_paid : total_amount;
+      const isCredit = (payment_method || "").toUpperCase() === "CREDIT";
+      const effectivePaymentMethod =
+        payment_method === "INVOICE" ? "COD" : payment_method;
+      const payment_status =
+        payment_method === "COD" || payment_method === "INVOICE"
+          ? "PENDING"
+          : (isCredit ? (paid === 0 ? "UNPAID" : "PARTIAL") : "PAID");
+      const txType = isCredit ? "GOODS_ON_CREDIT" : "INCOME";
+      const txAmount = (payment_status === "PENDING" || isCredit) ? total_amount : paid;
+      const description = `POS Sale - Offline Sync (${payment_method})`;
+      const now = new Date().toISOString();
+
+      let success = false;
+      try {
+        let pos_order_id = null;
+        await db.withTransaction(async (q) => {
+          const txRes = await q(
+            "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, ?, ?, ?, ?, ?)",
+            [txAmount, txType, description, cashier_id, now, payment_status]
+          );
+          const transaction_id = txRes.lastID;
+
+          const orderRes = await q(
+            "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, client_uuid, order_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [cashier_id, total_amount, transaction_id, effectivePaymentMethod, paid, client_uuid, now]
+          );
+          pos_order_id = orderRes.lastID;
+
+          for (const item of items) {
+            if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
+            await q(
+              "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
+              [item.qty, item.id, item.qty]
+            );
+          }
+
+          // Insert order items inside transaction for atomicity
+          for (const item of items) {
+            await q(
+              "INSERT INTO order_items (pos_order_id, product_id, product_name, qty, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+              [pos_order_id, item.id, item.name, item.qty, item.price, (item.price || 0) * (item.qty || 1)]
+            );
+          }
+        }, 3, currentSchema);
+
+        emitAndBust(currentSchema, "products", "products");
+        emitAndBust(currentSchema, "transactions", "finance_summary");
+        emitToTenant(currentSchema, "db_updated", { module: "pos" });
+        success = true;
+      } catch (syncErr) {
+        console.error("[BATCH-SYNC] Failed to sync tx:", client_uuid, syncErr.message);
+      }
+
+      if (success) syncedIds.push(client_uuid);
+      else errors.push({ client_uuid, reason: "Server processing failed." });
     }
 
-    if (success) syncedIds.push(client_uuid);
-    else errors.push({ client_uuid, reason: "Server processing failed." });
-  }
-
-  console.log(
-    `[BATCH-SYNC] ${transactions.length} tx: ${syncedIds.length} synced, ${errors.length} failed.`,
-  );
-  res.json({ syncedIds, errors });
+    console.log(
+      `[BATCH-SYNC] ${transactions.length} tx: ${syncedIds.length} synced, ${errors.length} failed.`,
+    );
+    res.json({ syncedIds, errors });
+  });
 });
 
 

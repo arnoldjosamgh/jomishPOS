@@ -13877,6 +13877,8 @@ window.collectPendingPayment = async function (posOrderId, totalAmount) {
       closePaymentPanel();
       showToast("Payment collected!", "success");
       loadPendingCOD(true); // force=true: bypass cache after payment collection
+      if (typeof loadPOSProducts === "function") loadPOSProducts();
+      if (typeof loadInventory === "function") loadInventory();
       if (paymentMethod === "CREDIT" && typeof loadCredits === "function") {
         loadCredits();
       }
@@ -13931,6 +13933,8 @@ window.markCODReceived = async function (posOrderId) {
     if (res.ok) {
       showToast("Payment Marked as Received", "success");
       loadPendingCOD(true); // force=true: bypass cache after COD received
+      if (typeof loadPOSProducts === "function") loadPOSProducts();
+      if (typeof loadInventory === "function") loadInventory();
 
       // Generate a receipt for the received COD
       if (data.transaction_id && data.total_amount) {

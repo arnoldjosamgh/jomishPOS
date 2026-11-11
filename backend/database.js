@@ -17,7 +17,7 @@ try {
     const baseDir = process.pkg ? process.cwd() : path.join(__dirname, '..');
     const configData = fs.readFileSync(path.join(baseDir, 'config/config.json'));
     config = JSON.parse(configData);
-} catch (e) { 
+} catch (e) {
     console.log('Config file not found or invalid, checking environment variables...');
 }
 
@@ -45,7 +45,7 @@ if (config.dbType === 'postgres') {
     const poolConfig = {
         ...(typeof config.postgres === 'object' ? config.postgres : {}),
         max: 8,  // Neon paid Starter = 25 total connections; 8 per Render instance leaves
-                 // headroom for multiple instances, startup migrations, and admin queries.
+        // headroom for multiple instances, startup migrations, and admin queries.
         connectionTimeoutMillis: 10000, // 10s max wait for acquiring a pool client
         idleTimeoutMillis: 15000, // close idle connections after 15s so dead sockets are dropped
         statement_timeout: 20000, // 20s statement timeout to prevent hung queries from freezing connection
@@ -163,11 +163,11 @@ if (config.dbType === 'postgres') {
         acquireClientWithRetry: acquireClientWithRetry,
         executeWithRetry: executeWithRetry,
         asyncLocalStorage: asyncLocalStorage,
-        run: function(sql, params, callback) {
+        run: function (sql, params, callback) {
             if (typeof params === 'function') { callback = params; params = []; }
             const pgSql = translateSql(sql);
             const schema = asyncLocalStorage.getStore() || 'public';
-            
+
             executeWithRetry(async () => {
                 let client;
                 let clientErr = null;
@@ -175,9 +175,9 @@ if (config.dbType === 'postgres') {
                     client = await acquireClientWithRetry();
                     await client.query(`SET search_path TO ${searchPathFor(schema)}`);
                     const res = await client.query(pgSql, params);
-                    return { 
-                        lastID: res.rows.length > 0 ? res.rows[0].id : null, 
-                        changes: res.rowCount 
+                    return {
+                        lastID: res.rows.length > 0 ? res.rows[0].id : null,
+                        changes: res.rowCount
                     };
                 } catch (err) {
                     clientErr = err;
@@ -186,18 +186,18 @@ if (config.dbType === 'postgres') {
                     if (client) client.release(clientErr);
                 }
             })
-            .then(ctx => {
-                if (callback) callback.call(ctx, null);
-            })
-            .catch(err => {
-                if (callback) callback(err);
-            });
+                .then(ctx => {
+                    if (callback) callback.call(ctx, null);
+                })
+                .catch(err => {
+                    if (callback) callback(err);
+                });
         },
-        get: function(sql, params, callback) {
+        get: function (sql, params, callback) {
             if (typeof params === 'function') { callback = params; params = []; }
             const pgSql = translateSql(sql);
             const schema = asyncLocalStorage.getStore() || 'public';
-            
+
             executeWithRetry(async () => {
                 let client;
                 let clientErr = null;
@@ -213,18 +213,18 @@ if (config.dbType === 'postgres') {
                     if (client) client.release(clientErr);
                 }
             })
-            .then(row => {
-                if (callback) callback(null, row);
-            })
-            .catch(err => {
-                if (callback) callback(err);
-            });
+                .then(row => {
+                    if (callback) callback(null, row);
+                })
+                .catch(err => {
+                    if (callback) callback(err);
+                });
         },
-        all: function(sql, params, callback) {
+        all: function (sql, params, callback) {
             if (typeof params === 'function') { callback = params; params = []; }
             const pgSql = translateSql(sql);
             const schema = asyncLocalStorage.getStore() || 'public';
-            
+
             executeWithRetry(async () => {
                 let client;
                 let clientErr = null;
@@ -240,15 +240,15 @@ if (config.dbType === 'postgres') {
                     if (client) client.release(clientErr);
                 }
             })
-            .then(rows => {
-                if (callback) callback(null, rows);
-            })
-            .catch(err => {
-                if (callback) callback(err);
-            });
+                .then(rows => {
+                    if (callback) callback(null, rows);
+                })
+                .catch(err => {
+                    if (callback) callback(err);
+                });
         },
-        serialize: function(fn) { fn(); }, // Postgres is pool-based, serialize is dummy
-        prepare: function(sql) {
+        serialize: function (fn) { fn(); }, // Postgres is pool-based, serialize is dummy
+        prepare: function (sql) {
             const pgSql = translateSql(sql);
             return {
                 run: (params) => {
@@ -268,15 +268,15 @@ if (config.dbType === 'postgres') {
                         }
                     });
                 },
-                finalize: () => {}
+                finalize: () => { }
             };
         },
         // ── withTransaction: run a callback with all queries on ONE client ──────
         // Works for both Postgres (real transaction) and is shimmed for SQLite.
-        // Usage: await db.withTransaction(async (q) => { await q('SQL', [params]); ... })
+        // Usage: await db.withTransaction(async (q) => { await q('SQL', [params]); ... }, maxRetries, explicitSchema)
         // Returns { lastID, rows } of the LAST query executed inside.
-        withTransaction: async function(fn, maxRetries = 3) {
-            const schema = asyncLocalStorage.getStore() || 'public';
+        withTransaction: async function (fn, maxRetries = 3, explicitSchema = null) {
+            const schema = explicitSchema || asyncLocalStorage.getStore() || 'public';
             let attempt = 0;
             while (true) {
                 attempt++;
@@ -301,7 +301,7 @@ if (config.dbType === 'postgres') {
                 } catch (err) {
                     clientErr = err;
                     if (client) {
-                        try { await client.query('ROLLBACK'); } catch (_) {}
+                        try { await client.query('ROLLBACK'); } catch (_) { }
                     }
                     if (attempt < maxRetries && isTransientDbError(err)) {
                         const delay = Math.min(800 * Math.pow(1.5, attempt - 1), 3000);
@@ -316,26 +316,27 @@ if (config.dbType === 'postgres') {
             }
         }
     };
-    
+
     // Add create schema helper
-    db.createCompanySchema = async function(prefix) {
+    db.createCompanySchema = async function (prefix) {
         if (!prefix || !/^[A-Za-z0-9]+$/.test(prefix)) throw new Error('Invalid prefix format');
         const schemaName = 't_' + prefix.toLowerCase();
-        
+
         let client;
         let clientErr = null;
         try {
             client = await acquireClientWithRetry();
             await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
             await client.query(`SET search_path TO "${schemaName}", public`);
-            
+
             // Await schema creation sequentially to guarantee tables exist before returning
             for (const sql of schema) {
                 await client.query(translateSql(sql));
             }
 
-            // Guarantee atomic receipt_no sequence, resilient trigger function, and trigger
-            await client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
+            // Guarantee atomic receipt_no and invoice_no sequences, resilient trigger function, and trigger
+            await client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => { });
+            await client.query(`CREATE SEQUENCE IF NOT EXISTS invoice_no_seq START WITH 1`).catch(() => { });
             await client.query(`
                 CREATE OR REPLACE FUNCTION assign_receipt_no()
                 RETURNS TRIGGER AS $$
@@ -350,14 +351,14 @@ if (config.dbType === 'postgres') {
                     RETURN NEW;
                 END;
                 $$ LANGUAGE plpgsql;
-            `).catch(() => {});
-            await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+            `).catch(() => { });
+            await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => { });
             await client.query(`
                 CREATE TRIGGER trg_assign_receipt_no
                 BEFORE INSERT ON transactions
                 FOR EACH ROW
                 EXECUTE FUNCTION assign_receipt_no()
-            `).catch(() => {});
+            `).catch(() => { });
 
             // Run seed data / migrations in this new schema
             await new Promise((resolve) => {
@@ -378,7 +379,7 @@ if (config.dbType === 'postgres') {
     // ── Startup migration: ensure all existing t_* schemas have every table ──
     // This fixes "relation does not exist" errors when new tables are added to
     // the schema array after companies were already provisioned.
-    db.ensureAllTenantSchemas = async function() {
+    db.ensureAllTenantSchemas = async function () {
         let client;
         let clientErr = null;
         try {
@@ -408,8 +409,8 @@ if (config.dbType === 'postgres') {
                     }
 
                     // Guarantee receipt_no sequence and resilient trigger (do NOT overwrite running/recycled sequence)
-                    await c2.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_no INTEGER`).catch(() => {});
-                    await c2.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
+                    await c2.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_no INTEGER`).catch(() => { });
+                    await c2.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => { });
                     await c2.query(`
                         CREATE OR REPLACE FUNCTION assign_receipt_no()
                         RETURNS TRIGGER AS $$
@@ -424,14 +425,14 @@ if (config.dbType === 'postgres') {
                             RETURN NEW;
                         END;
                         $$ LANGUAGE plpgsql;
-                    `).catch(() => {});
-                    await c2.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+                    `).catch(() => { });
+                    await c2.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => { });
                     await c2.query(`
                         CREATE TRIGGER trg_assign_receipt_no
                         BEFORE INSERT ON transactions
                         FOR EACH ROW
                         EXECUTE FUNCTION assign_receipt_no()
-                    `).catch(() => {});
+                    `).catch(() => { });
 
                     console.log(`[MIGRATE] Schema "${schemaName}" tables & receipt_no sequence verified OK.`);
                 } catch (e) {
@@ -537,7 +538,7 @@ if (config.dbType === 'postgres') {
             if (method === '_openSqliteDb') return openSqliteDb;
             if (method === 'createCompanySchema') {
                 // Return the SQLite company provisioner function
-                return async function(prefix) {
+                return async function (prefix) {
                     if (!prefix || !/^[A-Za-z0-9]+$/.test(prefix)) throw new Error('Invalid prefix format');
                     const safePrefix = prefix.toLowerCase();
                     const schemaName = 't_' + safePrefix;
@@ -566,7 +567,7 @@ if (config.dbType === 'postgres') {
                 // In SQLite mode, each company .db already gets initDb() run when opened.
                 // For companies loaded from existing .db files, initDb is called on openSqliteDb.
                 // Return a no-op async function — nothing to do here.
-                return async function() {
+                return async function () {
                     const dataDir = path.join(process.pkg ? process.cwd() : path.join(__dirname, '..'), 'data');
                     if (!fs.existsSync(dataDir)) return;
                     const files = fs.readdirSync(dataDir).filter(f => f.startsWith('jomish_t') && f.endsWith('.db'));
@@ -580,8 +581,8 @@ if (config.dbType === 'postgres') {
             }
             if (method === 'withTransaction') {
                 // SQLite shim: wrap callback in serialize + BEGIN/COMMIT
-                return async function(fn) {
-                    const prefix = asyncLocalStorage.getStore() || 'public';
+                return async function (fn, maxRetries = 3, explicitSchema = null) {
+                    const prefix = explicitSchema || asyncLocalStorage.getStore() || 'public';
                     const activeDb = openSqliteDb(prefix);
                     return new Promise(async (resolve, reject) => {
                         activeDb.serialize(async () => {
@@ -596,7 +597,7 @@ if (config.dbType === 'postgres') {
                                             else res2({ lastID: null, rowCount: rows ? rows.length : 0, rows: rows || [] });
                                         });
                                     } else {
-                                        activeDb.run(sql, params, function(err) {
+                                        activeDb.run(sql, params, function (err) {
                                             if (err) rej2(err);
                                             else res2({ lastID: this.lastID, rowCount: this.changes, rows: [] });
                                         });
@@ -632,7 +633,7 @@ function translateSql(sql) {
     if (config.dbType !== 'postgres') return sql;
     let index = 1;
     let newSql = sql.replace(/\?/g, () => `$${index++}`);
-    
+
     // Convert SQLite datetime functions to PostgreSQL equivalents
     // datetime('now') -> NOW()
     newSql = newSql.replace(/datetime\('now'\)/gi, 'NOW()');
@@ -644,7 +645,7 @@ function translateSql(sql) {
     newSql = newSql.replace(/strftime\('%Y-%m-%d',\s*([^)]+)\)/gi, "TO_CHAR($1, 'YYYY-MM-DD')");
     // date('now') -> CURRENT_DATE
     newSql = newSql.replace(/date\('now'\)/gi, 'CURRENT_DATE');
-    
+
     // Convert SQLite INSERT OR IGNORE -> Postgres INSERT ... ON CONFLICT DO NOTHING
     const hadInsertOrIgnore = /INSERT\s+OR\s+IGNORE\s+INTO/gi.test(sql);
     newSql = newSql.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
@@ -659,7 +660,7 @@ function translateSql(sql) {
         const setCols = colList.filter(c => c !== pkCol).map(c => `${c} = EXCLUDED.${c}`).join(', ');
         return `INSERT INTO ${table} (${cols}) VALUES ${vals} ON CONFLICT (${pkCol}) DO UPDATE SET ${setCols}`;
     });
-    
+
     // Only append RETURNING id for tables that actually have a SERIAL id column
     // Tables WITHOUT id: roles_config, devices, app_settings, system_info, system_meta
     const noIdTables = ['roles_config', 'devices', 'app_settings', 'system_info', 'system_meta'];
@@ -668,7 +669,7 @@ function translateSql(sql) {
     const hasOnConflictNothing = hadInsertOrIgnore; // INSERT OR IGNORE -> never needs RETURNING
     const hasOnConflictUpdate = newSql.toUpperCase().includes('ON CONFLICT') && newSql.toUpperCase().includes('DO UPDATE');
     const targetsNoIdTable = noIdTables.some(t => newSql.toLowerCase().includes(t));
-    
+
     if (isInsert && !hasReturning && !targetsNoIdTable && !hasOnConflictNothing && !hasOnConflictUpdate) {
         newSql += ' RETURNING id';
     }
@@ -973,7 +974,7 @@ function runMigrations(fromVersion) {
         });
     }
     if (fromVersion < 107) {
-        db.run("ALTER TABLE roles_config ADD COLUMN can_see_secretary INTEGER DEFAULT 0", () => {});
+        db.run("ALTER TABLE roles_config ADD COLUMN can_see_secretary INTEGER DEFAULT 0", () => { });
         db.run(`INSERT INTO roles_config (role_name, can_see_dashboard, can_see_hr, can_see_attendance, can_see_sme, can_see_pos, can_see_secretary) VALUES ('Receptionist', 1, 0, 1, 0, 0, 1) ON CONFLICT (role_name) DO NOTHING`);
         db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ["version", "107"], () => {
             console.log("Migration to v107 complete: Added Secretary Hub (Calendar + Email).");
@@ -1138,9 +1139,9 @@ function runMigrations(fromVersion) {
         });
     }
     if (fromVersion < 121) {
-        db.run("ALTER TABLE roles_config ADD COLUMN can_see_transport INTEGER DEFAULT 0", () => {});
-        db.run("ALTER TABLE roles_config ADD COLUMN can_see_hardware INTEGER DEFAULT 0", () => {});
-        db.run("ALTER TABLE roles_config ADD COLUMN can_see_system_users INTEGER DEFAULT 0", () => {});
+        db.run("ALTER TABLE roles_config ADD COLUMN can_see_transport INTEGER DEFAULT 0", () => { });
+        db.run("ALTER TABLE roles_config ADD COLUMN can_see_hardware INTEGER DEFAULT 0", () => { });
+        db.run("ALTER TABLE roles_config ADD COLUMN can_see_system_users INTEGER DEFAULT 0", () => { });
         db.run("ALTER TABLE roles_config ADD COLUMN can_see_schedules INTEGER DEFAULT 0", () => {
             // Ensure core admin roles exist and have full access to prevent lockouts
             const adminRoles = ['CEO', 'Admin', 'HR'];
@@ -1151,7 +1152,7 @@ function runMigrations(fromVersion) {
                         can_see_dashboard=1, can_see_hr=1, can_see_attendance=1, can_see_sme=1, can_see_pos=1, 
                         can_see_secretary=1, can_see_transport=1, can_see_hardware=1, can_see_system_users=1, can_see_schedules=1`, [role]);
             });
-            
+
             db.run('INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)', ["version", "121"], () => {
                 console.log("Migration to v121 complete: Added expanded role permissions and ensured admin access.");
             });
@@ -1225,14 +1226,14 @@ function runMigrations(fromVersion) {
         // This fixes existing company schemas where System Technician had no entry,
         // causing new company logins to only see the Dashboard.
         const fullRoles = [
-            ['CEO',                1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ['Admin',              1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ['HR',                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ['System Technician',  1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ['Supervisor',         0, 0, 1, 0, 0, 0, 0, 0, 0, 1],
-            ['Cashier',            1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            ['Security',           0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-            ['Receptionist',       1, 0, 1, 0, 0, 1, 0, 0, 0, 0]
+            ['CEO', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['Admin', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['HR', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['System Technician', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['Supervisor', 0, 0, 1, 0, 0, 0, 0, 0, 0, 1],
+            ['Cashier', 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+            ['Security', 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+            ['Receptionist', 1, 0, 1, 0, 0, 1, 0, 0, 0, 0]
         ];
         let pending = fullRoles.length;
         fullRoles.forEach(r => {
@@ -1483,11 +1484,11 @@ function runMigrations(fromVersion) {
         //   Supervisor = Finance Hub + Expenses (can_see_sme only) + Schedules
         // Column order: role_name, dashboard, hr, attendance, sme, pos, secretary, transport, hardware, system_users, schedules
         const v137Roles = [
-            ['CEO',        1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ['Manager',    1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ['Admin',      1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ['HR',         1, 1, 1, 0, 0, 0, 0, 0, 1, 1],
-            ['Cashier',    0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+            ['CEO', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['Manager', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['Admin', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ['HR', 1, 1, 1, 0, 0, 0, 0, 0, 1, 1],
+            ['Cashier', 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
             ['Supervisor', 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
         ];
         let pending137 = v137Roles.length;
@@ -1863,7 +1864,7 @@ function runMigrations(fromVersion) {
                     END;
                     $$ LANGUAGE plpgsql;
                 `);
-                await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+                await client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => { });
                 await client.query(`
                     CREATE TRIGGER trg_assign_receipt_no
                     BEFORE INSERT ON transactions
@@ -1938,7 +1939,7 @@ if (config.dbType === 'postgres') {
                             // Ensure low_stock_threshold column exists
                             await sc_client.query(
                                 `ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INTEGER DEFAULT 10`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             // Ensure stock_movements table exists
                             await sc_client.query(`
                                 CREATE TABLE IF NOT EXISTS stock_movements (
@@ -1953,11 +1954,11 @@ if (config.dbType === 'postgres') {
                                     performed_by TEXT,
                                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                                 )
-                            `).catch(() => {});
+                            `).catch(() => { });
                             // Ensure invoice_number column exists on pos_orders & backfill
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS invoice_number INTEGER`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(`
                                 WITH numbered AS (
                                     SELECT id, ROW_NUMBER() OVER (ORDER BY order_date ASC, id ASC) as rn
@@ -1968,41 +1969,41 @@ if (config.dbType === 'postgres') {
                                 SET invoice_number = numbered.rn
                                 FROM numbered
                                 WHERE pos_orders.id = numbered.id AND pos_orders.invoice_number IS NULL
-                            `).catch(() => {});
+                            `).catch(() => { });
                             // Ensure client_uuid column exists on pos_orders
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS client_uuid TEXT`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             // Ensure driver columns exist on deliveries
                             await sc_client.query(
                                 `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS driver_id INTEGER`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(
                                 `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS driver_name TEXT`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             // Ensure cashier_shifts end_time has no default and start_time defaults to CURRENT_TIMESTAMP
                             await sc_client.query(
                                 `ALTER TABLE cashier_shifts ALTER COLUMN end_time DROP DEFAULT`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(
                                 `ALTER TABLE cashier_shifts ALTER COLUMN start_time SET DEFAULT CURRENT_TIMESTAMP`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             // Ensure discount_amount exists on pos_orders & cashier_shifts
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(
                                 `ALTER TABLE cashier_shifts ADD COLUMN IF NOT EXISTS discount_amount REAL DEFAULT 0`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_cash_amount REAL DEFAULT 0`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_second_amount REAL DEFAULT 0`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(
                                 `ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS split_second_method TEXT DEFAULT ''`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             // Ensure Supervisor has full admin privileges in roles_config
                             await sc_client.query(`
                                 UPDATE roles_config SET
@@ -2010,11 +2011,11 @@ if (config.dbType === 'postgres') {
                                     can_see_pos=1, can_see_secretary=1, can_see_transport=1, can_see_hardware=1,
                                     can_see_system_users=1, can_see_schedules=1
                                 WHERE LOWER(role_name) = 'supervisor'
-                            `).catch(() => {});
+                            `).catch(() => { });
                             // Ensure receipt_no column exists on transactions & backfill & attach trigger
                             await sc_client.query(
                                 `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_no INTEGER`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             await sc_client.query(`
                                 WITH numbered AS (
                                     SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) as rn
@@ -2024,9 +2025,9 @@ if (config.dbType === 'postgres') {
                                 SET receipt_no = numbered.rn
                                 FROM numbered
                                 WHERE transactions.id = numbered.id AND transactions.receipt_no IS NULL
-                            `).catch(() => {});
+                            `).catch(() => { });
                             // Create a per-schema sequence for receipt_no — atomic & concurrent-safe (do NOT overwrite running/recycled sequence)
-                            await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => {});
+                            await sc_client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => { });
                             await sc_client.query(`
                                 CREATE OR REPLACE FUNCTION assign_receipt_no()
                                 RETURNS TRIGGER AS $$
@@ -2041,17 +2042,17 @@ if (config.dbType === 'postgres') {
                                     RETURN NEW;
                                 END;
                                 $$ LANGUAGE plpgsql;
-                            `).catch(() => {});
-                            await sc_client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => {});
+                            `).catch(() => { });
+                            await sc_client.query(`DROP TRIGGER IF EXISTS trg_assign_receipt_no ON transactions`).catch(() => { });
                             await sc_client.query(`
                                 CREATE TRIGGER trg_assign_receipt_no
                                 BEFORE INSERT ON transactions
                                 FOR EACH ROW
                                 EXECUTE FUNCTION assign_receipt_no()
-                            `).catch(() => {});
+                            `).catch(() => { });
                             await sc_client.query(
                                 `CREATE INDEX IF NOT EXISTS idx_transactions_receipt_no ON transactions(receipt_no)`
-                            ).catch(() => {});
+                            ).catch(() => { });
                             console.log(`[SAFETY PATCH] Schema "${sc}" — low_stock_threshold, stock_movements, invoice_number, discount_amount, client_uuid, receipt_no & shifts schema OK.`);
                         } catch (patchErr) {
                             if (!patchErr.message.includes('already exists') && !patchErr.message.includes('duplicate column')) {
