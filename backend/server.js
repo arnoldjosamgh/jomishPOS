@@ -3666,12 +3666,14 @@ async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
         )
       `, [INV_PURGE_CUTOFF]);
 
-      // 5. Reset invoice_no_seq to start afresh at 1 (INV 0001)
+      // 5. Reset invoice_no_seq to start afresh after remaining orders
       if (db.pool) {
-        await q("SELECT setval('invoice_no_seq', 1, false)").catch(() => {});
+        const maxRemaining = await q("SELECT COALESCE(MAX(invoice_number), 0) AS max_inv FROM pos_orders");
+        const nextStart = ((maxRemaining.rows && maxRemaining.rows[0]) ? parseInt(maxRemaining.rows[0].max_inv, 10) : 0) + 1;
+        await q(`SELECT setval('invoice_no_seq', ${nextStart}, false)`).catch(() => {});
       }
 
-      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset invoice numbering to INV 0001!`);
+      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset invoice numbering sequence!`);
     }, 3, schema);
 
     // 6. Bust cache & notify clients
@@ -4447,18 +4449,22 @@ app.post("/api/pos/cash-in", authenticateToken, (req, res) => {
 });
 
 // Get order items by pos_order_id (used when cashier collects payment for a pending invoice)
+// FIX: Wrap in ALS context so the correct tenant schema is used for the db.all() callback.
 app.get("/api/pos_orders/:id/items", authenticateToken, (req, res) => {
   const orderId = parseInt(req.params.id, 10);
   if (isNaN(orderId)) return res.json([]);
-  db.all(
-    `SELECT oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
-     FROM order_items oi WHERE oi.pos_order_id = ?`,
-    [orderId],
-    (err, items) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(items || []);
-    }
-  );
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    db.all(
+      `SELECT oi.product_id as id, oi.product_name as name, oi.qty, oi.price, oi.total
+       FROM order_items oi WHERE oi.pos_order_id = ?`,
+      [orderId],
+      (err, items) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(items || []);
+      }
+    );
+  });
 });
 
 // Update items of a pending POS order (Cashier edit)
@@ -4635,20 +4641,24 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
   });
 });
 
+// FIX: Wrap in ALS context so the correct tenant schema is used for the db.get() callback.
 app.get("/api/pos_orders/:id", authenticateToken, (req, res) => {
-  db.get(
-    `SELECT p.*, COALESCE(p.served_by, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.first_name WHEN LOWER(ec.role) = 'waiter' THEN ec.first_name ELSE NULL END) as served_by
-     FROM pos_orders p
-     LEFT JOIN employees ew ON p.waiter_id = ew.id
-     LEFT JOIN employees ec ON p.cashier_id = ec.id
-     WHERE p.id = ?`,
-    [req.params.id],
-    (err, order) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!order) return res.status(404).json({ error: "Order not found" });
-      res.json(order);
-    }
-  );
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    db.get(
+      `SELECT p.*, COALESCE(p.served_by, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.first_name WHEN LOWER(ec.role) = 'waiter' THEN ec.first_name ELSE NULL END) as served_by
+       FROM pos_orders p
+       LEFT JOIN employees ew ON p.waiter_id = ew.id
+       LEFT JOIN employees ec ON p.cashier_id = ec.id
+       WHERE p.id = ?`,
+      [req.params.id],
+      (err, order) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!order) return res.status(404).json({ error: "Order not found" });
+        res.json(order);
+      }
+    );
+  });
 });
 
 app.get("/api/pos_orders/tx/:transaction_id", authenticateToken, (req, res) => {
@@ -4965,34 +4975,38 @@ app.delete("/api/credits/:id", authenticateToken, (req, res) => {
   });
 });
 
+// FIX: Wrap in ALS context so the correct tenant schema is used for credit clients list.
 app.get("/api/buyers", authenticateToken, (req, res) => {
   // Return one row per distinct credit client, with their latest phone number
   // and outstanding balance, so the POS can pre-fill phone and show debt context.
-  db.all(
-    `
-        SELECT
-          buyer_name                          AS name,
-          MAX(buyer_phone)                    AS phone,
-          COALESCE(SUM(balance), 0)           AS outstanding_balance
-        FROM credit_records
-        WHERE buyer_name IS NOT NULL AND buyer_name != ''
-        GROUP BY buyer_name
-        ORDER BY buyer_name ASC
-    `,
-    [],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      // Keep legacy `buyers` array for any older callers, plus new rich `clients` array
-      res.json({
-        buyers:  rows.map((r) => r.name),
-        clients: rows.map((r) => ({
-          name:    r.name,
-          phone:   r.phone || "",
-          balance: Math.round(r.outstanding_balance || 0),
-        })),
-      });
-    },
-  );
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    db.all(
+      `
+          SELECT
+            buyer_name                          AS name,
+            MAX(buyer_phone)                    AS phone,
+            COALESCE(SUM(balance), 0)           AS outstanding_balance
+          FROM credit_records
+          WHERE buyer_name IS NOT NULL AND buyer_name != ''
+          GROUP BY buyer_name
+          ORDER BY buyer_name ASC
+      `,
+      [],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        // Keep legacy `buyers` array for any older callers, plus new rich `clients` array
+        res.json({
+          buyers:  rows.map((r) => r.name),
+          clients: rows.map((r) => ({
+            name:    r.name,
+            phone:   r.phone || "",
+            balance: Math.round(r.outstanding_balance || 0),
+          })),
+        });
+      },
+    );
+  });
 });
 
 // 6. Schedules

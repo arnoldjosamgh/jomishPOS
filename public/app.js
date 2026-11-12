@@ -5366,8 +5366,14 @@ async function submitWaiterOrder() {
           delivery_address: "",
           served_by: (USER_NAME || localStorage.getItem("jomish_name") || "Waiter").trim().split(/\s+/)[0] || "Waiter",
         };
+        const token = localStorage.getItem("jomish_token") || "";
+        const tenantPrefix = (localStorage.getItem("jomish_prefix") || "").trim();
+        const headers = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (tenantPrefix) headers["X-Tenant-Prefix"] = tenantPrefix;
+
         await window.OfflineDB.queueMutation(`${API_URL}/checkout`, "POST", {
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(offlinePayload),
         });
         showToast("Offline: Order saved locally and will sync when online.", "warning");
