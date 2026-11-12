@@ -3544,12 +3544,14 @@ async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
       // Clear old recycled IDs
       await q("DELETE FROM recycled_transaction_ids").catch(() => {});
 
-      // 5. Reset receipt_no_seq to start back at 1 (0001)
+      // 5. Reset receipt_no_seq to start back afresh after remaining transactions
       if (db.pool) {
-        await q("SELECT setval('receipt_no_seq', 1, false)").catch(() => {});
+        const maxRemainingTx = await q("SELECT COALESCE(MAX(receipt_no), 0) AS max_rcpt FROM transactions");
+        const nextRcptStart = ((maxRemainingTx.rows && maxRemainingTx.rows[0]) ? parseInt(maxRemainingTx.rows[0].max_rcpt, 10) : 0) + 1;
+        await q(`SELECT setval('receipt_no_seq', ${nextRcptStart}, false)`).catch(() => {});
       }
 
-      console.log(`[RECYCLE] Schema "${schema}": Successfully recycled receipt numbers to start at 0001!`);
+      console.log(`[RECYCLE] Schema "${schema}": Successfully recycled receipt numbers sequence!`);
     }, 3, schema);
 
     // 6. Bust cache & notify clients
@@ -3676,7 +3678,12 @@ async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
       console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset invoice numbering sequence!`);
     }, 3, schema);
 
-    // 6. Bust cache & notify clients
+    // 6. Also check and recycle receipt numbers concurrently so RCPT and INV numbers remain synchronized
+    checkAndRecycleReceiptNumbers(schema, force).catch((e) =>
+      console.error(`[INV RECYCLE -> RCPT RECYCLE] Error in schema "${schema}":`, e.message)
+    );
+
+    // 7. Bust cache & notify clients
     emitAndBust(schema, "products", "products");
     emitAndBust(schema, "transactions", "finance_summary");
     emitToTenant(schema, "db_updated", { module: "pos" });
