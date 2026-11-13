@@ -2156,6 +2156,7 @@ function initSockets() {
         window.OfflineDB.bustCache("/deliveries").catch(() => {});
         window.OfflineDB.bustCache("/customer-invoices").catch(() => {});
         window.OfflineDB.bustCache("/pos_orders").catch(() => {});
+        window.OfflineDB.bustCache("/transactions").catch(() => {});
       }
       if (data.pos_order_id || data.transaction_id || data.pos_order_ids) {
         if (typeof removePendingOrderFromUI === "function") {
@@ -2167,6 +2168,11 @@ function initSockets() {
       if (typeof loadDeliveries === "function") loadDeliveries();
       if (typeof loadPendingCOD === "function") loadPendingCOD(true);
       if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
+      // Ensure Finance Hub transactions reflect immediately when orders are created or updated
+      if (USER_PERMISSIONS.can_see_sme || document.querySelector("#transactions-table")) {
+        loadTransactions();
+        loadDashboard();
+      }
     } else if (data.module === "products") {
       cachedProducts = []; // Bust cache so next POS scan fetches fresh data with additional_barcodes
       if (window.OfflineDB && typeof window.OfflineDB.bustCache === "function") {

@@ -540,7 +540,7 @@ app.post("/api/archive/run", authenticateToken, async (req, res) => {
       });
     });
     if (!dryRun && result.success && result.count > 0) {
-      emitAndBust("transactions", "finance_summary", "transactions_list");
+      emitAndBust(schema, "transactions", "finance_summary", "transactions_list");
     }
     res.json(result);
   } catch (e) {
@@ -1785,35 +1785,37 @@ app.post("/api/attendance/manual-out", authenticateToken, (req, res) => {
 
 // 4. SME Transactions
 app.get("/api/transactions", authenticateToken, (req, res) => {
-  const { type, limit } = req.query;
-  const whereClauses = [];
-  const params = [];
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    const { type, limit } = req.query;
+    const whereClauses = [];
+    const params = [];
 
-  if (type) {
-    const types = type.split(",").map((t) => t.trim().toUpperCase());
-    const hasCashIn = types.includes("CASH_IN") || types.includes("FLOAT_IN");
-    if (hasCashIn) {
-      whereClauses.push(`(t.type IN (${types.map(() => "?").join(",")}) OR (t.type = 'INCOME' AND (
-        LOWER(t.description) LIKE '%cash in%' OR 
-        LOWER(t.description) LIKE '%cash-in%' OR 
-        LOWER(t.description) LIKE '%float%' OR 
-        LOWER(t.description) LIKE '%drawer%' OR 
-        LOWER(t.description) LIKE '%top up%' OR 
-        LOWER(t.description) LIKE '%top-up%' OR 
-        LOWER(t.description) LIKE '%addition%'
-      )))`);
-    } else {
-      whereClauses.push(`t.type IN (${types.map(() => "?").join(",")})`);
+    if (type) {
+      const types = type.split(",").map((t) => t.trim().toUpperCase());
+      const hasCashIn = types.includes("CASH_IN") || types.includes("FLOAT_IN");
+      if (hasCashIn) {
+        whereClauses.push(`(t.type IN (${types.map(() => "?").join(",")}) OR (t.type = 'INCOME' AND (
+          LOWER(t.description) LIKE '%cash in%' OR 
+          LOWER(t.description) LIKE '%cash-in%' OR 
+          LOWER(t.description) LIKE '%float%' OR 
+          LOWER(t.description) LIKE '%drawer%' OR 
+          LOWER(t.description) LIKE '%top up%' OR 
+          LOWER(t.description) LIKE '%top-up%' OR 
+          LOWER(t.description) LIKE '%addition%'
+        )))`);
+      } else {
+        whereClauses.push(`t.type IN (${types.map(() => "?").join(",")})`);
+      }
+      params.push(...types);
     }
-    params.push(...types);
-  }
 
-  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
-  const limitSql = limit ? `LIMIT ${parseInt(limit)}` : "";
-  const receiptNoCol = "COALESCE(t.receipt_no, t.id) AS receipt_no";
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    const limitSql = limit ? `LIMIT ${parseInt(limit)}` : "";
+    const receiptNoCol = "COALESCE(t.receipt_no, t.id) AS receipt_no";
 
-  db.all(
-    `
+    db.all(
+      `
         SELECT t.*,
                po.id AS pos_order_id,
                po.invoice_number AS order_invoice_number,
@@ -1835,12 +1837,13 @@ app.get("/api/transactions", authenticateToken, (req, res) => {
         ORDER BY t.transaction_date DESC, t.id DESC
         ${limitSql}
     `,
-    params,
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ transactions: rows || [] });
-    },
-  );
+      params,
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ transactions: rows || [] });
+      },
+    );
+  });
 });
 
 app.post("/api/transactions", authenticateToken, (req, res) => {
@@ -1854,12 +1857,13 @@ app.post("/api/transactions", authenticateToken, (req, res) => {
   const dateToRecord = transaction_date
     ? new Date(transaction_date).toISOString()
     : new Date().toISOString();
+  const schema = req.tenantSchema || getSchema();
   db.run(
     "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date) VALUES (?, ?, ?, ?, ?)",
     [amount, type, description, recorded_by || req.user.id, dateToRecord],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
-      emitAndBust("transactions", "finance_summary");
+      emitAndBust(schema, "transactions", "finance_summary");
       res.json({ id: this.lastID, message: "Transaction recorded" });
     },
   );
@@ -1929,8 +1933,8 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [numericId]).catch(() => {});
     });
 
-    const currentSchema = getSchema();
-    emitAndBust("transactions", "finance_summary");
+    const currentSchema = req.tenantSchema || getSchema();
+    emitAndBust(currentSchema, "transactions", "finance_summary");
     emitToTenant(currentSchema, "db_updated", { module: "products" }); // update stock on clients
     emitToTenant(currentSchema, "db_updated", {
       module: "deliveries",
@@ -4156,12 +4160,12 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
                 "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, 'INCOME', ?, ?, ?, 'PAID')",
                 [startCash, `Opening Cash Float (Shift #${shiftId})`, cashierId, now],
                 () => {
-                  emitAndBust("transactions", "finance_summary");
+                  emitAndBust(currentSchema, "transactions", "finance_summary");
                 }
               );
             }
 
-            emitToTenant(getSchema(), "db_updated", { module: "shifts" });
+            emitToTenant(currentSchema, "db_updated", { module: "shifts" });
             res.json({
               success: true,
               shift_id: shiftId,
@@ -4438,12 +4442,13 @@ app.post("/api/pos/cash-in", authenticateToken, (req, res) => {
   const auth = authorized_by || req.user.name || "Admin";
   const desc = `Cash In | ${p} (Auth: ${auth})${notes ? " - " + notes : ""}`;
 
+  const schema = req.tenantSchema || getSchema();
   db.run(
     "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
     [numAmount, "CASH_IN", desc, req.user.id],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
-      emitAndBust("transactions", "finance_summary");
+      emitAndBust(schema, "transactions", "finance_summary");
       res.json({
         id: this.lastID,
         message: "Cash added to drawer successfully",
@@ -4701,17 +4706,19 @@ app.get("/api/pos_orders/tx/:transaction_id", authenticateToken, (req, res) => {
 });
 
 app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
-  const { start_date, end_date, cashier_id } = req.query;
-  if (!start_date || !end_date)
-    return res.status(400).json({ error: "Start and end dates required" });
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    const { start_date, end_date, cashier_id } = req.query;
+    if (!start_date || !end_date)
+      return res.status(400).json({ error: "Start and end dates required" });
 
-  // Convert user-supplied local Uganda dates (UTC+3) to ISO bounds
-  const { startIso, endIso } = getUgandaDateRangeIso(start_date, end_date);
+    // Convert user-supplied local Uganda dates (UTC+3) to ISO bounds
+    const { startIso, endIso } = getUgandaDateRangeIso(start_date, end_date);
 
-  // ── 1. POS orders: aggregate income/sales totals grouped by cashier_id
-  const posParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
-  const posFilter = cashier_id ? " AND po.cashier_id = ?" : "";
-  const posSql = `
+    // ── 1. POS orders: aggregate income/sales totals grouped by cashier_id
+    const posParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
+    const posFilter = cashier_id ? " AND po.cashier_id = ?" : "";
+    const posSql = `
     SELECT
       po.cashier_id,
       COUNT(po.id) as orders_count,
@@ -4738,10 +4745,10 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
     GROUP BY po.cashier_id
   `;
 
-  // ── 2. Transactions: expenses + manual income per cashier
-  const txParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
-  const txFilter = cashier_id ? " AND tx.recorded_by = ?" : "";
-  const txSql = `
+    // ── 2. Transactions: expenses + manual income per cashier
+    const txParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
+    const txFilter = cashier_id ? " AND tx.recorded_by = ?" : "";
+    const txSql = `
     SELECT
       tx.recorded_by as cashier_id,
       COUNT(CASE WHEN tx.type = 'EXPENSE' THEN 1 END) as expense_count,
@@ -4752,10 +4759,10 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
     GROUP BY tx.recorded_by
   `;
 
-  // ── 3. Detail: all transactions in window for the transaction log
-  const detailParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
-  const detailFilter = cashier_id ? " AND t.recorded_by = ?" : "";
-  const detailSql = `
+    // ── 3. Detail: all transactions in window for the transaction log
+    const detailParams = cashier_id ? [startIso, endIso, cashier_id] : [startIso, endIso];
+    const detailFilter = cashier_id ? " AND t.recorded_by = ?" : "";
+    const detailSql = `
     SELECT
       t.id, t.transaction_date, t.amount, t.type, t.description, t.payment_status,
       CASE WHEN t.recorded_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
@@ -4766,63 +4773,64 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
     ORDER BY t.transaction_date ASC, t.id ASC
   `;
 
-  db.all(posSql, posParams, (err, posRows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    db.all(txSql, txParams, (err2, txRows) => {
-      if (err2) return res.status(500).json({ error: err2.message });
-      db.all(detailSql, detailParams, (err3, detailRows) => {
-        if (err3) return res.status(500).json({ error: err3.message });
+    db.all(posSql, posParams, (err, posRows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      db.all(txSql, txParams, (err2, txRows) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+        db.all(detailSql, detailParams, (err3, detailRows) => {
+          if (err3) return res.status(500).json({ error: err3.message });
 
-        // Merge POS + transaction rows by cashier_id; resolve names from employees table
-        db.all("SELECT id, first_name, last_name, nickname, role FROM employees", [], (err4, emps) => {
-          const empMap = new Map((emps || []).map(e => [e.id, e]));
-          const summaryMap = new Map();
+          // Merge POS + transaction rows by cashier_id; resolve names from employees table
+          db.all("SELECT id, first_name, last_name, nickname, role FROM employees", [], (err4, emps) => {
+            const empMap = new Map((emps || []).map(e => [e.id, e]));
+            const summaryMap = new Map();
 
-          const getOrCreate = (cid) => {
-            const key = String(cid);
-            if (!summaryMap.has(key)) {
-              const emp = empMap.get(Number(cid));
-              let name = "System Technician";
-              if (Number(cid) !== 9999) {
-                name = (emp && (emp.nickname || `${emp.first_name || ""} ${emp.last_name || ""}`.trim())) || `Staff #${cid}`;
+            const getOrCreate = (cid) => {
+              const key = String(cid);
+              if (!summaryMap.has(key)) {
+                const emp = empMap.get(Number(cid));
+                let name = "System Technician";
+                if (Number(cid) !== 9999) {
+                  name = (emp && (emp.nickname || `${emp.first_name || ""} ${emp.last_name || ""}`.trim())) || `Staff #${cid}`;
+                }
+                summaryMap.set(key, {
+                  recorded_by: cid,
+                  cashier_name: name,
+                  income_count: 0,
+                  expense_count: 0,
+                  total_income: 0,
+                  total_expense: 0,
+                  cash_sales: 0,
+                  momo_sales: 0,
+                  total_sales: 0
+                });
               }
-              summaryMap.set(key, {
-                recorded_by: cid,
-                cashier_name: name,
-                income_count: 0,
-                expense_count: 0,
-                total_income: 0,
-                total_expense: 0,
-                cash_sales: 0,
-                momo_sales: 0,
-                total_sales: 0
-              });
-            }
-            return summaryMap.get(key);
-          };
+              return summaryMap.get(key);
+            };
 
-          (posRows || []).forEach(p => {
-            if (p.cashier_id == null) return;
-            const s = getOrCreate(p.cashier_id);
-            s.income_count += Number(p.income_count || 0);
-            s.total_income += Number(p.total_income || 0);
-            s.cash_sales   += Number(p.cash_sales   || 0);
-            s.momo_sales   += Number(p.momo_sales   || 0);
-            s.total_sales  += Number(p.total_sales  || 0);
+            (posRows || []).forEach(p => {
+              if (p.cashier_id == null) return;
+              const s = getOrCreate(p.cashier_id);
+              s.income_count += Number(p.income_count || 0);
+              s.total_income += Number(p.total_income || 0);
+              s.cash_sales   += Number(p.cash_sales   || 0);
+              s.momo_sales   += Number(p.momo_sales   || 0);
+              s.total_sales  += Number(p.total_sales  || 0);
+            });
+
+            (txRows || []).forEach(t => {
+              if (t.cashier_id == null) return;
+              const s = getOrCreate(t.cashier_id);
+              s.expense_count += Number(t.expense_count || 0);
+              s.total_expense += Number(t.total_expense || 0);
+              s.total_income  += Number(t.manual_income || 0);
+            });
+
+            const reports = Array.from(summaryMap.values())
+              .sort((a, b) => b.total_income - a.total_income);
+
+            res.json({ reports, transactions: detailRows || [] });
           });
-
-          (txRows || []).forEach(t => {
-            if (t.cashier_id == null) return;
-            const s = getOrCreate(t.cashier_id);
-            s.expense_count += Number(t.expense_count || 0);
-            s.total_expense += Number(t.total_expense || 0);
-            s.total_income  += Number(t.manual_income || 0);
-          });
-
-          const reports = Array.from(summaryMap.values())
-            .sort((a, b) => b.total_income - a.total_income);
-
-          res.json({ reports, transactions: detailRows || [] });
         });
       });
     });
@@ -4830,51 +4838,57 @@ app.get("/api/reports/sme-cashier", authenticateToken, (req, res) => {
 });
 
 app.get("/api/reports/cashier-shifts", authenticateToken, (req, res) => {
-  const { start_date, end_date, cashier_id } = req.query;
-  if (!start_date || !end_date)
-    return res.status(400).json({ error: "Start and end dates required" });
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    const { start_date, end_date, cashier_id } = req.query;
+    if (!start_date || !end_date)
+      return res.status(400).json({ error: "Start and end dates required" });
 
-  const { startIso, endIso } = getUgandaDateRangeIso(start_date, end_date);
+    const { startIso, endIso } = getUgandaDateRangeIso(start_date, end_date);
 
-  let sql = `
-        SELECT s.id as shift_id, s.open_time, s.close_time, s.status as shift_status,
-               CASE WHEN s.opened_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
-               (SELECT COUNT(id) FROM pos_orders WHERE cashier_id = s.opened_by AND order_date >= s.open_time AND order_date <= COALESCE(s.close_time, CURRENT_TIMESTAMP)) as total_orders,
-               (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = s.opened_by AND order_date >= s.open_time AND order_date <= COALESCE(s.close_time, CURRENT_TIMESTAMP)) as total_revenue,
-               (SELECT SUM(qty) FROM order_items oi JOIN pos_orders po ON oi.pos_order_id = po.id WHERE po.cashier_id = s.opened_by AND po.order_date >= s.open_time AND po.order_date <= COALESCE(s.close_time, CURRENT_TIMESTAMP)) as total_items_sold
-        FROM shifts s
-        LEFT JOIN employees e ON s.opened_by = e.id
-        WHERE s.open_time >= ? AND s.open_time <= ?
-    `;
-  const params = [startIso, endIso];
+    let sql = `
+          SELECT s.id as shift_id, s.open_time, s.close_time, s.status as shift_status,
+                 CASE WHEN s.opened_by = 9999 THEN 'System Technician' ELSE COALESCE(NULLIF(e.nickname,''), e.first_name || ' ' || e.last_name) END AS cashier_name,
+                 (SELECT COUNT(id) FROM pos_orders WHERE cashier_id = s.opened_by AND order_date >= s.open_time AND order_date <= COALESCE(s.close_time, CURRENT_TIMESTAMP)) as total_orders,
+                 (SELECT SUM(total_amount) FROM pos_orders WHERE cashier_id = s.opened_by AND order_date >= s.open_time AND order_date <= COALESCE(s.close_time, CURRENT_TIMESTAMP)) as total_revenue,
+                 (SELECT SUM(qty) FROM order_items oi JOIN pos_orders po ON oi.pos_order_id = po.id WHERE po.cashier_id = s.opened_by AND po.order_date >= s.open_time AND po.order_date <= COALESCE(s.close_time, CURRENT_TIMESTAMP)) as total_items_sold
+          FROM shifts s
+          LEFT JOIN employees e ON s.opened_by = e.id
+          WHERE s.open_time >= ? AND s.open_time <= ?
+      `;
+    const params = [startIso, endIso];
 
-  if (cashier_id) {
-    sql += ` AND s.opened_by = ?`;
-    params.push(cashier_id);
-  }
+    if (cashier_id) {
+      sql += ` AND s.opened_by = ?`;
+      params.push(cashier_id);
+    }
 
-  sql += ` ORDER BY s.open_time DESC`;
+    sql += ` ORDER BY s.open_time DESC`;
 
-  db.all(sql, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ shifts: rows });
+    db.all(sql, params, (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ shifts: rows });
+    });
   });
 });
 
 app.get("/api/credits", authenticateToken, (req, res) => {
-  db.all(
-    `
-        SELECT c.*, p.order_date
-        FROM credit_records c
-        LEFT JOIN pos_orders p ON c.pos_order_id = p.id
-        ORDER BY c.created_at DESC
-    `,
-    [],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ credits: rows });
-    },
-  );
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    db.all(
+      `
+          SELECT c.*, p.order_date
+          FROM credit_records c
+          LEFT JOIN pos_orders p ON c.pos_order_id = p.id
+          ORDER BY c.created_at DESC
+      `,
+      [],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ credits: rows });
+      },
+    );
+  });
 });
 
 // Record a standalone credit payment (no new order)
@@ -4931,8 +4945,9 @@ app.post("/api/credits/pay", authenticateToken, (req, res) => {
                   "[PAYMENT] Failed to log income transaction:",
                   err2.message,
                 );
-              emitAndBust("transactions", "finance_summary");
-              emitAndBust("credits", "credits");
+              const schema = req.tenantSchema || getSchema();
+              emitAndBust(schema, "transactions", "finance_summary");
+              emitAndBust(schema, "credits", "credits");
               res.json({
                 success: true,
                 message: `Payment of UGX ${paid.toLocaleString()} recorded for ${buyer_name}.`,
@@ -5427,115 +5442,117 @@ app.post("/api/settings", authenticateToken, (req, res) => {
 
 // 10. Financial Intelligence Engine
 app.get("/api/finance/summary", authenticateToken, (req, res) => {
-  const schema = getSchema();
-  const cached = getCache(schema, "finance_summary");
-  if (cached) return res.json(cached);
-  // All dates computed in EAT (East Africa Time = UTC+3) to match Uganda local time
-  const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    const cached = getCache(schema, "finance_summary");
+    if (cached) return res.json(cached);
+    // All dates computed in EAT (East Africa Time = UTC+3) to match Uganda local time
+    const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
 
-  function toEAT(val) {
-    if (!val) return "";
-    const d =
-      val instanceof Date ? val : new Date(String(val).replace(" ", "T"));
-    if (isNaN(d.getTime())) return "";
-    return new Date(d.getTime() + EAT_OFFSET_MS).toISOString().split("T")[0];
-  }
+    function toEAT(val) {
+      if (!val) return "";
+      const d =
+        val instanceof Date ? val : new Date(String(val).replace(" ", "T"));
+      if (isNaN(d.getTime())) return "";
+      return new Date(d.getTime() + EAT_OFFSET_MS).toISOString().split("T")[0];
+    }
 
-  const today = toEAT(new Date().toISOString());
-  const weekAgo = toEAT(
-    new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-  );
-  const monthStart = today.substring(0, 7) + "-01";
+    const today = toEAT(new Date().toISOString());
+    const weekAgo = toEAT(
+      new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    );
+    const monthStart = today.substring(0, 7) + "-01";
 
-  db.all(
-    "SELECT amount, type, transaction_date, payment_status FROM transactions",
-    [],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: err.message });
+    db.all(
+      "SELECT amount, type, transaction_date, payment_status FROM transactions",
+      [],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
 
-      let todayIncome = 0,
-        todayExpense = 0;
-      let weekIncome = 0,
-        weekExpense = 0;
-      let monthIncome = 0,
-        monthExpense = 0;
-      let totalIncome = 0,
-        totalExpense = 0;
+        let todayIncome = 0,
+          todayExpense = 0;
+        let weekIncome = 0,
+          weekExpense = 0;
+        let monthIncome = 0,
+          monthExpense = 0;
+        let totalIncome = 0,
+          totalExpense = 0;
 
-      rows.forEach((tx) => {
-        const txDate = toEAT(tx.transaction_date);
-        const amt = parseFloat(tx.amount) || 0;
+        rows.forEach((tx) => {
+          const txDate = toEAT(tx.transaction_date);
+          const amt = parseFloat(tx.amount) || 0;
 
-        // Only count INCOME if it is actually PAID (ignore PENDING COD/Invoices, UNPAID credit sales, and GOODS_ON_CREDIT). Cash In / Float is also income/addition.
-        const isCreditSale = tx.type === "GOODS_ON_CREDIT" ||
-          tx.payment_status === "UNPAID" ||
-          (tx.description && tx.description.toUpperCase().includes("POS SALE (CREDIT") && !tx.description.toLowerCase().includes("deposit"));
-        const isIncomePaid = (tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN") &&
-          tx.payment_status !== "PENDING" &&
-          !isCreditSale;
-        
-        if (isIncomePaid) totalIncome += amt;
-        else if (tx.type === "EXPENSE") totalExpense += amt;
+          // Only count INCOME if it is actually PAID (ignore PENDING COD/Invoices, UNPAID credit sales, and GOODS_ON_CREDIT). Cash In / Float is also income/addition.
+          const isCreditSale = tx.type === "GOODS_ON_CREDIT" ||
+            tx.payment_status === "UNPAID" ||
+            (tx.description && tx.description.toUpperCase().includes("POS SALE (CREDIT") && !tx.description.toLowerCase().includes("deposit"));
+          const isIncomePaid = (tx.type === "INCOME" || tx.type === "CASH_IN" || tx.type === "FLOAT_IN") &&
+            tx.payment_status !== "PENDING" &&
+            !isCreditSale;
+          
+          if (isIncomePaid) totalIncome += amt;
+          else if (tx.type === "EXPENSE") totalExpense += amt;
 
-        if (!txDate) return;
+          if (!txDate) return;
 
-        if (txDate === today) {
-          if (isIncomePaid) todayIncome += amt;
-          else if (tx.type === "EXPENSE") todayExpense += amt;
-        }
-        if (txDate >= weekAgo) {
-          if (isIncomePaid) weekIncome += amt;
-          else if (tx.type === "EXPENSE") weekExpense += amt;
-        }
-        if (txDate >= monthStart) {
-          if (isIncomePaid) monthIncome += amt;
-          else if (tx.type === "EXPENSE") monthExpense += amt;
-        }
-      });
+          if (txDate === today) {
+            if (isIncomePaid) todayIncome += amt;
+            else if (tx.type === "EXPENSE") todayExpense += amt;
+          }
+          if (txDate >= weekAgo) {
+            if (isIncomePaid) weekIncome += amt;
+            else if (tx.type === "EXPENSE") weekExpense += amt;
+          }
+          if (txDate >= monthStart) {
+            if (isIncomePaid) monthIncome += amt;
+            else if (tx.type === "EXPENSE") monthExpense += amt;
+          }
+        });
 
-      const result = {
-        today: {
-          income: todayIncome,
-          expense: todayExpense,
-          profit: todayIncome - todayExpense,
-        },
-        week: {
-          income: weekIncome,
-          expense: weekExpense,
-          profit: weekIncome - weekExpense,
-        },
-        month: {
-          income: monthIncome,
-          expense: monthExpense,
-          profit: monthIncome - monthExpense,
-        },
-        allTime: {
-          income: totalIncome,
-          expense: totalExpense,
-          profit: totalIncome - totalExpense,
-        },
-        totalTransactions: rows.length,
-        asOf:
-          new Date(Date.now() + EAT_OFFSET_MS)
-            .toISOString()
-            .replace("T", " ")
-            .substring(0, 16) + " EAT",
-        _debug: {
-          serverToday: today,
-          serverWeekAgo: weekAgo,
-          serverMonthStart: monthStart,
-          lastFewTx: rows.slice(-5).map((tx) => ({
-            originalDate: tx.transaction_date,
-            parsedTxDate: toEAT(tx.transaction_date),
-            type: tx.type,
-            amount: tx.amount,
-          })),
-        },
-      };
-      setCache(schema, "finance_summary", result, 30); // 30s TTL
-      res.json(result);
-    },
-  );
+        const result = {
+          today: {
+            income: todayIncome,
+            expense: todayExpense,
+            profit: todayIncome - todayExpense,
+          },
+          week: {
+            income: weekIncome,
+            expense: weekExpense,
+            profit: weekIncome - weekExpense,
+          },
+          month: {
+            income: monthIncome,
+            expense: monthExpense,
+            profit: monthIncome - monthExpense,
+          },
+          allTime: {
+            income: totalIncome,
+            expense: totalExpense,
+            profit: totalIncome - totalExpense,
+          },
+          totalTransactions: rows.length,
+          asOf:
+            new Date(Date.now() + EAT_OFFSET_MS)
+              .toISOString()
+              .replace("T", " ")
+              .substring(0, 16) + " EAT",
+          _debug: {
+            serverToday: today,
+            serverWeekAgo: weekAgo,
+            serverMonthStart: monthStart,
+            lastFewTx: rows.slice(-5).map((tx) => ({
+              originalDate: tx.transaction_date,
+              parsedTxDate: toEAT(tx.transaction_date),
+              type: tx.type,
+              amount: tx.amount,
+            })),
+          },
+        };
+        setCache(schema, "finance_summary", result, 30); // 30s TTL
+        res.json(result);
+      },
+    );
+  });
 });
 
 // 11. Employee Performance Notes
@@ -7191,7 +7208,8 @@ app.post("/api/payroll", authenticateToken, (req, res) => {
                   .status(500)
                   .json({ error: "Failed to record payroll" });
 
-              emitAndBust("transactions", "finance_summary");
+              const schema = req.tenantSchema || getSchema();
+              emitAndBust(schema, "transactions", "finance_summary");
               res.json({
                 success: true,
                 message: "Payroll processed",
@@ -7336,40 +7354,43 @@ app.get("/api/deliveries/pending-cod", authenticateToken, async (req, res) => {
 
 // Customer Invoices API (Unpaid invoices moved to Financial Tab — Supervisor, CEO, Admin only)
 app.get("/api/customer-invoices", authenticateToken, (req, res) => {
-  const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-  const isAllowed = ["CEO", "SUPERVISOR", "ADMIN", "MANAGER", "TECH"].includes(role) || req.user.name === "System Technician";
-  if (!isAllowed) {
-    return res.status(403).json({ error: "Access denied. Only Supervisor and CEO can access Customer Invoices." });
-  }
+  const schema = req.tenantSchema || getSchema();
+  asyncLocalStorage.run(schema, () => {
+    const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
+    const isAllowed = ["CEO", "SUPERVISOR", "ADMIN", "MANAGER", "TECH"].includes(role) || req.user.name === "System Technician";
+    if (!isAllowed) {
+      return res.status(403).json({ error: "Access denied. Only Supervisor and CEO can access Customer Invoices." });
+    }
 
-  // Only show pending invoices from the last 30 days — anything older is a stale/orphaned record
-  const cutoff30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Only show pending invoices from the last 30 days — anything older is a stale/orphaned record
+    const cutoff30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const sql = `
-        SELECT 
-            p.id as pos_order_id,
-            COALESCE(p.buyer_name, 'Customer') as client_name, 
-            COALESCE(p.buyer_phone, '') as client_phone, 
-            p.id as order_id, 
-            p.total_amount, 
-            p.transaction_id, 
-            p.invoice_number,
-            t.payment_status,
-            t.transaction_date,
-            p.order_date,
-            COALESCE(p.served_by, ew.first_name, ec.first_name, 'Cashier') as served_by
-        FROM pos_orders p
-        JOIN transactions t ON p.transaction_id = t.id
-        LEFT JOIN employees ew ON p.waiter_id = ew.id
-        LEFT JOIN employees ec ON p.cashier_id = ec.id
-        WHERE p.payment_method IN ('INVOICE', 'COD') AND t.payment_status = 'PENDING'
-          AND t.transaction_date >= ?
-          AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
-        ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC
-  `;
-  db.all(sql, [cutoff30Days], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows || []);
+    const sql = `
+          SELECT 
+              p.id as pos_order_id,
+              COALESCE(p.buyer_name, 'Customer') as client_name, 
+              COALESCE(p.buyer_phone, '') as client_phone, 
+              p.id as order_id, 
+              p.total_amount, 
+              p.transaction_id, 
+              p.invoice_number,
+              t.payment_status,
+              t.transaction_date,
+              p.order_date,
+              COALESCE(p.served_by, ew.first_name, ec.first_name, 'Cashier') as served_by
+          FROM pos_orders p
+          JOIN transactions t ON p.transaction_id = t.id
+          LEFT JOIN employees ew ON p.waiter_id = ew.id
+          LEFT JOIN employees ec ON p.cashier_id = ec.id
+          WHERE p.payment_method IN ('INVOICE', 'COD') AND t.payment_status = 'PENDING'
+            AND t.transaction_date >= ?
+            AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
+          ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC
+    `;
+    db.all(sql, [cutoff30Days], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows || []);
+    });
   });
 });
 
