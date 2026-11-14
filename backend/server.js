@@ -344,14 +344,6 @@ app.get("/googlef539f58ae5281262.html", (req, res) => {
 // Serve Frontend
 app.use(express.static(path.join(APP_BASE_DIR, "public")));
 
-// ---- Barcode Auto-Assignment Engine ----
-// Barcodes derived from product ID: product 1 = 100001-100050, product 2 = 200001-200030
-// Guarantees uniqueness because product IDs are auto-incremented.
-function generateBarcodesFromId(productId, stock) {
-  const base = productId * 100000;
-  return { start: (base + 1).toString(), end: (base + stock).toString() };
-}
-
 // Multi-Tenant Context Middleware
 app.use((req, res, next) => {
   let prefix = "public"; // fallback to public/master schema
@@ -501,76 +493,6 @@ const authenticateToken = (req, res, next) => {
     });
   });
 };
-
-// ── Archive API Routes ─────────────────────────────────────────────────────
-// GET /api/archive/list — list all available PDF archives for this schema
-app.get("/api/archive/list", authenticateToken, (req, res) => {
-  try {
-    const schema = getSchema();
-    const archives = archiver.listArchives(schema);
-    res.json({ success: true, archives });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/archive/run — manually trigger archive (admin only)
-// Body: { dryRun: true/false, ageDays: 21 }
-app.post("/api/archive/run", authenticateToken, async (req, res) => {
-  try {
-    const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-    if (!["ADMIN", "SUPERADMIN", "SUPERVISOR", "OWNER"].includes(role)) {
-      return res.status(403).json({ error: "Insufficient permissions to run archive." });
-    }
-    const dryRun = req.body.dryRun === true || req.body.dryRun === "true";
-    const ageDays = parseInt(req.body.ageDays) || 21;
-    const schema = getSchema();
-    const result = await new Promise((resolve, reject) => {
-      asyncLocalStorage.run(schema, async () => {
-        try {
-          const r = await archiver.archiveOldTransactions({
-            ageDays,
-            dryRun,
-            archivedBy: req.user ? (req.user.name || req.user.username || "Admin") : "Admin"
-          });
-          resolve(r);
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-    if (!dryRun && result.success && result.count > 0) {
-      emitAndBust(schema, "transactions", "finance_summary", "transactions_list");
-    }
-    res.json(result);
-  } catch (e) {
-    console.error("[Archive API] Error:", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/archive/download/:filename — serve a PDF archive file
-app.get("/api/archive/download/:filename", authenticateToken, (req, res) => {
-  try {
-    const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-    if (!["ADMIN", "SUPERADMIN", "SUPERVISOR", "OWNER"].includes(role)) {
-      return res.status(403).json({ error: "Insufficient permissions." });
-    }
-    const filename = path.basename(req.params.filename); // prevent path traversal
-    if (!filename.endsWith(".pdf") || !filename.startsWith("archive_")) {
-      return res.status(400).json({ error: "Invalid archive filename." });
-    }
-    const filePath = path.join(archiver.ARCHIVE_DIR, filename);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: "Archive file not found." });
-    }
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    fs.createReadStream(filePath).pipe(res);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 // ==== UNIFIED API ROUTES ====
 
@@ -8054,7 +7976,8 @@ server
     });
     ensureCashierShiftsSchema();
     archiver.ensureArchiveSchema();
-    archiver.startArchiveScheduler();
+    // Background auto-archive scheduler disabled: Prevents unwanted automated deletion of orders/transactions
+    // archiver.startArchiveScheduler();
 
     // Auto-open shift on startup if closed
     db.get("SELECT status FROM shifts ORDER BY id DESC LIMIT 1", (err, row) => {

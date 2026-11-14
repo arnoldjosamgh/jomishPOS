@@ -282,19 +282,7 @@ async function archiveOldTransactions(options = {}) {
     await q(`DELETE FROM sold_barcodes WHERE transaction_id IN (${txPlaceholders})`, txIds).catch(() => {});
     await q(`DELETE FROM transactions WHERE id IN (${txPlaceholders})`, txIds);
 
-    // 3. Recycle receipt numbers: re-sequence remaining transactions from 1
-    await q(`
-      WITH numbered AS (
-        SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) as rn
-        FROM transactions
-      )
-      UPDATE transactions
-      SET receipt_no = numbered.rn
-      FROM numbered
-      WHERE transactions.id = numbered.id
-    `).catch(() => {});
-
-    // 4. Record archive entry
+    // 3. Record archive entry (never renumber remaining receipts to preserve document history)
     await q(`
       INSERT INTO transaction_archives (
         cutoff_date, transaction_count, total_income, total_expense, pdf_filename, pdf_path, archived_by
