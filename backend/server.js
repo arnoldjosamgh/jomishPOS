@@ -3370,11 +3370,11 @@ setInterval(() => {
   }
 }, 60000);
 
-// ── RECEIPT NUMBER RECYCLING AT RCPT 4000 ────────────────────────────────────
-// When receipt_no hits 4000, preserves all orders/transactions from the current/latest shift
+// ── RECEIPT NUMBER RECYCLING AT RCPT 3900 ────────────────────────────────────
+// When receipt_no hits 3900, preserves all orders/transactions from the current/latest shift
 // (and any pending/unpaid invoices/COD or active credit debts), purges older closed orders,
-// and recycles receipt_no_seq to start back at 1 (0001).
-const RCPT_RECYCLE_THRESHOLD = 4000;
+// and recycles both receipt_no_seq and invoice_no_seq to start back at 1 (0001).
+const RCPT_RECYCLE_THRESHOLD = 3900;
 // Per-schema flag so one tenant's recycle doesn't block others
 const _recyclingInProgress = {};
 
@@ -3481,14 +3481,13 @@ async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
       // Clear old recycled IDs
       await q("DELETE FROM recycled_transaction_ids").catch(() => {});
 
-      // 5. Reset receipt_no_seq to start back afresh after remaining transactions
+      // 5. Reset both receipt_no_seq and invoice_no_seq to start back afresh at 1 (0001)
       if (db.pool) {
-        const maxRemainingTx = await q("SELECT COALESCE(MAX(receipt_no), 0) AS max_rcpt FROM transactions");
-        const nextRcptStart = ((maxRemainingTx.rows && maxRemainingTx.rows[0]) ? parseInt(maxRemainingTx.rows[0].max_rcpt, 10) : 0) + 1;
-        await q(`SELECT setval('receipt_no_seq', ${nextRcptStart}, false)`).catch(() => {});
+        await q(`SELECT setval('receipt_no_seq', 1, false)`).catch(() => {});
+        await q(`SELECT setval('invoice_no_seq', 1, false)`).catch(() => {});
       }
 
-      console.log(`[RECYCLE] Schema "${schema}": Successfully recycled receipt numbers sequence!`);
+      console.log(`[RECYCLE] Schema "${schema}": Successfully recycled both receipt & invoice numbering sequences back to 0001!`);
     }, 3, schema);
 
     // 6. Bust cache & notify clients
@@ -3605,13 +3604,14 @@ async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
         await q(`DELETE FROM transactions WHERE id NOT IN (${txPlaceholders})`, keptTxIds);
       }
 
-      // 4. Reset invoice_no_seq to start afresh at 1 (0001) for subsequent orders
+      // 4. Reset both invoice_no_seq and receipt_no_seq to start afresh at 1 (0001) for subsequent orders
       // NOTE: Preserved orders keep their original invoice_number permanently — never nullify existing numbers!
       if (db.pool) {
         await q(`SELECT setval('invoice_no_seq', 1, false)`).catch(() => {});
+        await q(`SELECT setval('receipt_no_seq', 1, false)`).catch(() => {});
       }
 
-      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset invoice numbering sequence to start at INV 0001!`);
+      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset both invoice & receipt sequences to start at 0001!`);
     }, 3, schema);
 
     // 6. Also check and recycle receipt numbers concurrently so RCPT and INV numbers remain synchronized
