@@ -496,17 +496,22 @@ if (config.dbType === 'postgres') {
                         if (orphanRes.rows && orphanRes.rows.length > 0) {
                             console.log(`[AUTO-HEAL] Schema "${schemaName}": Found ${orphanRes.rows.length} orphaned pos_orders without matching transactions. Re-linking now...`);
                             for (const ord of orphanRes.rows) {
-                                const isUnpaid = ord.payment_method === 'COD' || ord.payment_method === 'INVOICE';
-                                const payStatus = isUnpaid ? 'PENDING' : 'PAID';
-                                const txType = isUnpaid ? 'GOODS_ON_CREDIT' : 'INCOME';
-                                const desc = (ord.payment_method === 'INVOICE' ? 'Invoice Sale' : 'POS Sale') + (ord.invoice_number ? ` (INV #${ord.invoice_number})` : '');
+                                // For COD/INVOICE: if the order is older than 3 days, it was definitely
+                                // already collected before the recycling bug wiped its transaction.
+                                // Only mark genuinely recent orders (within 3 days) as PENDING.
+                                const orderAge = ord.order_date ? (Date.now() - new Date(ord.order_date).getTime()) : Infinity;
+                                const isRecentUnpaid = (ord.payment_method === 'COD' || ord.payment_method === 'INVOICE') && orderAge < (3 * 24 * 60 * 60 * 1000);
+                                const payStatus = isRecentUnpaid ? 'PENDING' : 'PAID';
+                                const txType = isRecentUnpaid ? 'GOODS_ON_CREDIT' : 'INCOME';
+                                const healedMethod = (payStatus === 'PAID' && ord.payment_method === 'COD') ? 'CASH' : ord.payment_method;
+                                const desc = (ord.payment_method === 'INVOICE' ? 'Invoice Sale' : 'POS Sale') + (ord.invoice_number ? ` (INV #${ord.invoice_number})` : '') + (payStatus === 'PAID' ? ' [Auto-resolved]' : '');
                                 const insRes = await c2.query(`
                                     INSERT INTO transactions (amount, type, category, description, transaction_date, recorded_by, payment_method, payment_status)
                                     VALUES ($1, $2, 'Sales', $3, $4, $5, $6, $7)
                                     RETURNING id
-                                `, [ord.total_amount, txType, desc, ord.order_date || new Date().toISOString(), ord.cashier_id || 1, ord.payment_method || 'CASH', payStatus]);
+                                `, [ord.total_amount, txType, desc, ord.order_date || new Date().toISOString(), ord.cashier_id || 1, healedMethod || 'CASH', payStatus]);
                                 const newTxId = insRes.rows[0].id;
-                                await c2.query(`UPDATE pos_orders SET transaction_id = $1 WHERE id = $2`, [newTxId, ord.id]);
+                                await c2.query(`UPDATE pos_orders SET transaction_id = $1, payment_method = $2 WHERE id = $3`, [newTxId, healedMethod || ord.payment_method || 'CASH', ord.id]);
                             }
                             console.log(`[AUTO-HEAL] Schema "${schemaName}": Successfully healed ${orphanRes.rows.length} orphaned orders.`);
                         }

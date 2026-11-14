@@ -7096,7 +7096,8 @@ app.get("/api/deliveries/pending-cod", authenticateToken, async (req, res) => {
     // Only show pending orders from the last 30 days — anything older is a stale/orphaned record
     const cutoff30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    // The POS Pending tab only shows Waiter / COD table orders (Customer Invoices are moved to Financial Hub)
+    // The POS Pending tab ONLY shows COD (table / walk-in / waiter) orders.
+    // INVOICE orders are managed exclusively in the Finance Hub → Customer Invoices tab.
     let sql = `
           SELECT 
               p.id as pos_order_id,
@@ -7118,7 +7119,7 @@ app.get("/api/deliveries/pending-cod", authenticateToken, async (req, res) => {
           LEFT JOIN deliveries d ON d.order_id = p.id
           LEFT JOIN employees ew ON p.waiter_id = ew.id
           LEFT JOIN employees ec ON p.cashier_id = ec.id
-          WHERE p.payment_method IN ('COD', 'INVOICE')
+          WHERE p.payment_method = 'COD'
             AND COALESCE(t.payment_status, 'PENDING') = 'PENDING'
             AND COALESCE(t.transaction_date, p.order_date) >= ?
             AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
