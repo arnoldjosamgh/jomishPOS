@@ -3370,11 +3370,22 @@ setInterval(() => {
   }
 }, 60000);
 
-// ── RECEIPT NUMBER RECYCLING AT RCPT 3900 ────────────────────────────────────
-// When receipt_no hits 3900, preserves all orders/transactions from the current/latest shift
-// (and any pending/unpaid invoices/COD or active credit debts), purges older closed orders,
-// and recycles both receipt_no_seq and invoice_no_seq to start back at 1 (0001).
-const RCPT_RECYCLE_THRESHOLD = 3900;
+// ── RECEIPT NUMBER RECYCLING (RCPT 3900 INITIAL -> RCPT 2000 REGULAR) ─────────
+// Dynamic threshold:
+// If counter is in the legacy high range (>2000, e.g. currently ~3861), recycle when it hits 3900.
+// Going forward after resetting to 0001, recycle whenever receipt reaches 2000.
+// Preserves only the last 3 shifts worth of orders/transactions (plus active credit debts & pending COD/invoices),
+// purges older closed orders, and recycles both receipt_no_seq and invoice_no_seq to start back at 1 (0001).
+const RCPT_RECYCLE_INITIAL_THRESHOLD = 3900;
+const RCPT_RECYCLE_REGULAR_THRESHOLD = 2000;
+const SHIFTS_TO_KEEP = 3;
+
+function getReceiptRecycleThreshold(currentReceiptNo) {
+  return Number(currentReceiptNo) > RCPT_RECYCLE_REGULAR_THRESHOLD
+    ? RCPT_RECYCLE_INITIAL_THRESHOLD
+    : RCPT_RECYCLE_REGULAR_THRESHOLD;
+}
+
 // Per-schema flag so one tenant's recycle doesn't block others
 const _recyclingInProgress = {};
 
@@ -3400,26 +3411,29 @@ async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
         currentReceiptNo = (maxRes.rows && maxRes.rows[0]) ? parseInt(maxRes.rows[0].max_rcpt, 10) : 0;
       }
 
-      if (!force && currentReceiptNo < RCPT_RECYCLE_THRESHOLD) {
+      const activeThreshold = getReceiptRecycleThreshold(currentReceiptNo);
+      if (!force && currentReceiptNo < activeThreshold) {
         return; // Threshold not reached
       }
 
-      console.log(`[RECYCLE] Schema "${schema}": receipt_no counter (${currentReceiptNo}) reached threshold (${RCPT_RECYCLE_THRESHOLD}). Starting order cleanup & recycling...`);
+      console.log(`[RECYCLE] Schema "${schema}": receipt_no counter (${currentReceiptNo}) reached threshold (${activeThreshold}). Starting order cleanup & recycling (keeping last ${SHIFTS_TO_KEEP} shifts)...`);
 
-      // 2. Identify the latest shift in cashier_shifts
-      const shiftRes = await q("SELECT id, start_time, end_time, status FROM cashier_shifts ORDER BY id DESC LIMIT 1");
-      const latestShift = (shiftRes.rows && shiftRes.rows[0]) ? shiftRes.rows[0] : null;
+      // 2. Identify the last 3 shifts in cashier_shifts
+      const shiftRes = await q("SELECT id, start_time, end_time, status FROM cashier_shifts ORDER BY id DESC LIMIT 3");
+      const shifts = shiftRes.rows || [];
 
       let cutoffIso;
-      if (latestShift && latestShift.start_time) {
-        const sTime = latestShift.start_time;
+      if (shifts.length > 0) {
+        // Oldest shift among the kept shifts (up to 3 shifts)
+        const oldestKeptShift = shifts[shifts.length - 1];
+        const sTime = oldestKeptShift.start_time;
         cutoffIso = sTime instanceof Date ? sTime.toISOString() : new Date(sTime).toISOString();
       } else {
         const todayStr = getUgandaTodayDateString();
         cutoffIso = new Date(todayStr + "T00:00:00+03:00").toISOString();
       }
 
-      console.log(`[RECYCLE] Schema "${schema}": Keeping all orders from latest shift starting at: ${cutoffIso}`);
+      console.log(`[RECYCLE] Schema "${schema}": Keeping all orders from last ${shifts.length} shift(s) starting at: ${cutoffIso}`);
 
       // 3. Find transaction IDs to KEEP:
       // - Belongs to current/latest shift (transaction_date >= cutoffIso)
@@ -3984,7 +3998,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
       const successRes = { message: "Checkout successful!", transaction_id, receipt_no, pos_order_id, invoice_number };
       if (trimmedUuid) rememberCheckout(trimmedUuid, successRes);
 
-      if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
+      if (Number(receipt_no) >= getReceiptRecycleThreshold(receipt_no)) {
         setTimeout(() => {
           checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
         }, 500);
@@ -7472,7 +7486,7 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
         receipt_no = rnRow?.receipt_no || transactionData.transaction_id;
       } catch (_) {}
 
-      if (Number(receipt_no) >= RCPT_RECYCLE_THRESHOLD) {
+      if (Number(receipt_no) >= getReceiptRecycleThreshold(receipt_no)) {
         setTimeout(() => {
           checkAndRecycleReceiptNumbers(currentSchema).catch((e) => console.error(e));
         }, 500);
