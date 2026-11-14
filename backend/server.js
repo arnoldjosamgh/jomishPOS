@@ -5947,7 +5947,7 @@ app.post("/api/kiosk/auth", (req, res) => {
   res.json({ token, message: "Kiosk authenticated", expires_in: "24h" });
 });
 
-app.post("/api/kiosk/scan", authenticateToken, (req, res) => {
+app.post(["/api/kiosk/scan", "/api/attendance/scan"], authenticateToken, (req, res) => {
   const { identifier, device_id } = req.body;
   if (!identifier)
     return res.status(400).json({ error: "Badge/code required." });
@@ -5995,9 +5995,7 @@ app.post("/api/kiosk/scan", authenticateToken, (req, res) => {
               [emp.id, localTime, "OUT", "SUCCESS"],
               function (err) {
                 if (err) return res.status(500).json({ error: err.message });
-                db.run("UPDATE employees SET is_present = 0 WHERE id = ?", [
-                  emp.id,
-                ]);
+                db.run("UPDATE employees SET is_present = 0 WHERE id = ?", [emp.id]);
                 emitAndBust("attendance", "attendance");
                 res.json({
                   message: `Hello Clocked OUT: ${fullName}`,
@@ -6015,9 +6013,7 @@ app.post("/api/kiosk/scan", authenticateToken, (req, res) => {
               [emp.id, localTime, "IN", "SUCCESS"],
               function (err) {
                 if (err) return res.status(500).json({ error: err.message });
-                db.run("UPDATE employees SET is_present = 1 WHERE id = ?", [
-                  emp.id,
-                ]);
+                db.run("UPDATE employees SET is_present = 1 WHERE id = ?", [emp.id]);
                 emitAndBust("attendance", "attendance");
                 res.json({
                   message: `[OK] Clocked IN: ${fullName}`,
