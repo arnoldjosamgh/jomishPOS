@@ -3416,92 +3416,20 @@ async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
         return; // Threshold not reached
       }
 
-      console.log(`[RECYCLE] Schema "${schema}": receipt_no counter (${currentReceiptNo}) reached threshold (${activeThreshold}). Starting order cleanup & recycling (keeping last ${SHIFTS_TO_KEEP} shifts)...`);
-
-      // 2. Identify the last 3 shifts in cashier_shifts
-      const shiftRes = await q("SELECT id, start_time, end_time, status FROM cashier_shifts ORDER BY id DESC LIMIT 3");
-      const shifts = shiftRes.rows || [];
-
-      let cutoffIso;
-      if (shifts.length > 0) {
-        // Oldest shift among the kept shifts (up to 3 shifts)
-        const oldestKeptShift = shifts[shifts.length - 1];
-        const sTime = oldestKeptShift.start_time;
-        cutoffIso = sTime instanceof Date ? sTime.toISOString() : new Date(sTime).toISOString();
-      } else {
-        const todayStr = getUgandaTodayDateString();
-        cutoffIso = new Date(todayStr + "T00:00:00+03:00").toISOString();
-      }
-
-      console.log(`[RECYCLE] Schema "${schema}": Keeping all orders from last ${shifts.length} shift(s) starting at: ${cutoffIso}`);
-
-      // 3. Find transaction IDs to KEEP:
-      // - Belongs to current/latest shift (transaction_date >= cutoffIso)
-      // - Has pending payment (payment_status = 'PENDING')
-      // - Linked to an active credit record with an unpaid balance (cr.balance > 0)
-      const keptTxRes = await q(`
-        SELECT id FROM transactions 
-        WHERE transaction_date >= ? 
-           OR payment_status = 'PENDING'
-           OR id IN (
-             SELECT po.transaction_id FROM pos_orders po 
-             JOIN credit_records cr ON cr.pos_order_id = po.id 
-             WHERE cr.balance > 0
-           )
-      `, [cutoffIso]);
-      const keptTxIds = (keptTxRes.rows || []).map(r => r.id);
-
-      // Find pos_order IDs to KEEP:
-      // - Belongs to current/latest shift (order_date >= cutoffIso)
-      // - Linked to a kept transaction
-      // - Pending COD or INVOICE
-      // - Linked to credit record with balance > 0
-      const keptOrdersRes = await q(`
-        SELECT id FROM pos_orders 
-        WHERE order_date >= ? 
-           OR (transaction_id IS NOT NULL AND transaction_id IN (
-             SELECT id FROM transactions WHERE transaction_date >= ? OR payment_status = 'PENDING'
-           ))
-           OR payment_method IN ('COD', 'INVOICE')
-           OR id IN (SELECT pos_order_id FROM credit_records WHERE balance > 0)
-      `, [cutoffIso, cutoffIso]);
-      const keptOrderIds = (keptOrdersRes.rows || []).map(r => r.id);
-
-      console.log(`[RECYCLE] Schema "${schema}": Preserving ${keptTxIds.length} transaction(s) and ${keptOrderIds.length} order(s) from current shift.`);
-
-      // 4. Delete old records from prior closed shifts
-      if (keptOrderIds.length > 0) {
-        const orderPlaceholders = keptOrderIds.map(() => "?").join(",");
-        await q(`DELETE FROM order_items WHERE pos_order_id NOT IN (${orderPlaceholders})`, keptOrderIds);
-        // NOTE: orderPlaceholders appears twice in query (order_id AND pos_order_id checks),
-        // so keptOrderIds must be spread twice to match the total placeholder count.
-        await q(`DELETE FROM deliveries WHERE (order_id NOT IN (${orderPlaceholders}) AND (pos_order_id IS NULL OR pos_order_id NOT IN (${orderPlaceholders}))) AND status IN ('Delivered', 'Cancelled')`, [...keptOrderIds, ...keptOrderIds]);
-        await q(`DELETE FROM pos_orders WHERE id NOT IN (${orderPlaceholders})`, keptOrderIds);
-      } else {
-        await q("DELETE FROM order_items WHERE pos_order_id IN (SELECT id FROM pos_orders WHERE order_date < ?)", [cutoffIso]);
-        await q("DELETE FROM deliveries WHERE created_at < ? AND status IN ('Delivered', 'Cancelled')", [cutoffIso]);
-        await q("DELETE FROM pos_orders WHERE order_date < ?", [cutoffIso]);
-      }
-
-      if (keptTxIds.length > 0) {
-        const txPlaceholders = keptTxIds.map(() => "?").join(",");
-        await q(`DELETE FROM sold_barcodes WHERE transaction_id NOT IN (${txPlaceholders})`, keptTxIds);
-        await q(`DELETE FROM transactions WHERE id NOT IN (${txPlaceholders})`, keptTxIds);
-      } else {
-        await q("DELETE FROM sold_barcodes WHERE transaction_id IN (SELECT id FROM transactions WHERE transaction_date < ?)", [cutoffIso]);
-        await q("DELETE FROM transactions WHERE transaction_date < ?", [cutoffIso]);
-      }
+      console.log(`[RECYCLE] Schema "${schema}": receipt_no counter (${currentReceiptNo}) reached threshold (${activeThreshold}). Recycling sequences (all historical orders preserved)...`);
 
       // Clear old recycled IDs
       await q("DELETE FROM recycled_transaction_ids").catch(() => {});
 
-      // 5. Reset both receipt_no_seq and invoice_no_seq to start back afresh at 1 (0001)
+      // Non-destructive sequence recycling: Never delete orders or transactions!
+      // All historical sales, invoices, and receipts are permanently preserved.
+      // Reset both receipt_no_seq and invoice_no_seq to start back afresh at 1 (0001) for upcoming sales.
       if (db.pool) {
         await q(`SELECT setval('receipt_no_seq', 1, false)`).catch(() => {});
         await q(`SELECT setval('invoice_no_seq', 1, false)`).catch(() => {});
       }
 
-      console.log(`[RECYCLE] Schema "${schema}": Successfully recycled both receipt & invoice numbering sequences back to 0001!`);
+      console.log(`[RECYCLE] Schema "${schema}": Successfully recycled both receipt & invoice numbering sequences back to 0001 (all historical orders preserved)!`);
     }, 3, schema);
 
     // 6. Bust cache & notify clients
@@ -3551,81 +3479,17 @@ async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
         return; // Threshold not reached
       }
 
-      console.log(`[INV RECYCLE] Schema "${schema}": invoice counter (${currentInv}) reached threshold (${INV_RECYCLE_THRESHOLD}). Clearing past orders up to INV ${INV_PURGE_CUTOFF} and restarting at INV 0001...`);
+      console.log(`[INV RECYCLE] Schema "${schema}": invoice counter (${currentInv}) reached threshold (${INV_RECYCLE_THRESHOLD}). Resetting sequences (all historical orders preserved)...`);
 
-      // 2. Find pos_order IDs to KEEP:
-      // - invoice_number > INV_PURGE_CUTOFF (the last ~300 orders)
-      // - Pending COD or INVOICE (payment_status = 'PENDING')
-      // - Linked to active credit record with an unpaid balance (balance > 0)
-      const keptOrdersRes = await q(`
-        SELECT po.id FROM pos_orders po
-        LEFT JOIN transactions t ON po.transaction_id = t.id
-        LEFT JOIN credit_records cr ON cr.pos_order_id = po.id
-        WHERE po.invoice_number > ?
-           OR po.payment_method IN ('COD', 'INVOICE')
-           OR (t.payment_status = 'PENDING')
-           OR (cr.balance IS NOT NULL AND cr.balance > 0)
-      `, [INV_PURGE_CUTOFF]);
-      const keptOrderIds = (keptOrdersRes.rows || []).map(r => r.id);
-
-      // Find transaction IDs to KEEP
-      let keptTxIds = [];
-      if (keptOrderIds.length > 0) {
-        const txHolders = keptOrderIds.map(() => "?").join(",");
-        const keptTxRes = await q(`
-          SELECT id FROM transactions
-          WHERE payment_status = 'PENDING'
-             OR id IN (
-               SELECT po.transaction_id FROM pos_orders po
-               JOIN credit_records cr ON cr.pos_order_id = po.id
-               WHERE cr.balance > 0
-             )
-             OR id IN (
-               SELECT transaction_id FROM pos_orders WHERE id IN (${txHolders})
-             )
-        `, keptOrderIds);
-        keptTxIds = (keptTxRes.rows || []).map(r => r.id);
-      } else {
-        const keptTxRes = await q(`
-          SELECT id FROM transactions
-          WHERE payment_status = 'PENDING'
-             OR id IN (
-               SELECT po.transaction_id FROM pos_orders po
-               JOIN credit_records cr ON cr.pos_order_id = po.id
-               WHERE cr.balance > 0
-             )
-        `);
-        keptTxIds = (keptTxRes.rows || []).map(r => r.id);
-      }
-
-      console.log(`[INV RECYCLE] Schema "${schema}": Preserving ${keptOrderIds.length} order(s) and ${keptTxIds.length} transaction(s).`);
-
-      // 3. Delete old records with invoice_number <= INV_PURGE_CUTOFF
-      if (keptOrderIds.length > 0) {
-        const orderPlaceholders = keptOrderIds.map(() => "?").join(",");
-        await q(`DELETE FROM order_items WHERE pos_order_id NOT IN (${orderPlaceholders})`, keptOrderIds);
-        await q(`DELETE FROM deliveries WHERE (order_id NOT IN (${orderPlaceholders}) AND (pos_order_id IS NULL OR pos_order_id NOT IN (${orderPlaceholders}))) AND status IN ('Delivered', 'Cancelled')`, [...keptOrderIds, ...keptOrderIds]);
-        await q(`DELETE FROM pos_orders WHERE id NOT IN (${orderPlaceholders})`, keptOrderIds);
-      } else {
-        await q("DELETE FROM order_items WHERE pos_order_id IN (SELECT id FROM pos_orders WHERE invoice_number <= ?)", [INV_PURGE_CUTOFF]);
-        await q("DELETE FROM deliveries WHERE order_id IN (SELECT id FROM pos_orders WHERE invoice_number <= ?) AND status IN ('Delivered', 'Cancelled')", [INV_PURGE_CUTOFF]);
-        await q("DELETE FROM pos_orders WHERE invoice_number <= ?", [INV_PURGE_CUTOFF]);
-      }
-
-      if (keptTxIds.length > 0) {
-        const txPlaceholders = keptTxIds.map(() => "?").join(",");
-        await q(`DELETE FROM sold_barcodes WHERE transaction_id NOT IN (${txPlaceholders})`, keptTxIds);
-        await q(`DELETE FROM transactions WHERE id NOT IN (${txPlaceholders})`, keptTxIds);
-      }
-
-      // 4. Reset both invoice_no_seq and receipt_no_seq to start afresh at 1 (0001) for subsequent orders
-      // NOTE: Preserved orders keep their original invoice_number permanently — never nullify existing numbers!
+      // Non-destructive sequence recycling: Never delete orders or transactions!
+      // All historical sales, invoices, and receipts are permanently preserved.
+      // Reset both invoice_no_seq and receipt_no_seq to start afresh at 1 (0001) for subsequent orders
       if (db.pool) {
         await q(`SELECT setval('invoice_no_seq', 1, false)`).catch(() => {});
         await q(`SELECT setval('receipt_no_seq', 1, false)`).catch(() => {});
       }
 
-      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset both invoice & receipt sequences to start at 0001!`);
+      console.log(`[INV RECYCLE] Schema "${schema}": Successfully reset both invoice & receipt sequences to start at 0001 (all historical orders preserved)!`);
     }, 3, schema);
 
     // 6. Also check and recycle receipt numbers concurrently so RCPT and INV numbers remain synchronized
@@ -7250,12 +7114,13 @@ app.get("/api/deliveries/pending-cod", authenticateToken, async (req, res) => {
               COALESCE(p.served_by, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.first_name WHEN LOWER(ec.role) = 'waiter' THEN ec.first_name ELSE NULL END) as served_by,
               COALESCE(p.waiter_id, CASE WHEN LOWER(ew.role) = 'waiter' THEN ew.id WHEN LOWER(ec.role) = 'waiter' THEN ec.id ELSE NULL END) as waiter_id
           FROM pos_orders p
-          JOIN transactions t ON p.transaction_id = t.id
+          LEFT JOIN transactions t ON p.transaction_id = t.id
           LEFT JOIN deliveries d ON d.order_id = p.id
           LEFT JOIN employees ew ON p.waiter_id = ew.id
           LEFT JOIN employees ec ON p.cashier_id = ec.id
-          WHERE p.payment_method = 'COD' AND t.payment_status = 'PENDING'
-            AND t.transaction_date >= ?
+          WHERE p.payment_method IN ('COD', 'INVOICE')
+            AND COALESCE(t.payment_status, 'PENDING') = 'PENDING'
+            AND COALESCE(t.transaction_date, p.order_date) >= ?
             AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
     `;
     const params = [cutoff30Days];
@@ -7330,11 +7195,12 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
               p.order_date,
               COALESCE(p.served_by, ew.first_name, ec.first_name, 'Cashier') as served_by
           FROM pos_orders p
-          JOIN transactions t ON p.transaction_id = t.id
+          LEFT JOIN transactions t ON p.transaction_id = t.id
           LEFT JOIN employees ew ON p.waiter_id = ew.id
           LEFT JOIN employees ec ON p.cashier_id = ec.id
-          WHERE p.payment_method IN ('INVOICE', 'COD') AND t.payment_status = 'PENDING'
-            AND t.transaction_date >= ?
+          WHERE p.payment_method IN ('INVOICE', 'COD')
+            AND COALESCE(t.payment_status, 'PENDING') = 'PENDING'
+            AND COALESCE(t.transaction_date, p.order_date) >= ?
             AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
           ORDER BY COALESCE(p.invoice_number, p.id) DESC, p.id DESC
     `;

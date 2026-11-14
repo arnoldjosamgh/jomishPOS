@@ -168,7 +168,7 @@ function generateArchivePDF({ schema, cutoffDate, transactions, summary, busines
   y += 6;
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
-  doc.text("End of Archive Record. All transactions listed above have been permanently verified, logged, and removed from active database storage to optimize performance.", margin, y);
+  doc.text("End of Archive Record. All transactions listed above have been permanently verified, logged, and preserved.", margin, y);
 
   return doc.output('arraybuffer');
 }
@@ -267,22 +267,9 @@ async function archiveOldTransactions(options = {}) {
   const txIds = candidateRows.map(r => r.id);
   const posOrderIds = candidateRows.map(r => r.pos_order_id).filter(Boolean);
 
-  // Atomic database purge & receipt_no re-sequencing
+  // Non-destructive archive logging (never delete orders, transactions, or deliveries!)
   await db.withTransaction(async (q) => {
-    // 1. Delete order_items
-    if (posOrderIds.length > 0) {
-      const placeholders = posOrderIds.map(() => '?').join(',');
-      await q(`DELETE FROM order_items WHERE pos_order_id IN (${placeholders})`, posOrderIds);
-      await q(`DELETE FROM pos_orders WHERE id IN (${placeholders})`, posOrderIds);
-      await q(`DELETE FROM deliveries WHERE order_id IN (${placeholders})`, posOrderIds);
-    }
-
-    // 2. Delete sold_barcodes & transactions
-    const txPlaceholders = txIds.map(() => '?').join(',');
-    await q(`DELETE FROM sold_barcodes WHERE transaction_id IN (${txPlaceholders})`, txIds).catch(() => {});
-    await q(`DELETE FROM transactions WHERE id IN (${txPlaceholders})`, txIds);
-
-    // 3. Record archive entry (never renumber remaining receipts to preserve document history)
+    // 3. Record archive entry (preserves full historical transaction and order records in active database)
     await q(`
       INSERT INTO transaction_archives (
         cutoff_date, transaction_count, total_income, total_expense, pdf_filename, pdf_path, archived_by

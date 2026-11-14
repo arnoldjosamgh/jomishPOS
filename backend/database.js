@@ -484,6 +484,35 @@ if (config.dbType === 'postgres') {
                     `).catch(() => { });
 
                     console.log(`[MIGRATE] Schema "${schemaName}" tables, receipt_no & invoice_no sequences verified OK.`);
+
+                    // Auto-heal: Ensure any pos_orders lacking a matching transaction record are auto-healed and re-linked
+                    try {
+                        const orphanRes = await c2.query(`
+                            SELECT p.id, p.total_amount, p.cashier_id, p.order_date, p.payment_method, p.buyer_name, p.invoice_number
+                            FROM pos_orders p
+                            LEFT JOIN transactions t ON p.transaction_id = t.id
+                            WHERE t.id IS NULL
+                        `);
+                        if (orphanRes.rows && orphanRes.rows.length > 0) {
+                            console.log(`[AUTO-HEAL] Schema "${schemaName}": Found ${orphanRes.rows.length} orphaned pos_orders without matching transactions. Re-linking now...`);
+                            for (const ord of orphanRes.rows) {
+                                const isUnpaid = ord.payment_method === 'COD' || ord.payment_method === 'INVOICE';
+                                const payStatus = isUnpaid ? 'PENDING' : 'PAID';
+                                const txType = isUnpaid ? 'GOODS_ON_CREDIT' : 'INCOME';
+                                const desc = (ord.payment_method === 'INVOICE' ? 'Invoice Sale' : 'POS Sale') + (ord.invoice_number ? ` (INV #${ord.invoice_number})` : '');
+                                const insRes = await c2.query(`
+                                    INSERT INTO transactions (amount, type, category, description, transaction_date, recorded_by, payment_method, payment_status)
+                                    VALUES ($1, $2, 'Sales', $3, $4, $5, $6, $7)
+                                    RETURNING id
+                                `, [ord.total_amount, txType, desc, ord.order_date || new Date().toISOString(), ord.cashier_id || 1, ord.payment_method || 'CASH', payStatus]);
+                                const newTxId = insRes.rows[0].id;
+                                await c2.query(`UPDATE pos_orders SET transaction_id = $1 WHERE id = $2`, [newTxId, ord.id]);
+                            }
+                            console.log(`[AUTO-HEAL] Schema "${schemaName}": Successfully healed ${orphanRes.rows.length} orphaned orders.`);
+                        }
+                    } catch (healErr) {
+                        console.warn(`[AUTO-HEAL] Schema "${schemaName}" check error:`, healErr.message);
+                    }
                 } catch (e) {
                     c2Err = e;
                     console.error(`[MIGRATE] Failed to migrate "${schemaName}":`, e.message);
