@@ -334,7 +334,7 @@ if (config.dbType === 'postgres') {
                 await client.query(translateSql(sql));
             }
 
-            // Guarantee atomic receipt_no and invoice_no sequences, resilient trigger function, and trigger
+            // Guarantee atomic receipt_no and invoice_no sequences, resilient trigger functions, and triggers
             await client.query(`CREATE SEQUENCE IF NOT EXISTS receipt_no_seq START WITH 1`).catch(() => { });
             await client.query(`CREATE SEQUENCE IF NOT EXISTS invoice_no_seq START WITH 1`).catch(() => { });
             await client.query(`
@@ -358,6 +358,29 @@ if (config.dbType === 'postgres') {
                 BEFORE INSERT ON transactions
                 FOR EACH ROW
                 EXECUTE FUNCTION assign_receipt_no()
+            `).catch(() => { });
+
+            await client.query(`
+                CREATE OR REPLACE FUNCTION assign_invoice_number()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    IF NEW.invoice_number IS NULL THEN
+                        BEGIN
+                            NEW.invoice_number := nextval('invoice_no_seq');
+                        EXCEPTION WHEN OTHERS THEN
+                            SELECT COALESCE(MAX(invoice_number), 0) + 1 INTO NEW.invoice_number FROM pos_orders;
+                        END;
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+            `).catch(() => { });
+            await client.query(`DROP TRIGGER IF EXISTS trg_assign_invoice_number ON pos_orders`).catch(() => { });
+            await client.query(`
+                CREATE TRIGGER trg_assign_invoice_number
+                BEFORE INSERT ON pos_orders
+                FOR EACH ROW
+                EXECUTE FUNCTION assign_invoice_number()
             `).catch(() => { });
 
             // Run seed data / migrations in this new schema
@@ -434,7 +457,33 @@ if (config.dbType === 'postgres') {
                         EXECUTE FUNCTION assign_receipt_no()
                     `).catch(() => { });
 
-                    console.log(`[MIGRATE] Schema "${schemaName}" tables & receipt_no sequence verified OK.`);
+                    // Guarantee invoice_number sequence and resilient trigger on pos_orders (never overwrite running/recycled sequence)
+                    await c2.query(`ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS invoice_number INTEGER`).catch(() => { });
+                    await c2.query(`CREATE SEQUENCE IF NOT EXISTS invoice_no_seq START WITH 1`).catch(() => { });
+                    await c2.query(`
+                        CREATE OR REPLACE FUNCTION assign_invoice_number()
+                        RETURNS TRIGGER AS $$
+                        BEGIN
+                            IF NEW.invoice_number IS NULL THEN
+                                BEGIN
+                                    NEW.invoice_number := nextval('invoice_no_seq');
+                                EXCEPTION WHEN OTHERS THEN
+                                    SELECT COALESCE(MAX(invoice_number), 0) + 1 INTO NEW.invoice_number FROM pos_orders;
+                                END;
+                            END IF;
+                            RETURN NEW;
+                        END;
+                        $$ LANGUAGE plpgsql;
+                    `).catch(() => { });
+                    await c2.query(`DROP TRIGGER IF EXISTS trg_assign_invoice_number ON pos_orders`).catch(() => { });
+                    await c2.query(`
+                        CREATE TRIGGER trg_assign_invoice_number
+                        BEFORE INSERT ON pos_orders
+                        FOR EACH ROW
+                        EXECUTE FUNCTION assign_invoice_number()
+                    `).catch(() => { });
+
+                    console.log(`[MIGRATE] Schema "${schemaName}" tables, receipt_no & invoice_no sequences verified OK.`);
                 } catch (e) {
                     c2Err = e;
                     console.error(`[MIGRATE] Failed to migrate "${schemaName}":`, e.message);

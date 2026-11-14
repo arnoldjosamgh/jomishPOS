@@ -5313,8 +5313,8 @@ async function submitWaiterOrder() {
     if (res.ok) {
       const data = await res.json();
       // Use invoice_number as the single consistent order number across all prints
-      const rawOrderNo = data.invoice_number || data.pos_order_id || data.receipt_no || data.transaction_id || "";
-      const invLabel = formatDocNo("INV", rawOrderNo);
+      const rawOrderNo = data.invoice_number || (data.offlineQueued ? `OFFLINE-${String(data.id || Date.now()).slice(-4)}` : (data.pos_order_id || data.receipt_no || ""));
+      const invLabel = String(rawOrderNo).startsWith("OFFLINE-") ? rawOrderNo : formatDocNo("INV", rawOrderNo);
       showToast(`Order ${invLabel} sent to kitchen — Served by ${waiterFirstName}`, "success");
 
       // Print ONLY the kitchen token for waiter

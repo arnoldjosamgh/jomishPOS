@@ -3463,15 +3463,26 @@ async function checkAndRecycleReceiptNumbers(targetSchema, force = false) {
   _recyclingInProgress[schema] = true;
   try {
     await db.withTransaction(async (q) => {
-      // 1. Check max receipt_no in this tenant schema
-      const maxRes = await q("SELECT COALESCE(MAX(receipt_no), 0) AS max_rcpt FROM transactions");
-      const maxReceiptNo = (maxRes.rows && maxRes.rows[0]) ? parseInt(maxRes.rows[0].max_rcpt, 10) : 0;
+      // 1. Check current receipt counter in this tenant schema
+      let currentReceiptNo = 0;
+      if (db.pool) {
+        try {
+          const seqRes = await q("SELECT last_value FROM receipt_no_seq");
+          if (seqRes.rows && seqRes.rows[0]) {
+            currentReceiptNo = parseInt(seqRes.rows[0].last_value, 10);
+          }
+        } catch (_) {}
+      }
+      if (!currentReceiptNo) {
+        const maxRes = await q("SELECT COALESCE(MAX(receipt_no), 0) AS max_rcpt FROM transactions");
+        currentReceiptNo = (maxRes.rows && maxRes.rows[0]) ? parseInt(maxRes.rows[0].max_rcpt, 10) : 0;
+      }
 
-      if (!force && maxReceiptNo < RCPT_RECYCLE_THRESHOLD) {
+      if (!force && currentReceiptNo < RCPT_RECYCLE_THRESHOLD) {
         return; // Threshold not reached
       }
 
-      console.log(`[RECYCLE] Schema "${schema}": receipt_no (${maxReceiptNo}) reached threshold (${RCPT_RECYCLE_THRESHOLD}). Starting order cleanup & recycling...`);
+      console.log(`[RECYCLE] Schema "${schema}": receipt_no counter (${currentReceiptNo}) reached threshold (${RCPT_RECYCLE_THRESHOLD}). Starting order cleanup & recycling...`);
 
       // 2. Identify the latest shift in cashier_shifts
       const shiftRes = await q("SELECT id, start_time, end_time, status FROM cashier_shifts ORDER BY id DESC LIMIT 1");
@@ -3586,15 +3597,26 @@ async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
   _invRecyclingInProgress[schema] = true;
   try {
     await db.withTransaction(async (q) => {
-      // 1. Check max invoice_number in this tenant schema
-      const maxRes = await q("SELECT COALESCE(MAX(invoice_number), 0) AS max_inv FROM pos_orders");
-      const maxInv = (maxRes.rows && maxRes.rows[0]) ? parseInt(maxRes.rows[0].max_inv, 10) : 0;
+      // 1. Check current invoice counter in this tenant schema
+      let currentInv = 0;
+      if (db.pool) {
+        try {
+          const seqRes = await q("SELECT last_value FROM invoice_no_seq");
+          if (seqRes.rows && seqRes.rows[0]) {
+            currentInv = parseInt(seqRes.rows[0].last_value, 10);
+          }
+        } catch (_) {}
+      }
+      if (!currentInv) {
+        const maxRes = await q("SELECT COALESCE(MAX(invoice_number), 0) AS max_inv FROM pos_orders");
+        currentInv = (maxRes.rows && maxRes.rows[0]) ? parseInt(maxRes.rows[0].max_inv, 10) : 0;
+      }
 
-      if (!force && maxInv < INV_RECYCLE_THRESHOLD) {
+      if (!force && currentInv < INV_RECYCLE_THRESHOLD) {
         return; // Threshold not reached
       }
 
-      console.log(`[INV RECYCLE] Schema "${schema}": invoice_number (${maxInv}) reached threshold (${INV_RECYCLE_THRESHOLD}). Clearing past orders up to INV ${INV_PURGE_CUTOFF} and restarting at INV 0001...`);
+      console.log(`[INV RECYCLE] Schema "${schema}": invoice counter (${currentInv}) reached threshold (${INV_RECYCLE_THRESHOLD}). Clearing past orders up to INV ${INV_PURGE_CUTOFF} and restarting at INV 0001...`);
 
       // 2. Find pos_order IDs to KEEP:
       // - invoice_number > INV_PURGE_CUTOFF (the last ~300 orders)
@@ -3661,25 +3683,13 @@ async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
         await q(`DELETE FROM transactions WHERE id NOT IN (${txPlaceholders})`, keptTxIds);
       }
 
-      // 4. Clear invoice_number on completed/paid orders so MAX() query in SQLite/fallback also resets
-      await q(`
-        UPDATE pos_orders 
-        SET invoice_number = NULL 
-        WHERE id IN (
-          SELECT po.id FROM pos_orders po 
-          LEFT JOIN transactions t ON po.transaction_id = t.id 
-          WHERE (t.payment_status IS NULL OR t.payment_status != 'PENDING') AND po.invoice_number > ?
-        )
-      `, [INV_PURGE_CUTOFF]);
-
-      // 5. Reset invoice_no_seq to start afresh after remaining orders
+      // 4. Reset invoice_no_seq to start afresh at 1 (0001) for subsequent orders
+      // NOTE: Preserved orders keep their original invoice_number permanently — never nullify existing numbers!
       if (db.pool) {
-        const maxRemaining = await q("SELECT COALESCE(MAX(invoice_number), 0) AS max_inv FROM pos_orders");
-        const nextStart = ((maxRemaining.rows && maxRemaining.rows[0]) ? parseInt(maxRemaining.rows[0].max_inv, 10) : 0) + 1;
-        await q(`SELECT setval('invoice_no_seq', ${nextStart}, false)`).catch(() => {});
+        await q(`SELECT setval('invoice_no_seq', 1, false)`).catch(() => {});
       }
 
-      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset invoice numbering sequence!`);
+      console.log(`[INV RECYCLE] Schema "${schema}": Successfully cleared past orders up to INV ${INV_PURGE_CUTOFF} and reset invoice numbering sequence to start at INV 0001!`);
     }, 3, schema);
 
     // 6. Also check and recycle receipt numbers concurrently so RCPT and INV numbers remain synchronized
@@ -3922,8 +3932,8 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         // For DISCOUNT, the effective total for the order is whatever was inserted/paid
         const effectiveOrderTotal = payment_method === "DISCOUNT" ? paid : total_amount;
 
-        let invoice_number = null;
-        if (effectivePaymentMethod === "COD" || effectivePaymentMethod === "INVOICE") {
+        let invoice_number = req.body.invoice_number ? parseInt(req.body.invoice_number, 10) : null;
+        if (!invoice_number) {
           if (isPg) {
             try {
               const invSeqRes = await q("SELECT nextval('invoice_no_seq') AS next_inv");
@@ -3938,11 +3948,20 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
           }
         }
 
-        const orderResult = await q(
-          "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid, split_cash_amount, split_second_amount, split_second_method, order_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid, split_cash_amount, split_second_amount, split_second_method, now]
-        );
-        const pos_order_id = orderResult.lastID;
+        let orderResult;
+        if (isPg) {
+          orderResult = await q(
+            "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid, split_cash_amount, split_second_amount, split_second_method, order_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, invoice_number",
+            [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid, split_cash_amount, split_second_amount, split_second_method, now]
+          );
+        } else {
+          orderResult = await q(
+            "INSERT INTO pos_orders (cashier_id, total_amount, transaction_id, payment_method, amount_paid, buyer_name, buyer_phone, served_by, waiter_id, invoice_number, discount_amount, client_uuid, split_cash_amount, split_second_amount, split_second_method, order_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [cashier_id, effectiveOrderTotal, transaction_id, effectivePaymentMethod, paid, buyer_name || null, buyer_phone || null, effectiveServedBy || null, effectiveWaiterId || null, invoice_number, discount_amount, trimmedUuid, split_cash_amount, split_second_amount, split_second_method, now]
+          );
+        }
+        const pos_order_id = (orderResult.rows && orderResult.rows[0] && orderResult.rows[0].id) || orderResult.lastID;
+        const assignedInvoiceNumber = (orderResult.rows && orderResult.rows[0] && orderResult.rows[0].invoice_number) || invoice_number;
 
         if (payment_method === "SPLIT" && split_second_method === "CREDIT" && split_second_amount > 0) {
           await q(
@@ -4011,7 +4030,7 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
           );
         }
 
-        return { transaction_id, pos_order_id, invoice_number, receipt_no: nextReceiptNo, already_done: false };
+        return { transaction_id, pos_order_id, invoice_number: assignedInvoiceNumber, receipt_no: nextReceiptNo, already_done: false };
       }, 3, currentSchema);
 
       if (already_done) {
@@ -7439,6 +7458,22 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
           throw new Error("Order not found");
         }
         const row = rowRes.rows[0];
+        // Ensure order has a valid immutable invoice_number
+        if (!row.invoice_number) {
+          let assignedInv = null;
+          if (db.pool) {
+            try {
+              const invSeqRes = await q("SELECT nextval('invoice_no_seq') AS next_inv");
+              assignedInv = (invSeqRes.rows && invSeqRes.rows[0]) ? parseInt(invSeqRes.rows[0].next_inv, 10) : null;
+            } catch (_) {}
+          }
+          if (!assignedInv) {
+            const invRow = await q("SELECT COALESCE(MAX(invoice_number), 0) + 1 AS next_inv FROM pos_orders");
+            assignedInv = (invRow.rows && invRow.rows[0]) ? parseInt(invRow.rows[0].next_inv, 10) : row.pos_order_id;
+          }
+          await q("UPDATE pos_orders SET invoice_number = ? WHERE id = ?", [assignedInv, row.pos_order_id]);
+          row.invoice_number = assignedInv;
+        }
         const effBuyerName = buyerNameInput || row.buyer_name || "Walk-in";
         const effBuyerPhone = buyerPhoneInput || row.buyer_phone || "";
         const totalAmt = parseFloat(row.total_amount) || 0;
@@ -7529,7 +7564,7 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
         success: true,
         transaction_id: transactionData.transaction_id,
         receipt_no,
-        invoice_number: transactionData.invoice_number || transactionData.pos_order_id,
+        invoice_number: transactionData.invoice_number,
         total_amount: transactionData.total_amount,
         client_name: transactionData.buyer_name || "Customer",
         client_location: "",
