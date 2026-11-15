@@ -3683,6 +3683,31 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
           }
         }
 
+        // ── STRICT STOCK VALIDATION: Products with limited stock CANNOT be sold if stock is 0 or insufficient ──
+        for (const item of items) {
+          const pid = item.id || item.product_id;
+          if (!pid) continue;
+          const reqQty = parseInt(item.qty, 10) || 1;
+          const pRowRes = await q("SELECT id, name, stock, track_stock FROM products WHERE id = ?", [pid]);
+          if (pRowRes.rows && pRowRes.rows.length > 0) {
+            const prod = pRowRes.rows[0];
+            const isTracked = prod.track_stock !== 0; // 0 = made-to-order (untracked), 1 = limited stock
+            if (isTracked) {
+              const currentStock = Number(prod.stock) || 0;
+              if (currentStock <= 0) {
+                const err = new Error(`Cannot sell "${prod.name}". Product is OUT OF STOCK (0 available). Please restock before selling.`);
+                err.statusCode = 400;
+                throw err;
+              }
+              if (currentStock < reqQty) {
+                const err = new Error(`Cannot sell ${reqQty} of "${prod.name}". Only ${currentStock} remaining in stock.`);
+                err.statusCode = 400;
+                throw err;
+              }
+            }
+          }
+        }
+
         const now = new Date().toISOString();
         let description;
         if (payment_method === "INVOICE") {
@@ -3774,30 +3799,46 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
         const cashierName = req.user ? (req.user.name || req.user.username || "Cashier") : "Cashier";
         const servedByLabel = effectiveServedBy || cashierName;
         for (const item of items) {
-          if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
-          // Fetch current stock BEFORE deduction using q() — must stay on the SAME
-          // transactional connection/client. Using db.get() here would grab a second
-          // pool connection and could deadlock Postgres or produce stale reads.
+          const pid = item.id || item.product_id;
+          if (!pid) continue;
+          const reqQty = parseInt(item.qty, 10) || 1;
           const stockBeforeRes = await q(
-            "SELECT stock FROM products WHERE id = ?",
-            [item.id]
+            "SELECT id, name, stock, track_stock FROM products WHERE id = ?",
+            [pid]
           );
-          const stockBeforeVal = (stockBeforeRes.rows && stockBeforeRes.rows[0]) ? stockBeforeRes.rows[0].stock : null;
-          await q(
+          if (!stockBeforeRes.rows || stockBeforeRes.rows.length === 0) continue;
+          const prod = stockBeforeRes.rows[0];
+          if (prod.track_stock === 0) continue; // Made-to-order: no stock tracking
+
+          const stockBeforeVal = Number(prod.stock) || 0;
+          if (stockBeforeVal < reqQty) {
+            const err = new Error(`Cannot sell "${prod.name}". Insufficient stock (${stockBeforeVal} available, requested ${reqQty}).`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const updateRes = await q(
             "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
-            [item.qty, item.id, item.qty]
+            [reqQty, pid, reqQty]
           );
-          const stockAfter = stockBeforeVal !== null ? Math.max(0, stockBeforeVal - item.qty) : null;
+          const affected = updateRes.rowCount !== undefined ? updateRes.rowCount : (updateRes.changes !== undefined ? updateRes.changes : 1);
+          if (affected === 0) {
+            const err = new Error(`Stock conflict for "${prod.name}". Available stock changed during checkout. Please try again.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const stockAfter = Math.max(0, stockBeforeVal - reqQty);
           // Log stock movement INSIDE the transaction (correct schema context guaranteed)
           await q(
             `INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)`,
-            [item.id, item.name, -item.qty, stockBeforeVal, stockAfter, `Sale #${transaction_id}`, servedByLabel]
+            [pid, prod.name || item.name, -reqQty, stockBeforeVal, stockAfter, `Sale #${transaction_id}`, servedByLabel]
           );
           if (item.barcodes && Array.isArray(item.barcodes)) {
             for (const bc of item.barcodes) {
               await q(
                 "INSERT OR IGNORE INTO sold_barcodes (barcode, product_id, transaction_id) VALUES (?, ?, ?)",
-                [bc, item.id, transaction_id]
+                [bc, pid, transaction_id]
               );
             }
           }
@@ -3878,7 +3919,10 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
 
     } catch (err) {
       console.error("[CHECKOUT] Error:", err.message);
-      res.status(500).json({ error: "Checkout failed: " + err.message });
+      const isUserFacingError = err.statusCode === 400 || err.message.includes("Cannot sell") || err.message.includes("OUT OF STOCK") || err.message.includes("Insufficient stock") || err.message.includes("Stock conflict");
+      const status = isUserFacingError ? 400 : 500;
+      const errorMsg = isUserFacingError ? err.message : ("Checkout failed: " + err.message);
+      res.status(status).json({ error: errorMsg });
     }
   });
 });
@@ -4415,12 +4459,23 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
               if (prod.track_stock !== 0) {
                 const stockBefore = prod.stock;
                 if (delta > 0) {
+                  const currentStock = Number(prod.stock) || 0;
+                  if (currentStock <= 0) {
+                    throw new Error(`Cannot add "${prod.name}". Product is OUT OF STOCK (0 available).`);
+                  }
+                  if (currentStock < delta) {
+                    throw new Error(`Cannot add ${delta} of "${prod.name}". Only ${currentStock} remaining in stock.`);
+                  }
                   // More items added -> deduct stock
-                  await q("UPDATE products SET stock = stock - ? WHERE id = ?", [delta, pid]);
-                  const stockAfter = Math.max(0, stockBefore - delta);
+                  const updateRes = await q("UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?", [delta, pid, delta]);
+                  const affected = updateRes.rowCount !== undefined ? updateRes.rowCount : (updateRes.changes !== undefined ? updateRes.changes : 1);
+                  if (affected === 0) {
+                    throw new Error(`Stock conflict for "${prod.name}". Only ${currentStock} remaining in stock.`);
+                  }
+                  const stockAfter = Math.max(0, currentStock - delta);
                   await q(
                     "INSERT INTO stock_movements (product_id, product_name, movement_type, qty, stock_before, stock_after, note, performed_by) VALUES (?, ?, 'SALE', ?, ?, ?, ?, ?)",
-                    [pid, prod.name || newNamesByPid[pid] || "Product", -delta, stockBefore, stockAfter, `Added to Order #${posOrderId}`, cashierName]
+                    [pid, prod.name || newNamesByPid[pid] || "Product", -delta, currentStock, stockAfter, `Added to Order #${posOrderId}`, cashierName]
                   ).catch((e) => console.error("[stock_movements] SALE edit error:", e.message));
                 } else {
                   // Items reduced -> restore stock
@@ -7602,11 +7657,16 @@ app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
           pos_order_id = orderRes.lastID;
 
           for (const item of items) {
-            if (item.track_stock === 0) continue; // Made-to-order: no stock tracking
-            await q(
-              "UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?",
-              [item.qty, item.id, item.qty]
-            );
+            const pRes = await q("SELECT id, track_stock, stock FROM products WHERE id = ?", [item.id]);
+            if (pRes.rows && pRes.rows[0]) {
+              const prod = pRes.rows[0];
+              if (prod.track_stock !== 0) {
+                await q(
+                  "UPDATE products SET stock = GREATEST(0, stock - ?) WHERE id = ?",
+                  [item.qty, item.id]
+                );
+              }
+            }
           }
 
           // Insert order items inside transaction for atomicity

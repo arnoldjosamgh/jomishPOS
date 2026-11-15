@@ -4107,7 +4107,11 @@ function _renderPOSGrid(products, searchTerm = "") {
                 </div>
             </div>
         `;
-    if (isUnlimited || prodStock > 0) card.onclick = () => addToCart(p);
+    if (isUnlimited || prodStock > 0) {
+      card.onclick = () => addToCart(p);
+    } else {
+      card.onclick = () => showToast(`Cannot add "${prodName}". Product is out of stock (0 available).`, "error");
+    }
     grid.appendChild(card);
   });
 
@@ -4221,12 +4225,20 @@ async function handleBarcodeScan(code) {
   }
 
   if (bestMatch) {
-    if (bestMatch.stock > 0) {
-      addToCart(bestMatch, code);
-      showToast(`${bestMatch.name} identified`, "success");
-    } else {
-      showToast(`Out of stock: ${bestMatch.name}`, "danger");
+    const isTracked = bestMatch.track_stock !== 0;
+    const currentStock = Number(bestMatch.stock) || 0;
+    const existing = posCart.find((i) => i.id === bestMatch.id);
+    const inCartQty = existing ? existing.qty : 0;
+    if (isTracked && currentStock <= 0) {
+      showToast(`Out of stock: ${bestMatch.name} (0 available)`, "danger");
+      return null;
     }
+    if (isTracked && inCartQty >= currentStock) {
+      showToast(`Cannot add more: ${bestMatch.name}. Only ${currentStock} in stock (already ${inCartQty} in cart)!`, "warning");
+      return null;
+    }
+    addToCart(bestMatch, code);
+    showToast(`${bestMatch.name} identified`, "success");
     return bestMatch;
   } else {
     if (code.length > 3) {
@@ -4281,39 +4293,48 @@ function addToCart(p, scannedBarcode = null) {
     });
     return;
   }
-  const existing = posCart.find((i) => i.id === p.id);
-  
-  // Calculate what the stock will be after adding 1 more to the cart
-  const currentQtyInCart = existing ? existing.qty : 0;
-  const remainingAfterAdd = p.stock - currentQtyInCart - 1;
-  const isTracked = p.track_stock !== 0;
-  
-  // Check if remaining stock is hitting the warning threshold
-  if (isTracked && remainingAfterAdd <= 10 && remainingAfterAdd >= 0) {
-    showToast(`Low Inventory Warning: Only ${remainingAfterAdd} remaining for ${p.name}`, "warning");
+
+  // Resolve current stock and track_stock from latest cachedProducts if available
+  const prod = (typeof cachedProducts !== "undefined" && Array.isArray(cachedProducts) && cachedProducts.find((x) => x.id === p.id)) || p;
+  const isTracked = prod.track_stock !== 0;
+  const currentStock = Number(prod.stock !== undefined ? prod.stock : p.stock) || 0;
+
+  if (isTracked && currentStock <= 0) {
+    showToast(`Cannot add "${p.name}". Out of stock (0 available)!`, "error");
+    return;
   }
 
+  const existing = posCart.find((i) => i.id === p.id);
+  const currentQtyInCart = existing ? existing.qty : 0;
+  const remainingAfterAdd = currentStock - currentQtyInCart - 1;
+
   if (existing) {
-    if (!isTracked || existing.qty < p.stock) {
+    if (!isTracked || existing.qty < currentStock) {
       existing.qty += 1;
       if (scannedBarcode && !isNaN(scannedBarcode)) {
         if (!existing.barcodes) existing.barcodes = [];
         existing.barcodes.push(scannedBarcode);
       }
+      if (isTracked && remainingAfterAdd <= 10 && remainingAfterAdd >= 0) {
+        showToast(`Low Inventory Warning: Only ${remainingAfterAdd} remaining for ${p.name}`, "warning");
+      }
     } else {
-      showToast(`Cannot add ${p.name}. Out of stock!`, "error");
+      showToast(`Cannot add more "${p.name}". Only ${currentStock} in stock!`, "error");
     }
   } else {
-    if (!isTracked || p.stock > 0) {
-      const item = { ...p, qty: 1 };
+    if (!isTracked || currentStock > 0) {
+      const item = { ...p, stock: currentStock, track_stock: isTracked ? 1 : 0, qty: 1 };
       if (scannedBarcode && !isNaN(scannedBarcode)) {
         item.barcodes = [scannedBarcode];
       } else {
         item.barcodes = [];
       }
       posCart.push(item);
+      if (isTracked && remainingAfterAdd <= 10 && remainingAfterAdd >= 0) {
+        showToast(`Low Inventory Warning: Only ${remainingAfterAdd} remaining for ${p.name}`, "warning");
+      }
     } else {
-      showToast(`Cannot add ${p.name}. Out of stock!`, "error");
+      showToast(`Cannot add "${p.name}". Out of stock!`, "error");
     }
   }
   renderCart();
@@ -4335,6 +4356,24 @@ function updateCartQty(id, delta) {
       return;
     }
   }
+
+  // Stock limit guard when increasing quantity
+  if (delta > 0) {
+    const prod = (typeof cachedProducts !== "undefined" && Array.isArray(cachedProducts) && cachedProducts.find((x) => x.id === id)) || item;
+    const isTracked = (prod && prod.track_stock !== undefined) ? (prod.track_stock !== 0) : (item.track_stock !== 0);
+    const currentStock = Number(prod && prod.stock !== undefined ? prod.stock : item.stock) || 0;
+    if (isTracked) {
+      if (currentStock <= 0) {
+        showToast(`Cannot add more "${item.name}". Out of stock (0 available)!`, "error");
+        return;
+      }
+      if (item.qty + delta > currentStock) {
+        showToast(`Cannot sell more than ${currentStock} of "${item.name}". Only ${currentStock} remaining in stock!`, "warning");
+        return;
+      }
+    }
+  }
+
   item.qty += delta;
   if (item.qty <= 0) {
     removeFromCart(id);
@@ -4369,8 +4408,10 @@ window.removeFromCart = function (id) {
 };
 
 function setCartQty(id, val) {
-  const qty = parseInt(val);
+  const qty = parseInt(val, 10);
   const item = posCart.find((i) => i.id === id);
+  if (!item) return;
+
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
   const isAdminOrCEO = ["CEO", "ADMIN", "TECH", "MANAGER", "SUPERVISOR"].includes(_role) || _role.includes("ADMIN") || _role.includes("TECH");
 
@@ -4385,17 +4426,34 @@ function setCartQty(id, val) {
         renderCart();
         return;
       }
-      item.qty = qty;
+    }
+  }
+
+  if (isNaN(qty) || qty <= 0) {
+    removeFromCart(id);
+    return;
+  }
+
+  // Stock limit guard on direct input
+  const prod = (typeof cachedProducts !== "undefined" && Array.isArray(cachedProducts) && cachedProducts.find((x) => x.id === id)) || item;
+  const isTracked = (prod && prod.track_stock !== undefined) ? (prod.track_stock !== 0) : (item.track_stock !== 0);
+  const currentStock = Number(prod && prod.stock !== undefined ? prod.stock : item.stock) || 0;
+  if (isTracked) {
+    if (currentStock <= 0) {
+      showToast(`Cannot sell "${item.name}". Out of stock (0 available)!`, "error");
+      removeFromCart(id);
+      return;
+    }
+    if (qty > currentStock) {
+      item.qty = currentStock;
+      showToast(`Cannot sell ${qty} of "${item.name}". Only ${currentStock} remaining in stock!`, "warning");
       renderCart();
       return;
     }
   }
-  if (isNaN(qty) || qty <= 0) {
-    removeFromCart(id);
-  } else {
-    if (item) item.qty = qty;
-    renderCart();
-  }
+
+  item.qty = qty;
+  renderCart();
 }
 
 function renderCart() {
@@ -13602,13 +13660,17 @@ async function openEditPendingOrder(posOrderId) {
       const itemId = i.id || i.product_id;
       const qty = Number(i.qty) || 1;
       _editOrderOriginalQtys[itemId] = qty;
+      const prod = (typeof cachedProducts !== "undefined" && Array.isArray(cachedProducts) && cachedProducts.find(p => p.id === itemId)) || {};
+      const isTracked = prod.track_stock !== undefined ? (prod.track_stock !== 0) : (i.track_stock !== undefined ? i.track_stock !== 0 : true);
+      const stock = prod.stock !== undefined ? Number(prod.stock) : (i.stock !== undefined ? Number(i.stock) : 0);
       return {
         id: itemId,
         product_id: itemId,
         name: i.name || i.product_name,
         price: Number(i.price) || 0,
         qty,
-        track_stock: 0,
+        stock,
+        track_stock: isTracked ? 1 : 0,
       };
     });
 
@@ -13760,13 +13822,21 @@ window.openPendingOrderCheckout = async function (posOrderId, totalAmount, clien
     if (itemsRes.ok) {
       const items = await itemsRes.json();
       if (items && items.length > 0) {
-        posCart = items.map((i) => ({
-          id: i.id || i.product_id,
-          name: i.name,
-          price: i.price,
-          qty: i.qty,
-          track_stock: 0,
-        }));
+        posCart = items.map((i) => {
+          const itemId = i.id || i.product_id;
+          const prod = (typeof cachedProducts !== "undefined" && Array.isArray(cachedProducts) && cachedProducts.find(p => p.id === itemId)) || {};
+          const isTracked = prod.track_stock !== undefined ? (prod.track_stock !== 0) : (i.track_stock !== undefined ? i.track_stock !== 0 : true);
+          const stock = prod.stock !== undefined ? Number(prod.stock) : (i.stock !== undefined ? Number(i.stock) : 0);
+          return {
+            id: itemId,
+            product_id: itemId,
+            name: i.name,
+            price: i.price,
+            qty: i.qty,
+            stock,
+            track_stock: isTracked ? 1 : 0,
+          };
+        });
         renderCart();
       }
     }
