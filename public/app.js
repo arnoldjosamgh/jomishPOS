@@ -698,8 +698,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!hasShift) return;
       }
       if (_currentEditOrder && _currentEditOrder.id) {
-        alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
-        return;
+        if (typeof saveEditAndProceedToPayment === "function") {
+          return saveEditAndProceedToPayment();
+        }
       }
       if (_roleNow === "WAITER") {
         alert("Waiters cannot collect payment. Please click 'SEND TO CASHIER'.");
@@ -4345,14 +4346,16 @@ function updateCartQty(id, delta) {
   if (!item) return;
 
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isAdminOrCEO = ["CEO", "ADMIN", "TECH", "MANAGER", "SUPERVISOR"].includes(_role) || _role.includes("ADMIN") || _role.includes("TECH");
+  const rawStaffName = (USER_NAME || localStorage.getItem("jomish_name") || "").trim().split(/\s+/)[0].toLowerCase();
+  const isServerOfOrder = Boolean(_currentEditOrder && _currentEditOrder.served_by && _currentEditOrder.served_by.toLowerCase() === rawStaffName);
+  const isAdminOrCEO = ["CEO", "ADMIN", "TECH", "MANAGER", "SUPERVISOR", "CASHIER"].includes(_role) || _role.includes("ADMIN") || _role.includes("TECH") || isServerOfOrder;
 
-  // In edit mode: non-admin users can never reduce below the original saved quantity
+  // In edit mode: unauthorized users cannot reduce below the original saved quantity
   if (_currentEditOrder && delta < 0 && !isAdminOrCEO) {
     const itemId = item.product_id || item.id;
     const origQty = (_editOrderOriginalQtys && _editOrderOriginalQtys[itemId]) ? Number(_editOrderOriginalQtys[itemId]) : 0;
     if (origQty > 0 && item.qty - 1 < origQty) {
-      showToast(`Only Admin / CEO can reduce or remove saved order items. Cancel the edit to discard the order.`, "warning");
+      showToast(`Only authorized staff can reduce or remove saved order items. Cancel the edit to discard the order.`, "warning");
       return;
     }
   }
@@ -4384,15 +4387,17 @@ function updateCartQty(id, delta) {
 
 window.removeFromCart = function (id) {
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isAdminOrCEO = ["CEO", "ADMIN", "TECH", "MANAGER", "SUPERVISOR"].includes(_role) || _role.includes("ADMIN") || _role.includes("TECH");
+  const rawStaffName = (USER_NAME || localStorage.getItem("jomish_name") || "").trim().split(/\s+/)[0].toLowerCase();
+  const isServerOfOrder = Boolean(_currentEditOrder && _currentEditOrder.served_by && _currentEditOrder.served_by.toLowerCase() === rawStaffName);
+  const isAdminOrCEO = ["CEO", "ADMIN", "TECH", "MANAGER", "SUPERVISOR", "CASHIER"].includes(_role) || _role.includes("ADMIN") || _role.includes("TECH") || isServerOfOrder;
 
-  // In edit mode: non-admin users cannot remove items that existed in the original saved order
+  // In edit mode: unauthorized users cannot remove items that existed in the original saved order
   if (_currentEditOrder && !isAdminOrCEO) {
     const item = posCart.find((i) => i.id === id);
     const itemId = item ? (item.product_id || item.id) : null;
     const origQty = itemId && _editOrderOriginalQtys ? Number(_editOrderOriginalQtys[itemId] || 0) : 0;
     if (origQty > 0) {
-      showToast(`Only Admin / CEO can remove original items from a saved order. You can only add new items or increase quantities.`, "warning");
+      showToast(`Only authorized staff can remove original items from a saved order. You can only add new items or increase quantities.`, "warning");
       return;
     }
   }
@@ -4413,16 +4418,18 @@ function setCartQty(id, val) {
   if (!item) return;
 
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
-  const isAdminOrCEO = ["CEO", "ADMIN", "TECH", "MANAGER", "SUPERVISOR"].includes(_role) || _role.includes("ADMIN") || _role.includes("TECH");
+  const rawStaffName = (USER_NAME || localStorage.getItem("jomish_name") || "").trim().split(/\s+/)[0].toLowerCase();
+  const isServerOfOrder = Boolean(_currentEditOrder && _currentEditOrder.served_by && _currentEditOrder.served_by.toLowerCase() === rawStaffName);
+  const isAdminOrCEO = ["CEO", "ADMIN", "TECH", "MANAGER", "SUPERVISOR", "CASHIER"].includes(_role) || _role.includes("ADMIN") || _role.includes("TECH") || isServerOfOrder;
 
-  // In edit mode: clamp to original qty minimum for original items UNLESS user is Admin/CEO
+  // In edit mode: clamp to original qty minimum for original items UNLESS user is authorized
   if (_currentEditOrder && item && !isAdminOrCEO) {
     const itemId = item.product_id || item.id;
     const origQty = (_editOrderOriginalQtys && _editOrderOriginalQtys[itemId]) ? Number(_editOrderOriginalQtys[itemId]) : 0;
     if (origQty > 0) {
       if (isNaN(qty) || qty < origQty) {
         item.qty = origQty;
-        showToast(`Only Admin / CEO can set "${item.name}" below its original quantity of ${origQty}.`, "warning");
+        showToast(`Only authorized staff can set "${item.name}" below its original quantity of ${origQty}.`, "warning");
         renderCart();
         return;
       }
@@ -4612,6 +4619,23 @@ function closePaymentPanel() {
   if (panel) panel.classList.add("hidden");
   const servedByContainer = document.getElementById("pay-served-by-container");
   if (servedByContainer) servedByContainer.style.display = "none";
+
+  // If cashier closed payment panel to adjust items for a pending order, transition into edit mode
+  // so any subsequent action (paying, saving, printing) updates THIS existing order instead of duplicating it
+  if (window._pendingOrderId && posCart && posCart.length > 0) {
+    if (!_currentEditOrder || _currentEditOrder.id !== window._pendingOrderId) {
+      _currentEditOrder = {
+        id: window._pendingOrderId,
+        total_amount: window._pendingOrderTotal,
+        served_by: window._pendingServedBy,
+        buyer_name: document.getElementById("buyer-name-input")?.value?.trim() || "Walk-in"
+      };
+      if (typeof _showEditOrderBanner === "function") {
+        _showEditOrderBanner(window._pendingOrderId, _currentEditOrder);
+      }
+    }
+  }
+
   window._pendingServedBy = null;
 
   // Reset confirm button back to default checkout if it was tied to a pending order
@@ -4959,10 +4983,11 @@ async function confirmPayment() {
   }
   const hasActiveShift = await window.ensureCashierShiftActive("process payments");
   if (!hasActiveShift) return;
-  // Block: if we are in edit-order mode, save the edit instead of creating a new order
+  // If we are in edit-order mode, save the edit and collect payment for that order instead of creating a new order
   if (_currentEditOrder && _currentEditOrder.id) {
-    alert('You are editing an existing order. Use "Save Changes" to update it, or "Cancel" to exit edit mode.');
-    return;
+    if (typeof saveEditAndProceedToPayment === "function") {
+      return saveEditAndProceedToPayment();
+    }
   }
   if (!posCart || posCart.length === 0) {
     alert("Cart is empty!");
@@ -5210,7 +5235,12 @@ async function submitWaiterOrder() {
     if (!hasShift) return;
   }
 
-  if (_currentEditOrder && _currentEditOrder.id) {
+  const editBanner = document.getElementById("edit-order-banner");
+  if ((_currentEditOrder && _currentEditOrder.id) || editBanner) {
+    if (!_currentEditOrder || !_currentEditOrder.id) {
+      alert("Edit order reference lost. Please cancel and re-open the order from the Pending tab.");
+      return;
+    }
     _isSubmittingWaiterOrder = true;
     // Target whichever button is visible — save banner btn, cashier sees btn-print-invoice, waiter sees btn-send-to-cashier
     const btnWaiter = document.getElementById("btn-save-edit-order") || document.getElementById("btn-print-invoice") || document.getElementById("btn-send-to-cashier");
@@ -5466,7 +5496,8 @@ window.submitWaiterOrder = submitWaiterOrder;
 let _isGettingInvoice = false;
 async function getInvoice() {
   if (_isGettingInvoice) return;
-  if (_currentEditOrder && _currentEditOrder.id) {
+  const editBanner = document.getElementById("edit-order-banner");
+  if ((_currentEditOrder && _currentEditOrder.id) || editBanner) {
     if (typeof printEditOrderKitchenToken === "function") {
       printEditOrderKitchenToken();
     }
@@ -13096,9 +13127,11 @@ window.removePendingOrderFromUI = function (posOrderId, txId) {
   if (listContainer) {
     const cards = listContainer.querySelectorAll("[data-pos-order-id], [id^='pending-order-card-']");
     cards.forEach((card) => {
-      const cardPId = Number(card.getAttribute("data-pos-order-id"));
-      const cardTId = Number(card.getAttribute("data-tx-id"));
-      if ((pId && cardPId === pId) || (tId && cardTId === tId)) {
+      const cardPId = Number(card.getAttribute("data-pos-order-id")) || null;
+      const cardTId = Number(card.getAttribute("data-tx-id")) || null;
+      const pMatch = pId && cardPId && cardPId === pId;
+      const tMatch = tId && cardTId && cardTId === tId;
+      if (pMatch || tMatch) {
         card.remove();
       }
     });
@@ -13238,7 +13271,7 @@ function _renderPendingOrders(deliveries, currentQuery = "") {
          </div>`
       : "";
     html += `
-      <div id="pending-order-card-${d.pos_order_id}" class="pending-order-card" data-pos-order-id="${d.pos_order_id}" data-tx-id="${d.transaction_id || d.pos_order_id}" style="cursor:pointer; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
+      <div id="pending-order-card-${d.pos_order_id}" class="pending-order-card" data-pos-order-id="${d.pos_order_id}" data-tx-id="${d.transaction_id || ''}" style="cursor:pointer; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:15px; margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
           <div style="flex:1;">
             <h4 style="margin:0 0 3px 0; color:var(--text); font-size:1rem;">${invoiceLabel}</h4>
@@ -13730,10 +13763,15 @@ function _showEditOrderBanner(posOrderId, order) {
   banner.id = 'edit-order-banner';
   banner.style.cssText = 'background:#f59e0b;color:#000;padding:10px 14px;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700;font-size:0.85rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-wrap:wrap;';
 
+  const isCashierRole = _role === "CASHIER";
   const buttonsHtml = `
     <button onclick="submitWaiterOrder()" id="btn-save-edit-order" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
       <i class="fa-solid fa-floppy-disk"></i> Save & Print Token
     </button>
+    ${isCashierRole ? `
+    <button onclick="saveEditAndProceedToPayment()" id="btn-save-and-pay" style="background:#2563eb;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
+      <i class="fa-solid fa-credit-card"></i> Save & Pay Now
+    </button>` : ''}
     <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
       <i class="fa-solid fa-xmark"></i> Cancel
     </button>
@@ -13790,6 +13828,59 @@ async function saveEditedPendingOrder() {
   return submitWaiterOrder();
 }
 window.saveEditedPendingOrder = saveEditedPendingOrder;
+
+async function saveEditAndProceedToPayment() {
+  if (!_currentEditOrder || !_currentEditOrder.id) return;
+  if (!posCart || posCart.length === 0) return alert("Cart is empty!");
+
+  const _roleNow = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
+  if (_roleNow === "CASHIER" && !window._hasActiveCashierShift) {
+    const hasShift = await window.ensureCashierShiftActive("collect payment for order");
+    if (!hasShift) return;
+  }
+
+  try {
+    showToast("Updating order items...", "info");
+    const items = posCart.map((i) => ({
+      id: i.product_id || i.id,
+      product_id: i.product_id || i.id,
+      name: i.name,
+      price: i.price,
+      qty: i.qty || 1,
+    }));
+
+    const editOrderId = _currentEditOrder.id;
+    const servedBy = _currentEditOrder.served_by || USER_NAME || "Staff";
+    const clientName = _currentEditOrder.buyer_name || "Walk-in";
+
+    const res = await fetchAuth(`${API_URL}/pos_orders/${editOrderId}/items`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to update order items");
+    }
+
+    const data = await res.json();
+    const updatedTotal = parseFloat(data.total_amount) || posCart.reduce((sum, item) => sum + (item.price * (item.qty || 1)), 0);
+
+    // Clean up edit mode
+    const banner = document.getElementById("edit-order-banner");
+    if (banner) banner.remove();
+    _currentEditOrder = null;
+    _editOrderOriginalQtys = {};
+    _editOrderOriginalItems = [];
+
+    // Directly open payment checkout for this exact order
+    openPendingOrderCheckout(editOrderId, updatedTotal, clientName, servedBy);
+  } catch (e) {
+    alert("Error updating order: " + e.message);
+  }
+}
+window.saveEditAndProceedToPayment = saveEditAndProceedToPayment;
 
 
 // Opens the standard payment panel pre-filled for a pending order (Cashier collects payment)

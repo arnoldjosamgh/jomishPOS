@@ -4411,20 +4411,23 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
           }
         }
 
-        // SERVER-SIDE GUARD: Once an order is saved, original items cannot be
-        // removed or have their quantity reduced UNLESS user is Admin or CEO.
-        const isUserAdminOrCEO = [
+        // SERVER-SIDE GUARD: Once an order is saved, original items can be
+        // adjusted by Cashiers, Supervisors, Managers, Admins, CEOs, or the waiter who served it.
+        const isUserAuthorizedToAdjust = [
           "CEO",
           "ADMIN",
           "TECH",
           "MANAGER",
           "SUPERVISOR",
+          "CASHIER",
         ].includes(userRoleNow) ||
           userRoleNow.includes("ADMIN") ||
           userRoleNow.includes("TECH") ||
-          (req.user && req.user.prefix && String(req.user.prefix).endsWith("000"));
+          (req.user && req.user.prefix && String(req.user.prefix).endsWith("000")) ||
+          (order.waiter_id && req.user && req.user.id === order.waiter_id) ||
+          (order.served_by && req.user && req.user.name && order.served_by.toLowerCase() === String(req.user.name).trim().split(/\s+/)[0].toLowerCase());
 
-        if (!isUserAdminOrCEO) {
+        if (!isUserAuthorizedToAdjust) {
           for (const [pidStr, origQty] of Object.entries(existingQtyByPid)) {
             const pid = parseInt(pidStr, 10);
             if (!pid) continue;
@@ -4433,7 +4436,7 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
               const itemName = existingNamesByPid[pidStr] || `Product #${pid}`;
               throw new Error(
                 `Cannot reduce "${itemName}" from ${origQty} to ${newQty}. ` +
-                `Saved order items can only be reduced or removed by an Admin or CEO.`
+                `Saved order items can only be reduced or removed by an authorized user.`
               );
             }
           }
@@ -7174,15 +7177,15 @@ app.get("/api/deliveries/pending-cod", authenticateToken, async (req, res) => {
           LEFT JOIN deliveries d ON d.order_id = p.id
           LEFT JOIN employees ew ON p.waiter_id = ew.id
           LEFT JOIN employees ec ON p.cashier_id = ec.id
-          WHERE p.payment_method = 'COD'
-            AND COALESCE(t.payment_status, 'PENDING') = 'PENDING'
+          WHERE p.payment_method IN ('COD', 'INVOICE')
+            AND COALESCE(t.payment_status, 'PENDING') IN ('PENDING', 'UNPAID')
             AND COALESCE(t.transaction_date, p.order_date) >= ?
             AND EXISTS (SELECT 1 FROM order_items oi_chk WHERE oi_chk.pos_order_id = p.id)
     `;
     const params = [cutoff30Days];
 
-    // Waiters only get the orders they personally created/worked on
-    if (userRole === "WAITER") {
+    // Optional waiter filter if explicitly requested via ?scope=mine, otherwise show all store pending orders so orders never disappear
+    if (req.query.scope === "mine" && userRole === "WAITER") {
       sql += ` AND (p.waiter_id = ? OR LOWER(p.served_by) = LOWER(?)) `;
       params.push(req.user.id, userFirstName);
     }
@@ -7229,9 +7232,9 @@ app.get("/api/customer-invoices", authenticateToken, (req, res) => {
   const schema = req.tenantSchema || getSchema();
   asyncLocalStorage.run(schema, () => {
     const role = (req.user && req.user.role ? req.user.role : "").toUpperCase();
-    const isAllowed = ["CEO", "SUPERVISOR", "ADMIN", "MANAGER", "TECH"].includes(role) || req.user.name === "System Technician";
+    const isAllowed = ["CEO", "SUPERVISOR", "ADMIN", "MANAGER", "TECH", "CASHIER"].includes(role) || req.user.name === "System Technician";
     if (!isAllowed) {
-      return res.status(403).json({ error: "Access denied. Only Supervisor and CEO can access Customer Invoices." });
+      return res.status(403).json({ error: "Access denied. Only authorized staff can access Customer Invoices." });
     }
 
     // Only show pending invoices from the last 30 days — anything older is a stale/orphaned record
