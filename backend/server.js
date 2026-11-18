@@ -7184,10 +7184,18 @@ app.get("/api/deliveries/pending-cod", authenticateToken, async (req, res) => {
     `;
     const params = [cutoff30Days];
 
-    // Optional waiter filter if explicitly requested via ?scope=mine, otherwise show all store pending orders so orders never disappear
-    if (req.query.scope === "mine" && userRole === "WAITER") {
-      sql += ` AND (p.waiter_id = ? OR LOWER(p.served_by) = LOWER(?)) `;
-      params.push(req.user.id, userFirstName);
+    // Waiters only see orders they personally created or served; Cashiers and Admins see all orders
+    if (userRole === "WAITER") {
+      sql += ` AND (
+        p.waiter_id = ?
+        OR ew.id = ?
+        OR LOWER(TRIM(COALESCE(p.served_by, ''))) = LOWER(?)
+        OR LOWER(TRIM(COALESCE(ew.first_name, ''))) = LOWER(?)
+        OR LOWER(TRIM(COALESCE(ew.nickname, ''))) = LOWER(?)
+        OR LOWER(COALESCE(p.served_by, '')) LIKE LOWER(?)
+      ) `;
+      const namePattern = `%${userFirstName}%`;
+      params.push(req.user.id, req.user.id, userFirstName, userFirstName, userFirstName, namePattern);
     }
 
     sql += ` ORDER BY p.id DESC`;

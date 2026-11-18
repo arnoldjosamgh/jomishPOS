@@ -698,9 +698,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!hasShift) return;
       }
       if (_currentEditOrder && _currentEditOrder.id) {
-        if (typeof saveEditAndProceedToPayment === "function") {
-          return saveEditAndProceedToPayment();
-        }
+        alert('You are editing an existing order. Click "Save & Print Token" to save your changes first, then collect payment from the Pending tab.');
+        return;
       }
       if (_roleNow === "WAITER") {
         alert("Waiters cannot collect payment. Please click 'SEND TO CASHIER'.");
@@ -4983,11 +4982,10 @@ async function confirmPayment() {
   }
   const hasActiveShift = await window.ensureCashierShiftActive("process payments");
   if (!hasActiveShift) return;
-  // If we are in edit-order mode, save the edit and collect payment for that order instead of creating a new order
+  // If we are in edit-order mode, prompt to save changes first instead of creating a duplicate order
   if (_currentEditOrder && _currentEditOrder.id) {
-    if (typeof saveEditAndProceedToPayment === "function") {
-      return saveEditAndProceedToPayment();
-    }
+    alert('You are editing an existing order. Click "Save & Print Token" to save your changes first, then collect payment from the Pending tab.');
+    return;
   }
   if (!posCart || posCart.length === 0) {
     alert("Cart is empty!");
@@ -13763,15 +13761,10 @@ function _showEditOrderBanner(posOrderId, order) {
   banner.id = 'edit-order-banner';
   banner.style.cssText = 'background:#f59e0b;color:#000;padding:10px 14px;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:700;font-size:0.85rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);flex-wrap:wrap;';
 
-  const isCashierRole = _role === "CASHIER";
   const buttonsHtml = `
     <button onclick="submitWaiterOrder()" id="btn-save-edit-order" style="background:#16a34a;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
       <i class="fa-solid fa-floppy-disk"></i> Save & Print Token
     </button>
-    ${isCashierRole ? `
-    <button onclick="saveEditAndProceedToPayment()" id="btn-save-and-pay" style="background:#2563eb;color:#fff;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
-      <i class="fa-solid fa-credit-card"></i> Save & Pay Now
-    </button>` : ''}
     <button onclick="cancelEditOrder()" style="background:#dc2626;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.82rem;">
       <i class="fa-solid fa-xmark"></i> Cancel
     </button>
