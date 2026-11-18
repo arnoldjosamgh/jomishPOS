@@ -3593,8 +3593,8 @@ app.post("/api/checkout", authenticateToken, async (req, res) => {
     if (userRoleForShift === "CASHIER") {
       const openShift = await new Promise((resolve) => {
         db.get(
-          "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-          [],
+          "SELECT id FROM cashier_shifts WHERE cashier_id = ? AND status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+          [req.user.id],
           (err, row) => resolve(row || null)
         );
       });
@@ -3961,9 +3961,10 @@ function ensureCashierShiftsSchema(callback) {
 // 1. Get current active shift status
 app.get("/api/pos/current-shift", authenticateToken, (req, res) => {
   ensureCashierShiftsSchema(() => {
+    const cashierId = req.user.id;
     db.get(
-      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-      [],
+      "SELECT * FROM cashier_shifts WHERE cashier_id = ? AND status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+      [cashierId],
       (err, row) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ has_active_shift: !!row, shift: row || null });
@@ -3986,10 +3987,10 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
       return res.status(400).json({ error: "Opening cash amount is required and must be greater than zero." });
     }
 
-    // Check if an open shift already exists
+    // Check if an open shift already exists for this cashier
     db.get(
-      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-      [],
+      "SELECT * FROM cashier_shifts WHERE cashier_id = ? AND status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+      [cashierId],
       (err, openShift) => {
         if (err) return res.status(500).json({ error: err.message });
         if (openShift) {
@@ -4003,20 +4004,6 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
           function (insertErr) {
             if (insertErr) return res.status(500).json({ error: insertErr.message });
             const shiftId = this.lastID;
-
-            // Re-assign all pending COD / Invoice orders to the new cashier opening the shift
-            db.run(
-              `UPDATE pos_orders SET cashier_id = ?
-               WHERE id IN (
-                 SELECT p.id FROM pos_orders p
-                 JOIN transactions t ON p.transaction_id = t.id
-                 WHERE p.payment_method IN ('COD', 'INVOICE') AND t.payment_status = 'PENDING'
-               )`,
-              [cashierId],
-              (reassignErr) => {
-                if (reassignErr) console.warn("[Start Shift] Could not reassign pending orders:", reassignErr.message);
-              }
-            );
 
             if (startCash > 0) {
               db.run(
@@ -4044,13 +4031,21 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
 });
 
 // Helper: Compute full shift financial summary across POS orders and finance transactions
-async function computeShiftSummary(startTime, endTime = null, startCash = 0, countedCash = null) {
+async function computeShiftSummary(startTime, endTime = null, startCash = 0, countedCash = null, cashierId = null) {
   const startIso = startTime instanceof Date ? startTime.toISOString() : String(startTime || "");
   const endIso = endTime ? (endTime instanceof Date ? endTime.toISOString() : String(endTime)) : null;
 
-  const orderDateClause = endIso ? "order_date >= ? AND order_date <= ?" : "order_date >= ?";
-  const txDateClause    = endIso ? "transaction_date >= ? AND transaction_date <= ?" : "transaction_date >= ?";
-  const params          = endIso ? [startIso, endIso] : [startIso];
+  let orderDateClause = endIso ? "order_date >= ? AND order_date <= ?" : "order_date >= ?";
+  let txDateClause    = endIso ? "transaction_date >= ? AND transaction_date <= ?" : "transaction_date >= ?";
+  let orderParams     = endIso ? [startIso, endIso] : [startIso];
+  let txParams        = endIso ? [startIso, endIso] : [startIso];
+
+  if (cashierId) {
+    orderDateClause += " AND cashier_id = ?";
+    orderParams.push(cashierId);
+    txDateClause += " AND recorded_by = ?";
+    txParams.push(cashierId);
+  }
 
   const [posRow, txRow] = await Promise.all([
     new Promise((resolve) => {
@@ -4069,7 +4064,7 @@ async function computeShiftSummary(startTime, endTime = null, startCash = 0, cou
           COALESCE(SUM(CASE WHEN payment_method IN ('COD','INVOICE') THEN total_amount ELSE 0 END), 0) as invoice_collected,
           COALESCE(SUM(discount_amount), 0) as discount_amount
         FROM pos_orders WHERE ${orderDateClause}`,
-        params,
+        orderParams,
         (err, row) => {
           if (err) { console.error("[Shift Reconciliation] POS query error:", err.message); resolve({}); }
           else resolve(row || {});
@@ -4083,7 +4078,7 @@ async function computeShiftSummary(startTime, endTime = null, startCash = 0, cou
           COALESCE(SUM(CASE WHEN (type = 'CASH_IN' OR type = 'FLOAT_IN') AND description NOT LIKE '%Opening Cash%' THEN amount ELSE 0 END), 0) as cash_in,
           COALESCE(SUM(CASE WHEN type = 'INCOME' AND description NOT LIKE 'POS Sale%' AND description NOT LIKE '%Opening Cash%' THEN amount ELSE 0 END), 0) as income_transactions
         FROM transactions WHERE ${txDateClause}`,
-        params,
+        txParams,
         (err, row) => {
           if (err) { console.error("[Shift Reconciliation] TX query error:", err.message); resolve({}); }
           else resolve(row || {});
@@ -4133,11 +4128,12 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
   }
 
   ensureCashierShiftsSchema(() => {
+    const cashierId = req.user.id;
     const countedCash = req.body.counted_cash !== undefined ? parseFloat(req.body.counted_cash) || 0 : null;
 
     db.get(
-      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-      [],
+      "SELECT * FROM cashier_shifts WHERE cashier_id = ? AND status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+      [cashierId],
       async (err, openShift) => {
         if (err) return res.status(500).json({ error: err.message });
         if (!openShift) {
@@ -4145,7 +4141,7 @@ app.post("/api/pos/shift-preview", authenticateToken, (req, res) => {
         }
 
         try {
-          const summary = await computeShiftSummary(openShift.start_time, null, openShift.start_cash, countedCash);
+          const summary = await computeShiftSummary(openShift.start_time, null, openShift.start_cash, countedCash, cashierId);
           res.json({
             preview: true,
             start_time: openShift.start_time,
@@ -4174,8 +4170,8 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
     const previewData = req.body.preview || null;
 
     db.get(
-      "SELECT * FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-      [],
+      "SELECT * FROM cashier_shifts WHERE cashier_id = ? AND status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+      [cashierId],
       async (err, openShift) => {
         if (err) return res.status(500).json({ error: err.message });
         if (!openShift) {
@@ -4188,17 +4184,10 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
         const startCash = Number(openShift.start_cash || 0);
         const shiftId = openShift.id;
         const endTimeNow = new Date().toISOString();
-        const startIso = startTime instanceof Date ? startTime.toISOString() : String(startTime || "");
 
         try {
-          // Re-attribute orders and transactions in this window sequentially before reading
-          await new Promise((r) => db.run("UPDATE pos_orders SET cashier_id = ? WHERE order_date >= ? AND payment_method NOT IN ('COD', 'INVOICE') AND cashier_id != ?", [cashierId, startIso, cashierId], r));
-          await new Promise((r) => db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'INCOME' AND transaction_date >= ? AND recorded_by != ?", [cashierId, startIso, cashierId], r));
-          await new Promise((r) => db.run("UPDATE transactions SET recorded_by = ? WHERE type = 'EXPENSE' AND transaction_date >= ?", [cashierId, startIso], r));
-          await new Promise((r) => db.run("UPDATE transactions SET recorded_by = ? WHERE (type = 'CASH_IN' OR type = 'FLOAT_IN') AND transaction_date >= ?", [cashierId, startIso], r));
-
-          // Compute final shift reconciliation
-          let summary = await computeShiftSummary(startTime, endTimeNow, startCash, countedCash);
+          // Compute final shift reconciliation strictly for this cashier
+          let summary = await computeShiftSummary(startTime, endTimeNow, startCash, countedCash, cashierId);
 
           // Safety guard: if DB subquery suffered a transient lock/connection error returning 0 cash sales but preview had verified sales, protect cashier totals
           if (summary.cash_sales === 0 && previewData && Number(previewData.cash_sales || 0) > 0) {
@@ -4265,8 +4254,8 @@ app.post("/api/pos/end-shift", authenticateToken, (req, res) => {
             });
           }
 
-          // Close any lingering open shifts
-          await new Promise((r) => db.run("UPDATE cashier_shifts SET status = 'CLOSED', end_time = COALESCE(end_time, ?) WHERE status = 'OPEN'", [endTimeNow], r));
+          // Close any lingering open shifts for THIS cashier only
+          await new Promise((r) => db.run("UPDATE cashier_shifts SET status = 'CLOSED', end_time = COALESCE(end_time, ?) WHERE cashier_id = ? AND status = 'OPEN'", [endTimeNow, cashierId], r));
 
           emitToTenant(getSchema(), "db_updated", { module: "shifts" });
 
@@ -4360,8 +4349,8 @@ app.put("/api/pos_orders/:id/items", authenticateToken, async (req, res) => {
     if (userRoleNow === "CASHIER") {
       const openShift = await new Promise((resolve) => {
         db.get(
-          "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-          [],
+          "SELECT id FROM cashier_shifts WHERE cashier_id = ? AND status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+          [req.user.id],
           (err, row) => resolve(row || null)
         );
       });
@@ -7291,8 +7280,8 @@ app.post("/api/pos_orders/:id/cod-received", authenticateToken, async (req, res)
       if (userRoleNow === "CASHIER") {
         const openShift = await new Promise((resolve) => {
           db.get(
-            "SELECT id FROM cashier_shifts WHERE status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
-            [],
+            "SELECT id FROM cashier_shifts WHERE cashier_id = ? AND status = 'OPEN' AND end_time IS NULL ORDER BY id DESC LIMIT 1",
+            [req.user.id],
             (err, row) => resolve(row || null)
           );
         });
