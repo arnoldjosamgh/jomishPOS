@@ -461,6 +461,42 @@ async function resolveTenantSchema(user, req) {
     }
   }
 
+  // 7. Non-TECH Safety Net: A non-TECH user (cashier, waiter, supervisor, etc.) NEVER belongs in 'public'
+  if (user.role !== "TECH" && db.pool) {
+    try {
+      const compRes = await db.pool.query("SELECT prefix FROM public.companies WHERE status = 'ACTIVE' ORDER BY id ASC");
+      if (compRes.rows && compRes.rows.length > 0) {
+        // If there is only one active company in the system, safely default to it
+        if (compRes.rows.length === 1) {
+          const singleSchema = "t_" + compRes.rows[0].prefix.toLowerCase();
+          if (user.id) userTenantSchemaCache.set(user.id, singleSchema);
+          console.warn(`[resolveTenantSchema] Non-TECH user ${user.id} (${user.name || user.role}) resolved to single active company: ${singleSchema}`);
+          return singleSchema;
+        }
+        // If multiple, attempt lookup by email or username across active schemas
+        for (const comp of compRes.rows) {
+          const schema = "t_" + comp.prefix.toLowerCase();
+          try {
+            const check = await db.pool.query(
+              `SELECT id FROM ${schema}.employees WHERE id = $1 OR LOWER(email) = LOWER($2) OR LOWER(username) = LOWER($3)`,
+              [user.id || 0, user.email || '', user.username || '']
+            );
+            if (check.rows.length > 0) {
+              if (user.id) userTenantSchemaCache.set(user.id, schema);
+              return schema;
+            }
+          } catch (_) {}
+        }
+        // Fallback to the first active company to guarantee non-TECH writes do not pollute 'public'
+        const fallbackSchema = "t_" + compRes.rows[0].prefix.toLowerCase();
+        console.warn(`[resolveTenantSchema] Defaulting non-TECH user ${user.id} to first active company: ${fallbackSchema}`);
+        return fallbackSchema;
+      }
+    } catch (e2) {
+      console.error("[resolveTenantSchema] Fallback active companies query failed:", e2.message);
+    }
+  }
+
   return (p === "demo") ? "demo" : "public";
 }
 
@@ -729,7 +765,14 @@ app.post("/api/login", async (req, res) => {
   };
 
   const token = jwt.sign(
-    { id: foundUser.id, role: foundUser.role, name: `${foundUser.first_name} ${foundUser.last_name}`, permissions, prefix: foundPrefix },
+    {
+      id: foundUser.id,
+      role: foundUser.role,
+      name: `${foundUser.first_name} ${foundUser.last_name}`,
+      username: foundUser.username,
+      permissions,
+      prefix: foundPrefix,
+    },
     JWT_SECRET,
     { expiresIn: "30d" }
   );
@@ -1816,6 +1859,7 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   }
   
   try {
+    const currentSchema = req.tenantSchema || getSchema();
     const deletedPosOrderIds = [];
     await db.withTransaction(async (q) => {
 
@@ -1853,9 +1897,7 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       // 4. Delete the transaction itself
       await q("DELETE FROM transactions WHERE id = ?", [numericId]);
       await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [numericId]).catch(() => {});
-    });
-
-    const currentSchema = req.tenantSchema || getSchema();
+    }, 3, currentSchema);
     emitAndBust(currentSchema, "transactions", "finance_summary");
     emitToTenant(currentSchema, "db_updated", { module: "products" }); // update stock on clients
     emitToTenant(currentSchema, "db_updated", {
@@ -3511,7 +3553,34 @@ async function checkAndRecycleInvoiceNumbers(targetSchema, force = false) {
 }
 
 app.post("/api/checkout", authenticateToken, async (req, res) => {
-  const currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
+  let currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
+
+  // SCHEMA SAFETY NET: If still 'public' but user is NOT TECH, resolve aggressively
+  if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
+    const p = req.user.prefix ? String(req.user.prefix).toLowerCase().trim() : "";
+    if (p && p !== "public" && p !== "demo") {
+      currentSchema = "t_" + p.replace(/[^a-z0-9]/g, "");
+    } else if (db.pool && req.user.id) {
+      try {
+        const cRes = await db.pool.query("SELECT prefix FROM public.companies WHERE status = 'ACTIVE' ORDER BY id ASC");
+        for (const c of cRes.rows) {
+          const sc = "t_" + c.prefix.toLowerCase();
+          const chk = await db.pool.query(`SELECT id FROM ${sc}.employees WHERE id = $1`, [req.user.id]);
+          if (chk.rows.length > 0) {
+            currentSchema = sc;
+            userTenantSchemaCache.set(req.user.id, sc);
+            break;
+          }
+        }
+        if (currentSchema === "public" && cRes.rows.length > 0) {
+          currentSchema = "t_" + cRes.rows[0].prefix.toLowerCase();
+          userTenantSchemaCache.set(req.user.id, currentSchema);
+        }
+      } catch (_) {}
+    }
+    req.tenantSchema = currentSchema;
+  }
+
   if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
     console.error(`[CHECKOUT BLOCKED] Attempted write to public schema by non-TECH user ${req.user.id} (${req.user.name})`);
     return res.status(403).json({ error: "Invalid tenant schema context. Please refresh or re-login." });
@@ -7580,7 +7649,34 @@ app.delete("/api/petty-cash/:id", authenticateToken, (req, res) => {
 
 // --- POS OFFLINE BATCH SYNC ---
 app.post("/api/pos/batch-sync", authenticateToken, async (req, res) => {
-  const currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
+  let currentSchema = req.tenantSchema || (await resolveTenantSchema(req.user, req)) || getSchema();
+
+  // SCHEMA SAFETY NET: If still 'public' but user is NOT TECH, resolve aggressively
+  if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
+    const p = req.user.prefix ? String(req.user.prefix).toLowerCase().trim() : "";
+    if (p && p !== "public" && p !== "demo") {
+      currentSchema = "t_" + p.replace(/[^a-z0-9]/g, "");
+    } else if (db.pool && req.user.id) {
+      try {
+        const cRes = await db.pool.query("SELECT prefix FROM public.companies WHERE status = 'ACTIVE' ORDER BY id ASC");
+        for (const c of cRes.rows) {
+          const sc = "t_" + c.prefix.toLowerCase();
+          const chk = await db.pool.query(`SELECT id FROM ${sc}.employees WHERE id = $1`, [req.user.id]);
+          if (chk.rows.length > 0) {
+            currentSchema = sc;
+            userTenantSchemaCache.set(req.user.id, sc);
+            break;
+          }
+        }
+        if (currentSchema === "public" && cRes.rows.length > 0) {
+          currentSchema = "t_" + cRes.rows[0].prefix.toLowerCase();
+          userTenantSchemaCache.set(req.user.id, currentSchema);
+        }
+      } catch (_) {}
+    }
+    req.tenantSchema = currentSchema;
+  }
+
   if (currentSchema === "public" && req.user && req.user.role !== "TECH") {
     console.error(`[BATCH-SYNC BLOCKED] Attempted write to public schema by non-TECH user ${req.user.id} (${req.user.name})`);
     return res.status(403).json({ error: "Invalid tenant schema context. Please refresh or re-login." });

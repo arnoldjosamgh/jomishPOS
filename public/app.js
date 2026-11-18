@@ -5657,12 +5657,16 @@ async function syncOfflineSales() {
   if (!token) return;
 
   try {
+    const tenantPrefix = (localStorage.getItem("jomish_prefix") || "").trim();
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
+    if (tenantPrefix) headers["X-Tenant-Prefix"] = tenantPrefix;
+
     const res = await fetch(`${API_URL}/pos/batch-sync`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
       body: JSON.stringify({ transactions: pending }),
     });
 

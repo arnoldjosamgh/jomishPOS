@@ -277,6 +277,9 @@ if (config.dbType === 'postgres') {
         // Returns { lastID, rows } of the LAST query executed inside.
         withTransaction: async function (fn, maxRetries = 3, explicitSchema = null) {
             const schema = explicitSchema || asyncLocalStorage.getStore() || 'public';
+            if (schema === 'public' && !explicitSchema) {
+                console.warn('[withTransaction WARNING] Running transaction in public schema without explicitSchema! ALS store:', asyncLocalStorage.getStore());
+            }
             let attempt = 0;
             while (true) {
                 attempt++;
