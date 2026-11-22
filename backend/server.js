@@ -4049,6 +4049,9 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
     return res.status(403).json({ error: "Access Denied: Only Cashiers can start a cashier shift." });
   }
 
+  // Capture tenant schema from request context BEFORE entering ensureCashierShiftsSchema callback
+  const shiftSchema = req.tenantSchema || getSchema();
+
   ensureCashierShiftsSchema(() => {
     const cashierId = req.user.id;
     const startCash = parseFloat(req.body.start_cash) || 0;
@@ -4079,12 +4082,12 @@ app.post("/api/pos/start-shift", authenticateToken, (req, res) => {
                 "INSERT INTO transactions (amount, type, description, recorded_by, transaction_date, payment_status) VALUES (?, 'INCOME', ?, ?, ?, 'PAID')",
                 [startCash, `Opening Cash Float (Shift #${shiftId})`, cashierId, now],
                 () => {
-                  emitAndBust(currentSchema, "transactions", "finance_summary");
+                  emitAndBust(shiftSchema, "transactions", "finance_summary");
                 }
               );
             }
 
-            emitToTenant(currentSchema, "db_updated", { module: "shifts" });
+            emitToTenant(shiftSchema, "db_updated", { module: "shifts" });
             res.json({
               success: true,
               shift_id: shiftId,
