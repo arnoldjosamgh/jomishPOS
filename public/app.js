@@ -5339,6 +5339,10 @@ async function submitWaiterOrder() {
       renderCart();
       loadPOSProducts();
 
+      const btnCheckout = document.getElementById("btn-checkout");
+      const isWaiterLevel = _roleNow === "WAITER" || _roleNow === "SUPERVISOR";
+      if (btnCheckout) btnCheckout.style.setProperty("display", isWaiterLevel ? "none" : "block", "important");
+
       const buyerNameEl = document.getElementById("buyer-name-input");
       const buyerPhoneEl = document.getElementById("buyer-phone-input");
       if (buyerNameEl) buyerNameEl.value = "";
@@ -13716,6 +13720,10 @@ async function openEditPendingOrder(posOrderId) {
     // Show editing banner in cart panel
     _showEditOrderBanner(posOrderId, _currentEditOrder);
 
+    // Hide checkout button while editing so cashier cannot accidentally create a new order
+    const btnCheckout = document.getElementById("btn-checkout");
+    if (btnCheckout) btnCheckout.style.setProperty("display", "none", "important");
+
     // Make sure the action button is visible and active for edit mode
     const btnPrintInvoice = document.getElementById("btn-print-invoice");
     const btnSendToCashier = document.getElementById("btn-send-to-cashier");
@@ -13807,9 +13815,11 @@ function cancelEditOrder() {
   posCart = [];
   renderCart();
   const btnPrintInvoice = document.getElementById("btn-print-invoice");
+  const btnCheckout = document.getElementById("btn-checkout");
   const _role = (USER_ROLE || localStorage.getItem("jomish_role") || "").toUpperCase();
   const isWaiterLevel = _role === "WAITER" || _role === "SUPERVISOR";
   if (btnPrintInvoice) btnPrintInvoice.style.setProperty("display", isWaiterLevel ? "none" : "block", "important");
+  if (btnCheckout) btnCheckout.style.setProperty("display", isWaiterLevel ? "none" : "block", "important");
   switchPOSView('pending');
 }
 window.cancelEditOrder = cancelEditOrder;
