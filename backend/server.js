@@ -1857,6 +1857,11 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
   if (isNaN(numericId)) {
     return res.status(400).json({ error: "Invalid transaction ID" });
   }
+
+  // F8 deletion: food was already prepared/served and is disposed in dustbin -> do NOT restore stock.
+  // Pending cancellation by Admin: order not made yet -> DO restore stock.
+  const isF8 = req.query.is_f8 === "true" || req.query.source === "f8" || req.query.restore_stock === "false";
+  const shouldRestoreStock = !isF8;
   
   try {
     const currentSchema = req.tenantSchema || getSchema();
@@ -1870,9 +1875,19 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
           const posOrderId = poRow.id;
           deletedPosOrderIds.push(posOrderId);
           
-          // NOTE: Stock quantity is NOT restored when an order is deleted via F8 or cancelled.
-          // In food service, items from cancelled/deleted orders are already prepared/served and must be
-          // disposed of in the dustbin; it is unhygienic to return food to stock. Deducted stock stays consumed.
+          // Restore stock ONLY if NOT deleted via F8 (e.g. cancelled in pending by admin before food is made)
+          if (shouldRestoreStock) {
+            const itemsRes = await q(
+              "SELECT oi.product_id, oi.qty, p.track_stock FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.pos_order_id = ?",
+              [posOrderId]
+            );
+            if (itemsRes.rows && itemsRes.rows.length > 0) {
+              for (let item of itemsRes.rows) {
+                if (!item.product_id || item.track_stock === 0) continue; // Made-to-order or custom: no stock to restore
+                await q("UPDATE products SET stock = stock + ? WHERE id = ?", [item.qty, item.product_id]);
+              }
+            }
+          }
           
           // 2. Delete from pos_orders, order_items, credit_records, and deliveries
           await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
@@ -1891,6 +1906,9 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [numericId]).catch(() => {});
     }, 3, currentSchema);
     emitAndBust(currentSchema, "transactions", "finance_summary");
+    if (shouldRestoreStock) {
+      emitToTenant(currentSchema, "db_updated", { module: "products" }); // update stock on clients when stock was returned
+    }
     emitToTenant(currentSchema, "db_updated", {
       module: "deliveries",
       action: "delete",
@@ -1911,9 +1929,12 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       pos_order_ids: deletedPosOrderIds,
     });
     res.json({
-      message: "Transaction successfully deleted.",
+      message: shouldRestoreStock
+        ? "Transaction successfully deleted and stock returned."
+        : "Transaction successfully deleted.",
       pos_order_id: deletedPosOrderIds[0] || null,
       pos_order_ids: deletedPosOrderIds,
+      stock_restored: shouldRestoreStock,
     });
   } catch (err) {
     console.error("Error deleting transaction " + id + ":", err);

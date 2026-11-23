@@ -8359,7 +8359,7 @@ document.addEventListener("click", function(e) {
   }
 });
 
-async function deleteTransaction(id, silent = false) {
+async function deleteTransaction(id, silent = false, isF8 = false) {
   const receiptNo = String(id).padStart(4, "0"); // Note: uses raw id for delete confirm; receipt_no shown in list
   if (!silent) {
     if (
@@ -8372,7 +8372,10 @@ async function deleteTransaction(id, silent = false) {
   }
 
   try {
-    const res = await fetchAuth(`${API_URL}/transactions/${id}`, {
+    const url = isF8
+      ? `${API_URL}/transactions/${id}?is_f8=true&restore_stock=false`
+      : `${API_URL}/transactions/${id}?restore_stock=true`;
+    const res = await fetchAuth(url, {
       method: "DELETE",
     });
     if (res.ok) {
@@ -8380,7 +8383,7 @@ async function deleteTransaction(id, silent = false) {
       const deletedPosOrderIds = resData.pos_order_ids || (resData.pos_order_id ? [resData.pos_order_id] : []);
       if (!silent) {
         showToast(
-          `Transaction RCPT-${receiptNo} deleted successfully.`,
+          `Transaction RCPT-${receiptNo} deleted successfully${resData.stock_restored ? ' and stock returned' : ''}.`,
           "success",
         );
       }
@@ -8409,6 +8412,10 @@ async function deleteTransaction(id, silent = false) {
       if (typeof loadDashboard === "function") loadDashboard();
       if (typeof loadPendingCOD === "function") loadPendingCOD(true);
       if (typeof loadCustomerInvoices === "function") loadCustomerInvoices();
+      if (resData.stock_restored) {
+        if (typeof loadPOSProducts === "function") loadPOSProducts();
+        if (typeof loadInventory === "function") loadInventory();
+      }
       if (typeof loadCashierReport === "function") {
         const reportView = document.getElementById("sme-view-reports");
         if (reportView && reportView.style.display !== "none") {
@@ -8489,8 +8496,8 @@ window.addEventListener("keydown", async function(e) {
   allTargetRows.forEach(r => r.remove());
   window._selectedTxId = null;
 
-  console.log("[F8] Cashier silently deleting transaction ID:", txId);
-  await deleteTransaction(parseInt(txId, 10), true); // true = silent deletion (no toast, no confirm, no alert)
+  console.log("[F8] Cashier silently deleting transaction ID (food disposed, stock remains deducted):", txId);
+  await deleteTransaction(parseInt(txId, 10), true, true); // silent = true, isF8 = true (stock NOT returned)
 }, true);
 
 async function resetDatabase() {
@@ -13395,12 +13402,15 @@ window.cancelPendingOrder = async function (posOrderId, txId) {
   try {
     showToast("Cancelling order...", "info");
     const targetId = txId || posOrderId;
-    const res = await fetchAuth(`${API_URL}/transactions/${targetId}`, { method: "DELETE" });
+    // When an order is in pending and cancelled by admin, it was not made yet — put back stock
+    const res = await fetchAuth(`${API_URL}/transactions/${targetId}?restore_stock=true`, { method: "DELETE" });
     if (res.ok) {
-      showToast("Order cancelled successfully.", "success");
+      showToast("Order cancelled successfully and stock returned.", "success");
       const card = document.getElementById(`pending-order-card-${posOrderId}`);
       if (card) card.remove();
       loadPendingCOD(true);
+      if (typeof loadPOSProducts === "function") loadPOSProducts();
+      if (typeof loadInventory === "function") loadInventory();
     } else {
       const err = await res.json().catch(() => ({}));
       showToast("Failed to cancel order: " + (err.error || "Server error"), "danger");
