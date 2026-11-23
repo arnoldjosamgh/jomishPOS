@@ -1870,19 +1870,11 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
           const posOrderId = poRow.id;
           deletedPosOrderIds.push(posOrderId);
           
-          // 2. Fetch order items to return stock
-          const itemsRes = await q(
-            "SELECT oi.product_id, oi.qty, p.track_stock FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.pos_order_id = ?",
-            [posOrderId]
-          );
-          if (itemsRes.rows && itemsRes.rows.length > 0) {
-            for (let item of itemsRes.rows) {
-              if (!item.product_id || item.track_stock === 0) continue; // Made-to-order or custom: no stock to restore
-              await q("UPDATE products SET stock = stock + ? WHERE id = ?", [item.qty, item.product_id]);
-            }
-          }
+          // NOTE: Stock quantity is NOT restored when an order is deleted via F8 or cancelled.
+          // In food service, items from cancelled/deleted orders are already prepared/served and must be
+          // disposed of in the dustbin; it is unhygienic to return food to stock. Deducted stock stays consumed.
           
-          // 3. Delete from pos_orders, order_items, credit_records, and deliveries
+          // 2. Delete from pos_orders, order_items, credit_records, and deliveries
           await q("DELETE FROM order_items WHERE pos_order_id = ?", [posOrderId]);
           await q("DELETE FROM credit_records WHERE pos_order_id = ?", [posOrderId]).catch(() => {});
           await q("DELETE FROM pos_orders WHERE id = ?", [posOrderId]);
@@ -1894,12 +1886,11 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       await q("DELETE FROM sold_barcodes WHERE transaction_id = ?", [numericId]).catch(() => {});
       await q("DELETE FROM deliveries WHERE order_id = ? OR pos_order_id = ?", [numericId, numericId]).catch(() => {});
 
-      // 4. Delete the transaction itself
+      // 3. Delete the transaction itself
       await q("DELETE FROM transactions WHERE id = ?", [numericId]);
       await q("INSERT OR IGNORE INTO recycled_transaction_ids (id) VALUES (?)", [numericId]).catch(() => {});
     }, 3, currentSchema);
     emitAndBust(currentSchema, "transactions", "finance_summary");
-    emitToTenant(currentSchema, "db_updated", { module: "products" }); // update stock on clients
     emitToTenant(currentSchema, "db_updated", {
       module: "deliveries",
       action: "delete",
@@ -1920,7 +1911,7 @@ app.delete("/api/transactions/:id", authenticateToken, async (req, res) => {
       pos_order_ids: deletedPosOrderIds,
     });
     res.json({
-      message: "Transaction successfully deleted and stock returned.",
+      message: "Transaction successfully deleted.",
       pos_order_id: deletedPosOrderIds[0] || null,
       pos_order_ids: deletedPosOrderIds,
     });
